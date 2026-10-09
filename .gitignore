@@ -1,0 +1,47 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Local datasets, videos, model weights, and generated artifacts
+/local_data/
+/data/
+/datasets/
+/model_weights/
+/models/
+/outputs/
+/results/
+/cache/
+/logs/
+*.gguf
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.mp4
+*.mov
+*.m4v
+*.avi
+*.mkv
+*.webm
+*.zip
+
+# Packaging outputs
+build/
+dist/
+*.app/
+*.dmg
+*.spec
+!packaging/*.spec

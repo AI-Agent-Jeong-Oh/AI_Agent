@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import time
+import unittest
+from pathlib import Path
+
+from video_agent.contracts import AnalysisJob, AnalysisMode, JobStatus, Segment
+from video_agent.storage.json_store import AppSettings, ResultStore, SettingsStore
+from video_agent.storage.paths import AppPaths, CacheManager
+
+
+class JsonStorageTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        root = Path(self.temporary.name)
+        self.paths = AppPaths(data_dir=root / "Application Support", cache_dir=root / "Caches")
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_settings_round_trip_stores_env_name_not_secret(self) -> None:
+        store = SettingsStore(self.paths.settings_file)
+        settings = AppSettings(
+            mode=AnalysisMode.EXTERNAL,
+            external_provider_id="provider",
+            external_model_id="vision-model",
+            external_endpoint="https://provider.invalid/v1/chat/completions",
+            api_key_env_name="VIDEO_AGENT_EXTERNAL_API_KEY",
+        )
+
+        store.save(settings)
+
+        self.assertEqual(store.load(), settings)
+        text = self.paths.settings_file.read_text(encoding="utf-8")
+        self.assertIn("VIDEO_AGENT_EXTERNAL_API_KEY", text)
+        self.assertNotIn("sk-secret", text)
+
+    def test_analysis_result_round_trip_excludes_video_path(self) -> None:
+        job = AnalysisJob(
+            job_id="job-1",
+            plan_id="plan-1",
+            status=JobStatus.COMPLETED,
+            progress=100,
+            video_id="video-1",
+            segments=(
+                Segment(
+                    video_id="video-1",
+                    start_sec=1.0,
+                    end_sec=2.0,
+                    summary="샘플 후보",
+                    evidence=("샘플 규칙",),
+                    uncertainty="실제 분석 아님",
+                ),
+            ),
+        )
+        store = ResultStore(self.paths)
+
+        path = store.save(job)
+        restored = store.load("job-1")
+
+        self.assertEqual(restored, job)
+        self.assertNotIn("video_path", json.loads(path.read_text(encoding="utf-8")))
+
+
+class CacheManagerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name) / "cache"
+        self.manager = CacheManager(self.root)
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def test_only_marked_app_cache_is_removed(self) -> None:
+        owned = self.manager.create_job_dir("job-owned")
+        (owned / "frame.jpg").write_bytes(b"frame")
+        foreign = self.root / "foreign"
+        foreign.mkdir()
+        (foreign / "keep.txt").write_text("keep", encoding="utf-8")
+
+        self.assertTrue(self.manager.remove_job_cache("job-owned"))
+        self.assertFalse(owned.exists())
+        self.assertTrue(foreign.exists())
+        self.assertFalse(self.manager.remove_job_cache("foreign"))
+
+    def test_cleanup_older_than_ignores_unmarked_directories(self) -> None:
+        owned = self.manager.create_job_dir("job-old")
+        foreign = self.root / "old-foreign"
+        foreign.mkdir()
+        old = time.time() - 100
+        owned.touch()
+        foreign.touch()
+        # Directory mtime changes after marker creation; set it explicitly for deterministic cleanup.
+        import os
+
+        os.utime(owned, (old, old))
+        os.utime(foreign, (old, old))
+
+        removed = self.manager.cleanup_older_than(10, now=time.time())
+
+        self.assertEqual(removed, ("job-old",))
+        self.assertTrue(foreign.exists())
+
+    def test_path_traversal_job_id_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            self.manager.create_job_dir("../outside")
+
+
+if __name__ == "__main__":
+    unittest.main()
