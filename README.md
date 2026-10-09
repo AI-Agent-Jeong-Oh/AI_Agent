@@ -118,6 +118,7 @@ open dist/VideoAnalysisAgent.app
 
 ## 문서
 
+- [현재까지 구현한 내용과 방식](docs/progress.md)
 - [아키텍처](docs/architecture.md)
 - [UI/분석/PDF 연결 계약](docs/contracts.md)
 - [역할별 다음 작업](docs/tasks.md)

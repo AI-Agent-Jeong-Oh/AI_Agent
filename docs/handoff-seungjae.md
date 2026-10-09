@@ -125,11 +125,10 @@ open dist/VideoAnalysisAgent.app
 
 ## 8. 현재 Git 상태
 
-- 브랜치: `feature/initial-desktop-app`
-- 원격: `origin`은 지정된 GitHub 저장소이며 `git ls-remote --heads origin` 결과 ref 없음
-- 로컬: unborn `feature/initial-desktop-app`, 기존 commit 없음
-- 이번 작업: 전체 신규 파일이 미커밋 상태
-- commit, push, PR, merge 수행 안 함
+- 브랜치: `main`, `origin/main` 추적
+- 초기 구현 커밋: `0635f02 feat: add initial desktop video analysis agent`
+- 초기 앱 코드·문서·테스트를 원격 `main`에 push함
+- force push, PR, merge는 수행하지 않음
 - `.venv`, `build`, `dist`, 영상, ZIP, 모델, `.env`, 사용자 결과·캐시는 ignore 상태
 
 ## 샘플과 실제 모델 구분
