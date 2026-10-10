@@ -93,19 +93,23 @@ Ollama native `/api/chat` 형식은 이미지 입력을 base64 `images`로 보�
 
 ### 외부 API VLM
 
-아래와 같은 명시적 설정이 필요합니다. `.env.example`에는 이름만 있으며 앱은 `.env`를 자동으로 읽지 않습니다. 실제 키는 환경 변수나 후속 비밀 저장소에서 주입합니다.
+앱에서 `외부 API VLM — 별도 전송 승인`을 선택하면 OpenAI API 키 입력칸이 나타납니다. 키는 암호형으로 표시되고 현재 앱 프로세스의 메모리에서만 HTTP 인증 헤더에 사용되며, 설정·결과·로그에는 저장하지 않습니다. 영상 입력을 지원하는 OpenAI 모델 ID를 직접 입력하고 `영상 입력` 확인란을 체크해야 계획을 만들 수 있습니다. 모델 ID는 계정에서 실제 사용할 수 있는 이미지 입력 지원 모델인지 OpenAI 모델 문서에서 확인해야 하며, 앱은 텍스트 전용 모델을 자동으로 영상 모델처럼 취급하지 않습니다.
+
+기본 공급자와 endpoint는 `openai`, `https://api.openai.com/v1/chat/completions`입니다. 화면 대신 `OPENAI_API_KEY` 환경 변수로 키를 전달할 수도 있습니다. `.env.example`은 변수 이름과 공개 설정만 제공하며 실제 비밀값을 포함하지 않고, 앱은 `.env`를 자동으로 읽지 않습니다.
 
 ```bash
-export VIDEO_AGENT_EXTERNAL_PROVIDER='provider-id'
-export VIDEO_AGENT_EXTERNAL_ENDPOINT='https://provider.example/v1/chat/completions'
+export VIDEO_AGENT_EXTERNAL_PROVIDER='openai'
+export VIDEO_AGENT_EXTERNAL_ENDPOINT='https://api.openai.com/v1/chat/completions'
 export VIDEO_AGENT_EXTERNAL_PROTOCOL='openai_chat_completions'
 export VIDEO_AGENT_EXTERNAL_MODEL='vision-model-id'
 export VIDEO_AGENT_EXTERNAL_MODEL_SUPPORTS_VISION=true
-export VIDEO_AGENT_EXTERNAL_API_KEY='실제 값은 셸/비밀 저장소에서만 설정'
+export OPENAI_API_KEY='실제 값은 셸/비밀 저장소에서만 설정'
 PYTHONPATH=src ./.venv/bin/python -m video_agent
 ```
 
 계획 화면은 공급자, 목적지 origin, 목적 텍스트, JPEG 프레임 수와 원본 시각을 보여 줍니다. 분석 계획 승인 후에도 외부 전송을 별도로 승인해야 실행됩니다. 원본 영상 전체, PDF, 라벨 JSON은 전송 계획에 포함하지 않습니다.
+
+공식 OpenAI 문서는 API 키를 코드나 공개 저장소에 넣지 말고 환경 변수 또는 비밀 관리 수단으로 제공하도록 권고합니다. 모델별 이미지 입력은 [Images and vision](https://developers.openai.com/api/docs/guides/images-vision), 키 관리는 [Production best practices](https://developers.openai.com/api/docs/guides/production-best-practices)를 기준으로 확인합니다. 현재 구현은 실제 OpenAI 과금 호출을 수행하지 않고 가짜 응답으로 인증 헤더·이미지 요청 구성·키 미저장을 검증했습니다. 실제 호출은 사용자가 키·모델·전송 프레임 범위를 확인한 뒤 별도로 검증해야 합니다.
 
 ## 시간과 결과 정책
 

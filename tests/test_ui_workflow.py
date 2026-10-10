@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QListWidgetItem
+from PySide6.QtWidgets import QApplication, QLineEdit, QListWidgetItem
 
 from video_agent.contracts import (
     AnalysisJob,
@@ -63,6 +63,9 @@ class UiWorkflowTests(unittest.TestCase):
                 "VIDEO_AGENT_EXTERNAL_ENDPOINT": "https://provider.invalid/v1/chat/completions",
                 "VIDEO_AGENT_LOCAL_MODEL": "",
                 "VIDEO_AGENT_EXTERNAL_MODEL": "",
+                "VIDEO_AGENT_EXTERNAL_MODEL_SUPPORTS_VISION": "false",
+                "OPENAI_API_KEY": "",
+                "VIDEO_AGENT_EXTERNAL_API_KEY": "",
             },
             clear=False,
         )
@@ -144,6 +147,8 @@ class UiWorkflowTests(unittest.TestCase):
     def test_external_transfer_approval_is_separate(self) -> None:
         self.window._mode_combo.setCurrentIndex(self.window._mode_combo.findData(AnalysisMode.EXTERNAL))
         self.window._model_edit.setText("vision-model")
+        self.window._external_vision_confirm.setChecked(True)
+        self.window._external_api_key_edit.setText("sk-test-not-real")
         self.window._purpose_edit.setPlainText("출입문 앞에 사람이 30초 이상 머무르는 장면 후보 찾기")
         self.window._make_plan()
         self.window._approve_plan()
@@ -155,6 +160,34 @@ class UiWorkflowTests(unittest.TestCase):
         self.window._update_post_run_buttons()
         self.assertTrue(self.window._run_button.isEnabled())
         self.assertFalse(self.window._transfer_button.isEnabled())
+
+    def test_openai_key_is_masked_memory_only_and_required_for_external_run(self) -> None:
+        external_index = self.window._mode_combo.findData(AnalysisMode.EXTERNAL)
+        self.window._mode_combo.setCurrentIndex(external_index)
+        self.window._model_edit.setText("vision-model")
+        self.window._external_vision_confirm.setChecked(True)
+        self.window._purpose_edit.setPlainText(
+            "출입문 앞에 사람이 30초 이상 머무르는 장면 후보 찾기"
+        )
+        self.window._make_plan()
+        self.window._approve_plan()
+        self.window._approve_transfer()
+
+        self.assertEqual(
+            self.window._external_api_key_edit.echoMode(),
+            QLineEdit.EchoMode.Password,
+        )
+        self.assertFalse(self.window._run_button.isEnabled())
+
+        secret = "sk-test-memory-only"
+        self.window._external_api_key_edit.setText(secret)
+
+        self.assertTrue(self.window._run_button.isEnabled())
+        settings_text = Path(os.environ["VIDEO_AGENT_DATA_DIR"]).joinpath(
+            "settings.json"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(secret, settings_text)
+        self.assertIn("OPENAI_API_KEY", settings_text)
 
     def test_late_result_after_cancel_is_ignored(self) -> None:
         self.window._purpose_edit.setPlainText("출입문 앞에 사람이 30초 이상 머무르는 장면 후보 찾기")

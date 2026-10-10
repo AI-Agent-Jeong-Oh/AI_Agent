@@ -64,10 +64,17 @@ class JsonTransport(Protocol):
 class HttpVisionProvider:
     """HTTP adapter for Ollama-native or OpenAI-compatible vision endpoints."""
 
-    def __init__(self, config: ProviderConfig, transport: JsonTransport | None = None) -> None:
+    def __init__(
+        self,
+        config: ProviderConfig,
+        transport: JsonTransport | None = None,
+        *,
+        api_key: str | None = None,
+    ) -> None:
         config.validate()
         self.config = config
         self._transport = transport or _urlopen_json
+        self._api_key = (api_key or "").strip() or None
 
     def analyze(
         self,
@@ -84,7 +91,7 @@ class HttpVisionProvider:
 
         headers = {"Content-Type": "application/json"}
         if self.config.api_key_env:
-            api_key = os.environ.get(self.config.api_key_env)
+            api_key = self._api_key or os.environ.get(self.config.api_key_env)
             if not api_key:
                 raise ModelConfigurationError(
                     f"외부 API 키 환경 변수 {self.config.api_key_env}가 설정되지 않았습니다."
@@ -140,12 +147,15 @@ class HttpVisionProvider:
             }
             for frame, image in zip(frames, encoded, strict=True)
         )
-        return {
+        payload = {
             "model": self.config.model_id,
             "messages": [{"role": "user", "content": content}],
             "response_format": {"type": "json_object"},
             "temperature": self.config.temperature,
         }
+        if self.config.max_output_tokens is not None:
+            payload["max_completion_tokens"] = self.config.max_output_tokens
+        return payload
 
     def _response_content(self, response: dict[str, Any]) -> str:
         try:

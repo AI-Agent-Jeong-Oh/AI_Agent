@@ -133,16 +133,24 @@ def config_from_environment(
             ),
         )
     elif mode is AnalysisMode.EXTERNAL:
+        provider_id = provider_override or os.environ.get("VIDEO_AGENT_EXTERNAL_PROVIDER", "")
         config = ProviderConfig(
             mode=mode,
-            provider_id=provider_override or os.environ.get("VIDEO_AGENT_EXTERNAL_PROVIDER", ""),
+            provider_id=provider_id,
             endpoint=endpoint_override or os.environ.get("VIDEO_AGENT_EXTERNAL_ENDPOINT", ""),
             model_id=model_override or os.environ.get("VIDEO_AGENT_EXTERNAL_MODEL", ""),
             protocol=os.environ.get("VIDEO_AGENT_EXTERNAL_PROTOCOL", "openai_chat_completions"),
-            vision_capability_confirmed=_true(os.environ.get("VIDEO_AGENT_EXTERNAL_MODEL_SUPPORTS_VISION")),
-            api_key_env=os.environ.get("VIDEO_AGENT_EXTERNAL_API_KEY_ENV", "VIDEO_AGENT_EXTERNAL_API_KEY"),
+            vision_capability_confirmed=(
+                _true(os.environ.get("VIDEO_AGENT_EXTERNAL_MODEL_SUPPORTS_VISION"))
+                if vision_capability_confirmed is None
+                else vision_capability_confirmed
+            ),
+            api_key_env=os.environ.get(
+                "VIDEO_AGENT_EXTERNAL_API_KEY_ENV",
+                "OPENAI_API_KEY" if provider_id == "openai" else "VIDEO_AGENT_EXTERNAL_API_KEY",
+            ),
             context_window_tokens=None,
-            max_output_tokens=None,
+            max_output_tokens=800,
             temperature=0.0,
         )
     else:

@@ -61,6 +61,8 @@ def external_config() -> ProviderConfig:
         model_id="explicit-vision-model",
         protocol="openai_chat_completions",
         vision_capability_confirmed=True,
+        api_key_env="OPENAI_API_KEY",
+        max_output_tokens=800,
     )
 
 
@@ -473,6 +475,39 @@ class ProviderAdapterTests(unittest.TestCase):
             self.assertEqual(payload["options"]["num_predict"], 800)
             self.assertEqual(response.metrics.total_seconds, 2.0)
             self.assertEqual(response.metrics.prompt_token_count, 123)
+
+    def test_openai_compatible_request_uses_memory_key_without_putting_it_in_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "frame.jpg"
+            image.write_bytes(b"jpeg-bytes")
+            captured: dict[str, object] = {}
+
+            def transport(url, headers, payload, timeout):
+                captured.update(url=url, headers=headers, payload=payload, timeout=timeout)
+                return {"choices": [{"message": {"content": '{"segments": []}'}}]}
+
+            secret = "sk-test-memory-only"
+            provider = HttpVisionProvider(
+                external_config(),
+                transport,
+                api_key=secret,
+            )
+            response = provider.analyze(
+                "prompt",
+                (frame(image),),
+                timeout_seconds=3,
+                cancel_event=Event(),
+            )
+
+            self.assertEqual(response.content, '{"segments": []}')
+            self.assertEqual(captured["headers"]["Authorization"], f"Bearer {secret}")
+            self.assertNotIn(secret, json.dumps(captured["payload"]))
+            self.assertEqual(captured["payload"]["max_completion_tokens"], 800)
+            self.assertTrue(
+                captured["payload"]["messages"][0]["content"][1]["image_url"]["url"].startswith(
+                    "data:image/jpeg;base64,"
+                )
+            )
 
     def test_unconfigured_local_mode_does_not_fall_back_to_sample(self) -> None:
         keys = {

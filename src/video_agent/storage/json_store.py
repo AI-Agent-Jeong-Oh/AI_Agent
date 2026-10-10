@@ -21,7 +21,7 @@ class AppSettings:
     external_provider_id: str | None = None
     external_model_id: str | None = None
     external_endpoint: str | None = None
-    api_key_env_name: str = "VIDEO_AGENT_EXTERNAL_API_KEY"
+    api_key_env_name: str = "OPENAI_API_KEY"
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, AnalysisMode):

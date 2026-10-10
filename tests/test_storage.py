@@ -45,6 +45,12 @@ class JsonStorageTests(unittest.TestCase):
         self.assertIn("VIDEO_AGENT_EXTERNAL_API_KEY", text)
         self.assertNotIn("sk-secret", text)
 
+    def test_default_external_key_name_matches_openai_without_containing_a_secret(self) -> None:
+        settings = AppSettings()
+
+        self.assertEqual(settings.api_key_env_name, "OPENAI_API_KEY")
+        self.assertNotIn("sk-", json.dumps(settings.to_dict()))
+
     def test_analysis_result_round_trip_excludes_video_path(self) -> None:
         job = AnalysisJob(
             job_id="job-1",

@@ -11,6 +11,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -77,6 +78,9 @@ class MainWindow(QMainWindow):
     UI_ZOOM_MAX = 150
     UI_ZOOM_STEP = 10
     RESULT_CONTEXT_PREROLL_SECONDS = 1.0
+    OPENAI_PROVIDER_ID = "openai"
+    OPENAI_CHAT_COMPLETIONS_ENDPOINT = "https://api.openai.com/v1/chat/completions"
+    OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
 
     def __init__(self) -> None:
         super().__init__()
@@ -236,6 +240,19 @@ class MainWindow(QMainWindow):
         self._mode_combo.addItem("외부 API VLM — 별도 전송 승인", AnalysisMode.EXTERNAL)
         self._model_edit = QLineEdit()
         self._model_edit.setPlaceholderText("실제 모드에서 영상 입력 지원이 확인된 모델 ID")
+        self._external_api_key_edit = QLineEdit()
+        self._external_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._external_api_key_edit.setClearButtonEnabled(True)
+        self._external_api_key_edit.setPlaceholderText("OpenAI API 키 · 현재 실행 중에만 사용")
+        self._external_api_key_edit.setToolTip(
+            "키는 설정·결과·로그에 저장하지 않습니다. OPENAI_API_KEY 환경 변수도 사용할 수 있습니다."
+        )
+        self._external_vision_confirm = QCheckBox(
+            "입력한 외부 모델이 이미지 입력을 지원함을 확인했습니다"
+        )
+        self._external_vision_confirm.setToolTip(
+            "텍스트 전용 모델을 영상 분석 모델처럼 사용하지 않기 위한 명시적 확인입니다."
+        )
         self._purpose_edit = QPlainTextEdit()
         self._purpose_edit.setPlaceholderText(
             "예: 출입문 앞에 사람이 오래 머무르는 것으로 보이는 장면 후보를 찾고 싶습니다."
@@ -256,8 +273,11 @@ class MainWindow(QMainWindow):
         range_layout.addWidget(self._range_end)
         purpose_layout.addRow("모드", self._mode_combo)
         purpose_layout.addRow("모델", self._model_edit)
+        purpose_layout.addRow("OpenAI 키", self._external_api_key_edit)
+        purpose_layout.addRow("영상 입력", self._external_vision_confirm)
         purpose_layout.addRow("목적", self._purpose_edit)
         purpose_layout.addRow("원본 범위", range_row)
+        self._purpose_form_layout = purpose_layout
         layout.addWidget(purpose_group)
 
         self._plan_group = QGroupBox("3. 추가 질문과 분석 계획")
@@ -354,7 +374,11 @@ class MainWindow(QMainWindow):
         self._timeline.sliderReleased.connect(self._slider_released)
         self._purpose_edit.textChanged.connect(self._purpose_changed)
         self._mode_combo.currentIndexChanged.connect(self._mode_changed)
-        self._model_edit.textChanged.connect(self._inputs_changed)
+        self._model_edit.textChanged.connect(self._model_changed)
+        self._external_api_key_edit.textChanged.connect(self._external_credential_changed)
+        self._external_vision_confirm.checkStateChanged.connect(
+            self._external_credential_changed
+        )
         self._range_start.valueChanged.connect(self._range_changed)
         self._range_end.valueChanged.connect(self._range_changed)
         self._motion_scan_button.clicked.connect(self._start_motion_scan)
@@ -445,7 +469,8 @@ class MainWindow(QMainWindow):
         self._plan_view.setMinimumHeight(scaled(145))
         self._plan_view.setMaximumHeight(scaled(260))
         self._plan_group.setMinimumHeight(scaled(635))
-        self._purpose_group.setMinimumHeight(scaled(205))
+        purpose_height = 285 if self._current_mode() is AnalysisMode.EXTERNAL else 205
+        self._purpose_group.setMinimumHeight(scaled(purpose_height))
         self._approval_group.setMinimumHeight(scaled(150))
         self._progress_group.setMinimumHeight(scaled(145))
         self._result_group.setMinimumHeight(scaled(230))
@@ -483,6 +508,7 @@ class MainWindow(QMainWindow):
         self._model_edit.setEnabled(self._settings.mode is not AnalysisMode.SAMPLE)
         self._model_edit.blockSignals(False)
         self._mode_combo.blockSignals(False)
+        self._update_external_controls()
         self._update_mode_banner()
         if self._settings_error:
             self.statusBar().showMessage(f"설정 파일을 읽지 못해 기본값을 사용합니다: {self._settings_error}")
@@ -922,12 +948,61 @@ class MainWindow(QMainWindow):
             )
         self._model_edit.setEnabled(mode is not AnalysisMode.SAMPLE)
         self._model_edit.blockSignals(False)
+        self._external_vision_confirm.setChecked(False)
+        self._update_external_controls()
+        self._apply_ui_zoom()
         self._update_mode_banner()
         self._inputs_changed()
         self._persist_settings()
 
     def _current_mode(self) -> AnalysisMode:
         return AnalysisMode(self._mode_combo.currentData())
+
+    def _model_changed(self) -> None:
+        if self._current_mode() is AnalysisMode.EXTERNAL:
+            self._external_vision_confirm.setChecked(False)
+        self._inputs_changed()
+
+    def _external_credential_changed(self, *_args: object) -> None:
+        self._update_mode_banner()
+        self._update_post_run_buttons()
+
+    def _update_external_controls(self) -> None:
+        external = self._current_mode() is AnalysisMode.EXTERNAL
+        self._purpose_form_layout.setRowVisible(self._external_api_key_edit, external)
+        self._purpose_form_layout.setRowVisible(self._external_vision_confirm, external)
+        editable = external and not self._background_work_running()
+        self._external_api_key_edit.setEnabled(editable)
+        self._external_vision_confirm.setEnabled(editable)
+
+    def _external_api_key_value(self) -> str | None:
+        entered = self._external_api_key_edit.text().strip()
+        if entered:
+            return entered
+        configured_name = os.environ.get("VIDEO_AGENT_EXTERNAL_API_KEY_ENV")
+        names = tuple(
+            dict.fromkeys(
+                name
+                for name in (
+                    configured_name,
+                    self._settings.api_key_env_name,
+                    self.OPENAI_API_KEY_ENV,
+                    "VIDEO_AGENT_EXTERNAL_API_KEY",
+                )
+                if name
+            )
+        )
+        for name in names:
+            value = (os.environ.get(name) or "").strip()
+            if value:
+                return value
+        return None
+
+    def _external_vision_confirmed(self) -> bool:
+        return self._external_vision_confirm.isChecked() or (
+            os.environ.get("VIDEO_AGENT_EXTERNAL_MODEL_SUPPORTS_VISION", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
 
     def _preferred_local_model(self) -> str:
         configured = (os.environ.get("VIDEO_AGENT_LOCAL_MODEL") or "").strip()
@@ -955,8 +1030,16 @@ class MainWindow(QMainWindow):
             provider_id = os.environ.get("VIDEO_AGENT_LOCAL_PROVIDER", "ollama-local")
             endpoint = os.environ.get("VIDEO_AGENT_LOCAL_ENDPOINT", "http://127.0.0.1:11434/api/chat")
         elif mode is AnalysisMode.EXTERNAL:
-            provider_id = os.environ.get("VIDEO_AGENT_EXTERNAL_PROVIDER") or self._settings.external_provider_id
-            endpoint = os.environ.get("VIDEO_AGENT_EXTERNAL_ENDPOINT") or self._settings.external_endpoint
+            provider_id = (
+                os.environ.get("VIDEO_AGENT_EXTERNAL_PROVIDER")
+                or self._settings.external_provider_id
+                or self.OPENAI_PROVIDER_ID
+            )
+            endpoint = (
+                os.environ.get("VIDEO_AGENT_EXTERNAL_ENDPOINT")
+                or self._settings.external_endpoint
+                or self.OPENAI_CHAT_COMPLETIONS_ENDPOINT
+            )
         else:
             provider_id = None
             endpoint = None
@@ -1036,6 +1119,12 @@ class MainWindow(QMainWindow):
                 )
             else:
                 self._show_error("설치되어 영상 입력 기능이 확인된 로컬 모델이 없습니다.")
+            return
+        if mode is AnalysisMode.EXTERNAL and not self._external_vision_confirmed():
+            self._show_error(
+                "입력한 외부 모델이 이미지 입력을 지원하는지 확인한 뒤 "
+                "'영상 입력' 항목을 체크해 주세요."
+            )
             return
         self._session.update_context(self._metadata, self._current_intent())
         questions = self._session.questions()
@@ -1174,8 +1263,14 @@ class MainWindow(QMainWindow):
             self._show_error(str(exc))
             return
         self._transfer_button.setEnabled(False)
-        self._run_button.setEnabled(True)
-        self.statusBar().showMessage("현재 계획의 외부 전송 내용과 범위를 별도로 승인했습니다.", 7000)
+        key_available = self._external_api_key_value() is not None
+        self._run_button.setEnabled(key_available)
+        self.statusBar().showMessage(
+            "외부 전송 내용을 승인했습니다. 승인된 계획을 실행할 수 있습니다."
+            if key_available
+            else "외부 전송 내용을 승인했습니다. 실행하려면 OpenAI API 키를 입력해 주세요.",
+            7000,
+        )
 
     def _start_analysis(self) -> None:
         if self._background_work_running():
@@ -1184,6 +1279,14 @@ class MainWindow(QMainWindow):
         if self._session.plan is None or self._video_path is None:
             self._show_error("승인된 분석 계획이 없습니다.")
             return
+        api_key = None
+        if self._session.plan.mode is AnalysisMode.EXTERNAL:
+            api_key = self._external_api_key_value()
+            if api_key is None:
+                self._show_error(
+                    "OpenAI API 키를 입력하거나 OPENAI_API_KEY 환경 변수를 설정해 주세요."
+                )
+                return
         try:
             analyzer = create_analyzer(
                 self._session.plan.mode,
@@ -1194,8 +1297,9 @@ class MainWindow(QMainWindow):
                 vision_capability_confirmed=(
                     self._runtime_inventory.confirms_vision(self._session.plan.model_id)
                     if self._session.plan.mode is AnalysisMode.LOCAL
-                    else None
+                    else self._external_vision_confirmed()
                 ),
+                api_key=api_key,
             )
             request = self._session.create_request(
                 str(self._video_path), f"{self._session.plan.mode.value}-{uuid4().hex[:12]}"
@@ -1233,6 +1337,8 @@ class MainWindow(QMainWindow):
             self._purpose_edit,
             self._mode_combo,
             self._model_edit,
+            self._external_api_key_edit,
+            self._external_vision_confirm,
             self._range_start,
             self._range_end,
             self._clarification_edit,
@@ -1369,7 +1475,14 @@ class MainWindow(QMainWindow):
             self._session.state is WorkflowState.ANALYSIS_APPROVED
             and self._current_mode() is AnalysisMode.EXTERNAL
         )
-        self._run_button.setEnabled(self._session.state is WorkflowState.APPROVED)
+        can_run = self._session.state is WorkflowState.APPROVED
+        if self._current_mode() is AnalysisMode.EXTERNAL:
+            can_run = (
+                can_run
+                and self._external_api_key_value() is not None
+                and self._external_vision_confirmed()
+            )
+        self._run_button.setEnabled(can_run)
 
     def _set_result_banner(self, origin: ResultOrigin, model_id: str | None) -> None:
         if origin is ResultOrigin.SAMPLE:
@@ -1425,7 +1538,14 @@ class MainWindow(QMainWindow):
             self._mode_banner.setText(f"로컬 VLM 모드 — {status} · 자동 외부 전환 없음")
             self._mode_banner.setStyleSheet("background:#e8f1fb;color:#174d78;border:1px solid #8bb6d9;")
         else:
-            self._mode_banner.setText("외부 API 모드 — 분석 승인과 전송 승인이 각각 필요")
+            key_status = (
+                "API 키 준비됨(저장 안 함)"
+                if self._external_api_key_value() is not None
+                else "API 키 필요"
+            )
+            self._mode_banner.setText(
+                f"OpenAI API 모드 — {key_status} · 분석 승인과 외부 전송 승인 별도"
+            )
             self._mode_banner.setStyleSheet("background:#fdeaea;color:#7a2020;border:1px solid #d89a9a;")
 
     @classmethod
@@ -1531,6 +1651,7 @@ class MainWindow(QMainWindow):
                 external_provider_id=(
                     os.environ.get("VIDEO_AGENT_EXTERNAL_PROVIDER")
                     or self._settings.external_provider_id
+                    or self.OPENAI_PROVIDER_ID
                 ),
                 external_model_id=(
                     self._model_edit.text().strip() or None
@@ -1540,9 +1661,10 @@ class MainWindow(QMainWindow):
                 external_endpoint=(
                     os.environ.get("VIDEO_AGENT_EXTERNAL_ENDPOINT")
                     or self._settings.external_endpoint
+                    or self.OPENAI_CHAT_COMPLETIONS_ENDPOINT
                 ),
                 api_key_env_name=os.environ.get(
-                    "VIDEO_AGENT_EXTERNAL_API_KEY_ENV", "VIDEO_AGENT_EXTERNAL_API_KEY"
+                    "VIDEO_AGENT_EXTERNAL_API_KEY_ENV", self.OPENAI_API_KEY_ENV
                 ),
             )
             self._settings_store.save(settings)
@@ -1576,4 +1698,5 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "종료 대기", "작업을 정리하고 있습니다. 잠시 후 다시 종료해 주세요.")
             return
         self._player.stop()
+        self._external_api_key_edit.clear()
         event.accept()
