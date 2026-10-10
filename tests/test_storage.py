@@ -10,15 +10,24 @@ from video_agent.contracts import (
     AnalysisClue,
     AnalysisJob,
     AnalysisMode,
+    CandidateReview,
     CaseRecord,
     CaseVideoLink,
     JobStatus,
     ModelExecutionInfo,
     ResultOrigin,
+    ReviewJudgement,
+    ReviewSession,
     SamplingStrategy,
     Segment,
 )
-from video_agent.storage.json_store import AppSettings, CaseStore, ResultStore, SettingsStore
+from video_agent.storage.json_store import (
+    AppSettings,
+    CaseStore,
+    ResultStore,
+    ReviewStore,
+    SettingsStore,
+)
 from video_agent.storage.paths import AppPaths, CacheManager
 
 
@@ -155,6 +164,58 @@ class JsonStorageTests(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
         self.assertNotIn("video_path", text)
         self.assertNotIn("/Users/", text)
+
+    def test_review_store_round_trip_keeps_result_file_unchanged(self) -> None:
+        job = AnalysisJob(
+            job_id="job-review",
+            status=JobStatus.COMPLETED,
+            progress=100,
+            video_id="video-review",
+            origin=ResultOrigin.SAMPLE,
+        )
+        result_path = ResultStore(self.paths).save(job)
+        result_before = result_path.read_bytes()
+        store = ReviewStore(self.paths)
+        session = ReviewSession(
+            review_id="review-1",
+            job_id="job-review",
+            video_id="video-review",
+            started_at="2026-10-10T22:00:00+09:00",
+            reviews=(
+                CandidateReview(
+                    job_id="job-review",
+                    segment_index=0,
+                    judgement=ReviewJudgement.EXCLUDED,
+                    memo="상자가 아닌 그림자",
+                ),
+            ),
+        )
+
+        path = store.save(session)
+
+        self.assertEqual(path, self.paths.data_dir / "reviews" / "job-review.json")
+        self.assertEqual(store.load("job-review"), session)
+        self.assertEqual(result_path.read_bytes(), result_before)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_review_store_missing_file_and_unsafe_ids(self) -> None:
+        store = ReviewStore(self.paths)
+        self.assertIsNone(store.load("job-none"))
+        with self.assertRaises(ValueError):
+            store.load("../job")
+
+    def test_review_store_rejects_file_for_another_job(self) -> None:
+        store = ReviewStore(self.paths)
+        session = ReviewSession(
+            review_id="review-1",
+            job_id="job-a",
+            video_id="video-review",
+            started_at="2026-10-10T22:00:00+09:00",
+        )
+        store.save(session)
+        (self.paths.reviews_dir / "job-a.json").rename(self.paths.reviews_dir / "job-b.json")
+        with self.assertRaises(ValueError):
+            store.load("job-b")
 
 
 class CacheManagerTests(unittest.TestCase):

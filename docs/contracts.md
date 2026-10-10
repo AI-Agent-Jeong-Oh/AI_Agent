@@ -22,6 +22,7 @@ Python 기준 정의는 `src/video_agent/contracts.py`, Agent 계획은 `agent/p
 - `CaseRecord`, `AnalysisClue`, `CaseVideoLink`: 관리 정보와 모델에 전달할 사전 단서를 분리하고 사건 버전·영상 연결·카메라 시각 오차를 보존
 - `AnalysisPlan.analysis_clues`: 승인한 단서 스냅샷을 fingerprint에 포함해 변경 후 재승인
 - `TransferManifest.analysis_clues`: 외부로 전송할 사전 정보 문구를 프레임과 함께 명시
+- `ReviewSession`, `CandidateReview`, `ReviewJudgement`: 모델 후보에 대한 사람의 검토 판단·메모를 모델 결과와 분리해 저장
 
 모든 시간은 원본 시작 기준 초입니다. Qt UI 밀리초는 UI 경계에서만 변환합니다.
 
@@ -347,6 +348,37 @@ UI는 움직임 점수 상위 3개의 체크박스를 기본으로 체크하고 
 ```python
 def analyze(request, cancel_event, on_progress) -> AnalysisJob: ...
 ```
+
+## 검토 기록 (사람 판단)
+
+```json
+{
+  "review_id": "review-a1b2c3",
+  "job_id": "job-1",
+  "video_id": "video-hash",
+  "case_id": "case-a1b2c3",
+  "started_at": "2026-10-10T22:00:00+09:00",
+  "completed_at": null,
+  "total_review_seconds": 0.0,
+  "reviews": [{
+    "job_id": "job-1",
+    "segment_index": 0,
+    "judgement": "relevant",
+    "memo": "원본 98초에 손가락이 버튼에 닿아 보임. 누름 여부 미확인",
+    "tags": ["손 접촉", "재확인"],
+    "bookmarked": true,
+    "reviewed_at": "2026-10-10T22:01:00+09:00",
+    "review_seconds": 0.0
+  }]
+}
+```
+
+- `judgement`는 `unreviewed`, `relevant`, `needs_check`, `excluded`입니다. 사람이 분석 목적과의 관련성을 판단한 값이며 모델 출력, 정답 라벨, 범죄 성립·의도 판단이 아닙니다.
+- `segment_index`는 같은 `job_id`의 저장된 `AnalysisJob.segments` 순서입니다. 결과 파일은 실행 후 바뀌지 않으므로 순서로 후보를 식별하고, 불러올 때 `validate_against(job)`로 작업·영상·범위를 확인합니다.
+- 저장 위치는 사용자 데이터 폴더의 `reviews/<job_id>.json`입니다. `results/<job_id>.json`의 모델 결과는 수정하지 않습니다.
+- 검토 판단·메모·태그는 `AnalysisRequest`, 모델 프롬프트, `TransferManifest`에 넣지 않습니다.
+- 메모는 최대 4000자, 태그는 1~50자·최대 20개·중복 불가입니다. 시각은 ISO 8601 문자열입니다.
+- `review_seconds`, `total_review_seconds`, `completed_at`은 사람 확인 시간 측정용이며 AI 처리 시간(`AnalysisJob.elapsed_seconds`)과 분리합니다. 측정 구현 전에는 `0.0`과 `null`입니다.
 
 ## PDF 검색 계약
 

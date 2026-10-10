@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -729,4 +730,188 @@ class AnalysisJob:
             analysis_clues=tuple(
                 AnalysisClue.from_dict(item) for item in data.get("analysis_clues", [])
             ),
+        )
+
+
+class ReviewJudgement(StrEnum):
+    """Human reviewer decision about a model candidate; not a model output."""
+
+    UNREVIEWED = "unreviewed"
+    RELEVANT = "relevant"
+    NEEDS_CHECK = "needs_check"
+    EXCLUDED = "excluded"
+
+
+def _validate_iso_timestamp(value: str | None, field_name: str) -> None:
+    if value is None:
+        return
+    try:
+        datetime.fromisoformat(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an ISO 8601 timestamp") from exc
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateReview:
+    """A person's note on one segment of a stored AnalysisJob.
+
+    Stored separately from the job so the model output stays unchanged, and never
+    sent to an analyzer.
+    """
+
+    job_id: str
+    segment_index: int
+    judgement: ReviewJudgement = ReviewJudgement.UNREVIEWED
+    memo: str = ""
+    tags: tuple[str, ...] = ()
+    bookmarked: bool = False
+    reviewed_at: str | None = None
+    review_seconds: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not self.job_id.strip():
+            raise ValueError("review job_id is required")
+        if self.segment_index < 0:
+            raise ValueError("segment_index cannot be negative")
+        if not isinstance(self.judgement, ReviewJudgement):
+            object.__setattr__(self, "judgement", ReviewJudgement(self.judgement))
+        if len(self.memo) > 4000:
+            raise ValueError("review memo cannot exceed 4000 characters")
+        tags = tuple(tag.strip() for tag in self.tags)
+        if len(tags) > 20:
+            raise ValueError("a review can contain at most 20 tags")
+        if any(not tag or len(tag) > 50 for tag in tags):
+            raise ValueError("review tags must be 1 to 50 characters")
+        if len(tags) != len(set(tags)):
+            raise ValueError("review tags must be unique")
+        object.__setattr__(self, "tags", tags)
+        _validate_iso_timestamp(self.reviewed_at, "reviewed_at")
+        if self.review_seconds < 0:
+            raise ValueError("review_seconds cannot be negative")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "job_id": self.job_id,
+            "segment_index": self.segment_index,
+            "judgement": self.judgement.value,
+            "memo": self.memo,
+            "tags": list(self.tags),
+            "bookmarked": self.bookmarked,
+            "reviewed_at": self.reviewed_at,
+            "review_seconds": self.review_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CandidateReview":
+        allowed = {
+            "job_id",
+            "segment_index",
+            "judgement",
+            "memo",
+            "tags",
+            "bookmarked",
+            "reviewed_at",
+            "review_seconds",
+        }
+        if not isinstance(data, dict) or not set(data).issubset(allowed):
+            raise ValueError("candidate review contains unknown fields")
+        raw_tags = data.get("tags", [])
+        if not isinstance(raw_tags, list):
+            raise ValueError("review tags must be a list")
+        reviewed_at = data.get("reviewed_at")
+        return cls(
+            job_id=str(data["job_id"]),
+            segment_index=int(data["segment_index"]),
+            judgement=ReviewJudgement(data.get("judgement", ReviewJudgement.UNREVIEWED.value)),
+            memo=str(data.get("memo", "")),
+            tags=tuple(str(tag) for tag in raw_tags),
+            bookmarked=bool(data.get("bookmarked", False)),
+            reviewed_at=str(reviewed_at) if reviewed_at is not None else None,
+            review_seconds=float(data.get("review_seconds", 0.0)),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ReviewSession:
+    """All human review records for one AnalysisJob."""
+
+    review_id: str
+    job_id: str
+    video_id: str
+    started_at: str
+    case_id: str | None = None
+    reviews: tuple[CandidateReview, ...] = ()
+    completed_at: str | None = None
+    total_review_seconds: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not self.review_id.strip():
+            raise ValueError("review_id is required")
+        if not self.job_id.strip():
+            raise ValueError("review session job_id is required")
+        if not self.video_id.strip():
+            raise ValueError("review session video_id is required")
+        _validate_iso_timestamp(self.started_at, "started_at")
+        _validate_iso_timestamp(self.completed_at, "completed_at")
+        if self.total_review_seconds < 0:
+            raise ValueError("total_review_seconds cannot be negative")
+        if any(item.job_id != self.job_id for item in self.reviews):
+            raise ValueError("every review must belong to the session job")
+        indexes = tuple(item.segment_index for item in self.reviews)
+        if len(indexes) != len(set(indexes)):
+            raise ValueError("each segment can have only one review")
+
+    def review_for(self, segment_index: int) -> CandidateReview | None:
+        return next(
+            (item for item in self.reviews if item.segment_index == segment_index),
+            None,
+        )
+
+    def validate_against(self, job: AnalysisJob) -> None:
+        """Reject reviews that do not belong to the given stored result."""
+        if job.job_id != self.job_id or job.video_id != self.video_id:
+            raise ValueError("review session does not belong to this analysis result")
+        if any(item.segment_index >= len(job.segments) for item in self.reviews):
+            raise ValueError("review refers to a segment that is not in the result")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "review_id": self.review_id,
+            "job_id": self.job_id,
+            "video_id": self.video_id,
+            "case_id": self.case_id,
+            "reviews": [item.to_dict() for item in self.reviews],
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "total_review_seconds": self.total_review_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ReviewSession":
+        allowed = {
+            "review_id",
+            "job_id",
+            "video_id",
+            "case_id",
+            "reviews",
+            "started_at",
+            "completed_at",
+            "total_review_seconds",
+        }
+        if not isinstance(data, dict) or not set(data).issubset(allowed):
+            raise ValueError("review session contains unknown fields")
+        raw_reviews = data.get("reviews", [])
+        if not isinstance(raw_reviews, list):
+            raise ValueError("reviews must be a list")
+        case_id = data.get("case_id")
+        completed_at = data.get("completed_at")
+        return cls(
+            review_id=str(data["review_id"]),
+            job_id=str(data["job_id"]),
+            video_id=str(data["video_id"]),
+            started_at=str(data["started_at"]),
+            case_id=str(case_id) if case_id is not None else None,
+            reviews=tuple(CandidateReview.from_dict(item) for item in raw_reviews),
+            completed_at=str(completed_at) if completed_at is not None else None,
+            total_review_seconds=float(data.get("total_review_seconds", 0.0)),
         )

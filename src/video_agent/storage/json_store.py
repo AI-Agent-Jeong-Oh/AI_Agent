@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from video_agent.contracts import AnalysisJob, AnalysisMode, CaseRecord
+from video_agent.contracts import AnalysisJob, AnalysisMode, CaseRecord, ReviewSession
 from video_agent.storage.paths import AppPaths
 
 
@@ -108,6 +108,32 @@ class CaseStore:
             if path.is_file()
         )
         return tuple(sorted(records, key=lambda item: (item.title.casefold(), item.case_id)))
+
+
+
+class ReviewStore:
+    """Human review records, one file per AnalysisJob, kept apart from model results."""
+
+    def __init__(self, paths: AppPaths) -> None:
+        self._directory = paths.reviews_dir
+
+    def save(self, session: ReviewSession) -> Path:
+        if not _SAFE_JOB_ID.fullmatch(session.job_id):
+            raise ValueError("job_id contains unsafe path characters")
+        path = self._directory / f"{session.job_id}.json"
+        _atomic_json_write(path, session.to_dict())
+        return path
+
+    def load(self, job_id: str) -> ReviewSession | None:
+        if not _SAFE_JOB_ID.fullmatch(job_id):
+            raise ValueError("job_id contains unsafe path characters")
+        path = self._directory / f"{job_id}.json"
+        if not path.exists():
+            return None
+        session = ReviewSession.from_dict(_read_json_object(path))
+        if session.job_id != job_id:
+            raise ValueError("stored review file belongs to a different job")
+        return session
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

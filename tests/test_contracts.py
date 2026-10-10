@@ -5,6 +5,7 @@ import unittest
 from video_agent.contracts import (
     AnalysisClue,
     AnalysisJob,
+    CandidateReview,
     CaseRecord,
     CaseVideoLink,
     ClueSource,
@@ -14,6 +15,8 @@ from video_agent.contracts import (
     MotionProposal,
     MotionScanResult,
     ResultOrigin,
+    ReviewJudgement,
+    ReviewSession,
     Segment,
 )
 
@@ -181,3 +184,117 @@ class MotionContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReviewContractTests(unittest.TestCase):
+    def job(self) -> AnalysisJob:
+        return AnalysisJob(
+            job_id="job-review",
+            status=JobStatus.COMPLETED,
+            progress=100,
+            video_id="video-review",
+            origin=ResultOrigin.SAMPLE,
+            segments=(
+                Segment(
+                    video_id="video-review",
+                    start_sec=1.0,
+                    end_sec=2.0,
+                    summary="후보",
+                    evidence=("1.5초 프레임에서 관찰됨",),
+                    uncertainty="원본 확인 필요",
+                ),
+            ),
+        )
+
+    def session(self, *reviews: CandidateReview) -> ReviewSession:
+        return ReviewSession(
+            review_id="review-1",
+            job_id="job-review",
+            video_id="video-review",
+            started_at="2026-10-10T22:00:00+09:00",
+            case_id="case-1",
+            reviews=reviews,
+        )
+
+    def test_review_session_round_trip(self) -> None:
+        review = CandidateReview(
+            job_id="job-review",
+            segment_index=0,
+            judgement=ReviewJudgement.RELEVANT,
+            memo="1.5초에 손이 상자에 닿음",
+            tags=(" 손 접촉 ", "재확인"),
+            bookmarked=True,
+            reviewed_at="2026-10-10T22:01:00+09:00",
+        )
+        session = self.session(review)
+
+        restored = ReviewSession.from_dict(session.to_dict())
+
+        self.assertEqual(restored, session)
+        self.assertEqual(restored.review_for(0).tags, ("손 접촉", "재확인"))
+        self.assertIsNone(restored.review_for(1))
+        self.assertEqual(session.to_dict()["reviews"][0]["judgement"], "relevant")
+
+    def test_review_defaults_to_unreviewed(self) -> None:
+        review = CandidateReview(job_id="job-review", segment_index=0)
+        self.assertIs(review.judgement, ReviewJudgement.UNREVIEWED)
+        self.assertEqual(review.review_seconds, 0.0)
+
+    def test_review_rejects_invalid_values(self) -> None:
+        invalid = (
+            {"segment_index": -1},
+            {"memo": "가" * 4001},
+            {"tags": tuple(f"t{i}" for i in range(21))},
+            {"tags": ("",)},
+            {"tags": ("가" * 51,)},
+            {"tags": ("a", " a ")},
+            {"reviewed_at": "어제"},
+            {"review_seconds": -1.0},
+            {"judgement": "guilty"},
+        )
+        for overrides in invalid:
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                CandidateReview(**{"job_id": "job-review", "segment_index": 0, **overrides})
+
+    def test_session_rejects_foreign_or_duplicate_reviews(self) -> None:
+        with self.assertRaises(ValueError):
+            self.session(CandidateReview(job_id="other-job", segment_index=0))
+        with self.assertRaises(ValueError):
+            self.session(
+                CandidateReview(job_id="job-review", segment_index=0),
+                CandidateReview(job_id="job-review", segment_index=0),
+            )
+        with self.assertRaises(ValueError):
+            ReviewSession(
+                review_id="review-1",
+                job_id="job-review",
+                video_id="video-review",
+                started_at="not-a-time",
+            )
+
+    def test_session_rejects_unknown_fields(self) -> None:
+        data = self.session().to_dict()
+        data["model_override"] = "relevant"
+        with self.assertRaises(ValueError):
+            ReviewSession.from_dict(data)
+        data = self.session(CandidateReview(job_id="job-review", segment_index=0)).to_dict()
+        data["reviews"][0]["prompt"] = "x"
+        with self.assertRaises(ValueError):
+            ReviewSession.from_dict(data)
+
+    def test_session_must_match_result(self) -> None:
+        self.session(CandidateReview(job_id="job-review", segment_index=0)).validate_against(
+            self.job()
+        )
+        with self.assertRaises(ValueError):
+            self.session(CandidateReview(job_id="job-review", segment_index=1)).validate_against(
+                self.job()
+            )
+        other_video = ReviewSession(
+            review_id="review-1",
+            job_id="job-review",
+            video_id="other-video",
+            started_at="2026-10-10T22:00:00+09:00",
+        )
+        with self.assertRaises(ValueError):
+            other_video.validate_against(self.job())
