@@ -9,7 +9,12 @@ analysis = Analysis(
     [str(project_root / "src" / "video_agent" / "__main__.py")],
     pathex=[str(project_root / "src")],
     binaries=[],
-    datas=[],
+    datas=[
+        (
+            str(project_root / "src" / "video_agent" / "knowledge" / "data" / "common_rules.json"),
+            "video_agent/knowledge/data",
+        ),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

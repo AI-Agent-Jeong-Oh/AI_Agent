@@ -50,6 +50,9 @@
 | `ui/case_panel.py` | 사건 관리 정보와 분석 단서의 최소 입력·선택 UI | 승재 연결 / 팀원 UI 개선 |
 | `knowledge/contracts.py` | 팀원 PDF 검색 구현이 따를 형식 | 공통 계약/팀원 구현 |
 | `ui/main_window.py` | 현재 최소 연결 UI. 디자인·접근성 개선 대상 | 팀원 중심 |
+| `knowledge/common_rules.py`, `knowledge/data/common_rules.json` | 영상 증거 처리 공통 규정 7개의 제목·출처·링크(본문 없음). 결과 요약 ⑤에 참고로만 표시하고 법 적용을 판단하지 않음 | yeon-du |
+| `review/summary.py` | 저장된 결과·검토 기록·사건 정보로 6개 영역 결과 요약 초안과 HTML을 만듦. 모델 호출·판단 문구 생성 없음 | yeon-du |
+| `ui/review_panel.py`, `ui/summary_dialog.py` | 후보 검토(판단·메모·확인 시간·분석 완료)와 결과 요약 편집·HTML 내보내기 | yeon-du |
 
 실행 진입점은 `python -m video_agent`입니다. 공통 계약이나 진입점을 바꾸면 코드, `docs/contracts.md`, 테스트를 같은 변경에서 갱신하고 상대 담당자의 검토를 받습니다.
 

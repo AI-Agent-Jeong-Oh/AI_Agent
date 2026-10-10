@@ -89,6 +89,7 @@ class CandidateReviewPanel(QWidget):
 
     playback_range_requested = Signal(float, float)
     records_changed = Signal()
+    summary_requested = Signal()
 
     def __init__(
         self,
@@ -116,6 +117,8 @@ class CandidateReviewPanel(QWidget):
         self._loading_editor = False
         self._build_ui()
         self._connect_signals()
+        self.complete_button.setEnabled(False)
+        self.summary_button.setEnabled(False)
         self._show_editor_for(None)
 
     def _build_ui(self) -> None:
@@ -234,8 +237,11 @@ class CandidateReviewPanel(QWidget):
         self.complete_button.setToolTip(
             "검토를 마친 시각과 확인 시간을 기록합니다. 완료 후에도 수정할 수 있습니다."
         )
+        self.summary_button = QPushButton("결과 요약")
+        self.summary_button.setToolTip("저장된 검토 기록으로 결과 요약 초안을 엽니다")
         completion_row.addStretch(1)
         completion_row.addWidget(self.completion_label)
+        completion_row.addWidget(self.summary_button)
         completion_row.addWidget(self.complete_button)
         layout.addLayout(completion_row)
 
@@ -250,6 +256,7 @@ class CandidateReviewPanel(QWidget):
         self.save_button.clicked.connect(self.save_current)
         self.revert_button.clicked.connect(self.revert_current)
         self.complete_button.clicked.connect(self.complete_review)
+        self.summary_button.clicked.connect(self.summary_requested.emit)
 
     def apply_scale(self, scaled: Callable[[int], int]) -> None:
         self.candidate_list.setMinimumHeight(scaled(150))
@@ -262,6 +269,11 @@ class CandidateReviewPanel(QWidget):
     @property
     def job(self) -> AnalysisJob | None:
         return self._job
+
+    @property
+    def review_session(self) -> ReviewSession | None:
+        """The saved review state (unsaved drafts are not included)."""
+        return self._session
 
     def clear(self) -> None:
         self._tracking_since = None
@@ -284,6 +296,7 @@ class CandidateReviewPanel(QWidget):
         self._set_save_status("", "")
         self.completion_label.setText("")
         self.complete_button.setEnabled(False)
+        self.summary_button.setEnabled(False)
         self._show_editor_for(None)
 
     def show_message(self, text: str) -> None:
@@ -352,6 +365,7 @@ class CandidateReviewPanel(QWidget):
             return
         self._rebuild_list()
         self.complete_button.setEnabled(not self._save_blocked)
+        self.summary_button.setEnabled(True)
         self._refresh_completion_label()
         self._sync_timing()
 

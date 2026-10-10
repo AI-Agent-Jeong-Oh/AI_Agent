@@ -70,7 +70,10 @@ from video_agent.storage.json_store import (
 )
 from video_agent.storage.paths import AppPaths, CacheManager
 from video_agent.ui.case_panel import CaseContextPanel
+from video_agent.knowledge.common_rules import CommonRules, load_common_rules
+from video_agent.review.summary import build_summary
 from video_agent.ui.review_panel import CandidateReviewPanel
+from video_agent.ui.summary_dialog import ResultSummaryDialog
 from video_agent.video.files import (
     build_video_id,
     format_milliseconds,
@@ -132,6 +135,12 @@ class MainWindow(QMainWindow):
         self._result_store = ResultStore(self._paths)
         self._review_store = ReviewStore(self._paths)
         self._saved_results: dict[str, StoredResult] = {}
+        self._common_rules: CommonRules | None = None
+        self._common_rules_error: str | None = None
+        try:
+            self._common_rules = load_common_rules()
+        except (OSError, ValueError, TypeError) as exc:
+            self._common_rules_error = str(exc)
         self._case_store = CaseStore(self._paths)
         self._cache_manager = CacheManager(self._paths.cache_dir)
         self._case_record = CaseRecord(
@@ -443,6 +452,7 @@ class MainWindow(QMainWindow):
         self._result_list.itemClicked.connect(self._seek_to_segment)
         self._review_panel.playback_range_requested.connect(self._play_review_range)
         self._open_result_button.clicked.connect(self._open_saved_result)
+        self._review_panel.summary_requested.connect(self._open_summary)
         application = QGuiApplication.instance()
         if application is not None:
             application.applicationStateChanged.connect(self._on_application_state_changed)
@@ -1910,6 +1920,44 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"저장된 결과를 열었습니다: {self._saved_result_text(stored)}", 6000
         )
+
+    def _open_summary(self) -> ResultSummaryDialog | None:
+        job = self._review_panel.job
+        if job is None:
+            return None
+        video_file_name = (
+            self._video_path.name
+            if self._video_path is not None and self._video_id == job.video_id
+            else None
+        )
+        panel = self._review_panel
+
+        def build():
+            case = None
+            case_error = None
+            if job.case_id:
+                try:
+                    case = self._case_store.load(job.case_id)
+                except FileNotFoundError:
+                    case = None
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    case_error = str(exc)
+            session = panel.review_session if panel.job is job else None
+            return build_summary(
+                job,
+                session,
+                case,
+                video_file_name=video_file_name,
+                unsaved_count=len(panel.unsaved_indexes()) if panel.job is job else 0,
+                case_load_error=case_error,
+                common_rules=self._common_rules,
+                common_rules_error=self._common_rules_error,
+            )
+
+        dialog = ResultSummaryDialog(build, self)
+        self._summary_dialog = dialog
+        dialog.show()
+        return dialog
 
     def _confirm_discard_unsaved_reviews(self, action: str = "닫을까요?") -> bool:
         unsaved = self._review_panel.unsaved_indexes()
