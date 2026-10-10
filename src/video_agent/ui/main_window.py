@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
 from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QCloseEvent, QFont, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QFont, QGuiApplication, QKeySequence
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -59,9 +60,17 @@ from video_agent.contracts import (
     Segment,
 )
 from video_agent.models.config import RuntimeInventory
-from video_agent.storage.json_store import AppSettings, CaseStore, ResultStore, SettingsStore
+from video_agent.storage.json_store import (
+    AppSettings,
+    CaseStore,
+    ResultStore,
+    ReviewStore,
+    SettingsStore,
+    StoredResult,
+)
 from video_agent.storage.paths import AppPaths, CacheManager
 from video_agent.ui.case_panel import CaseContextPanel
+from video_agent.ui.review_panel import CandidateReviewPanel
 from video_agent.video.files import (
     build_video_id,
     format_milliseconds,
@@ -98,6 +107,7 @@ class MainWindow(QMainWindow):
         self._metadata: VideoMetadata | None = None
         self._duration_ms = 0
         self._seeking = False
+        self._playback_stop_ms: int | None = None
         self._worker: AnalysisWorker | None = None
         self._metadata_worker: MetadataWorker | None = None
         self._motion_worker: MotionScanWorker | None = None
@@ -120,6 +130,8 @@ class MainWindow(QMainWindow):
         self._paths = AppPaths.default()
         self._settings_store = SettingsStore(self._paths.settings_file)
         self._result_store = ResultStore(self._paths)
+        self._review_store = ReviewStore(self._paths)
+        self._saved_results: dict[str, StoredResult] = {}
         self._case_store = CaseStore(self._paths)
         self._cache_manager = CacheManager(self._paths.cache_dir)
         self._case_record = CaseRecord(
@@ -147,6 +159,7 @@ class MainWindow(QMainWindow):
         self._case_panel.set_record(self._case_record)
         self._refresh_case_choices()
         self._set_idle_state()
+        self._refresh_saved_results()
 
     def _build_ui(self) -> None:
         root = QWidget(self)
@@ -370,10 +383,19 @@ class MainWindow(QMainWindow):
             "입력한 분석 구간 수와 결과 후보 수는 같지 않을 수 있으며, 결과는 0개·1개·여러 개이거나 중복 정리로 합쳐질 수 있습니다."
         )
         help_label.setWordWrap(True)
-        self._result_list = QListWidget()
-        self._result_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        saved_row = QHBoxLayout()
+        self._saved_results_combo = QComboBox()
+        self._saved_results_combo.setAccessibleName("이 영상의 저장된 분석 결과")
+        self._open_result_button = QPushButton("열기")
+        self._open_result_button.setToolTip("선택한 저장 결과와 검토 기록을 불러옵니다")
+        saved_row.addWidget(QLabel("저장된 결과"))
+        saved_row.addWidget(self._saved_results_combo, 1)
+        saved_row.addWidget(self._open_result_button)
+        result_layout.addLayout(saved_row)
+        self._review_panel = CandidateReviewPanel(self._segment_text)
+        self._result_list = self._review_panel.candidate_list
         result_layout.addWidget(help_label)
-        result_layout.addWidget(self._result_list, 1)
+        result_layout.addWidget(self._review_panel, 1)
         layout.addWidget(result_group, 1)
         self._analysis_layout = layout
         self._purpose_group = purpose_group
@@ -419,6 +441,12 @@ class MainWindow(QMainWindow):
         self._cancel_button.clicked.connect(self._cancel_analysis)
         self._result_list.itemActivated.connect(self._seek_to_segment)
         self._result_list.itemClicked.connect(self._seek_to_segment)
+        self._review_panel.playback_range_requested.connect(self._play_review_range)
+        self._open_result_button.clicked.connect(self._open_saved_result)
+        application = QGuiApplication.instance()
+        if application is not None:
+            application.applicationStateChanged.connect(self._on_application_state_changed)
+            self._on_application_state_changed(application.applicationState())
         self._zoom_out_button.clicked.connect(
             lambda: self._change_ui_zoom(-self.UI_ZOOM_STEP)
         )
@@ -493,7 +521,8 @@ class MainWindow(QMainWindow):
         self._purpose_group.setMinimumHeight(scaled(purpose_height))
         self._approval_group.setMinimumHeight(scaled(150))
         self._progress_group.setMinimumHeight(scaled(145))
-        self._result_group.setMinimumHeight(scaled(230))
+        self._result_group.setMinimumHeight(scaled(820))
+        self._review_panel.apply_scale(scaled)
 
         self._zoom_reset_button.setText(f"{self._ui_zoom_percent}%")
         self._zoom_out_button.setEnabled(self._ui_zoom_percent > self.UI_ZOOM_MIN)
@@ -670,6 +699,8 @@ class MainWindow(QMainWindow):
         if self._background_work_running():
             self._show_error("작업 중에는 영상을 바꿀 수 없습니다. 먼저 작업을 취소해 주세요.")
             return
+        if not self._confirm_discard_unsaved_reviews("다른 영상을 열까요?"):
+            return
 
         self._player.stop()
         self._video_path = path
@@ -683,7 +714,7 @@ class MainWindow(QMainWindow):
         self._timeline.setRange(0, 0)
         self._time_label.setText("00:00 / 길이 확인 중")
         self._play_button.setEnabled(False)
-        self._result_list.clear()
+        self._review_panel.clear()
         self._clear_motion_proposals()
         self._sampling_interval_override = None
         self._sampling_timestamps_override = ()
@@ -693,6 +724,7 @@ class MainWindow(QMainWindow):
         self._motion_scan_purpose = None
         self._invalidate_plan_display()
         self._player.setSource(QUrl.fromLocalFile(str(path)))
+        self._refresh_saved_results()
         self._start_metadata_probe(path)
 
     def _start_metadata_probe(self, path: Path) -> None:
@@ -1024,6 +1056,7 @@ class MainWindow(QMainWindow):
 
     def _slider_pressed(self) -> None:
         self._seeking = True
+        self._playback_stop_ms = None
 
     def _slider_released(self) -> None:
         self._player.setPosition(self._timeline.value())
@@ -1036,6 +1069,9 @@ class MainWindow(QMainWindow):
         self._time_label.setText(f"00:00 / {format_milliseconds(self._duration_ms)}")
 
     def _on_position_changed(self, position_ms: int) -> None:
+        if self._playback_stop_ms is not None and position_ms >= self._playback_stop_ms:
+            self._playback_stop_ms = None
+            self._player.pause()
         if not self._seeking:
             self._timeline.setValue(position_ms)
         self._time_label.setText(
@@ -1422,6 +1458,8 @@ class MainWindow(QMainWindow):
         if self._session.plan is None or self._video_path is None:
             self._show_error("승인된 분석 계획이 없습니다.")
             return
+        if not self._confirm_discard_unsaved_reviews("새 분석을 시작할까요?"):
+            return
         api_key = None
         if self._session.plan.mode is AnalysisMode.EXTERNAL:
             api_key = self._external_api_key_value()
@@ -1456,7 +1494,7 @@ class MainWindow(QMainWindow):
         worker.result_ready.connect(self._on_analysis_result)
         worker.finished.connect(self._on_worker_finished)
         self._worker = worker
-        self._result_list.clear()
+        self._review_panel.clear()
         self._set_running_banner(request.mode, request.model_id)
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
@@ -1493,6 +1531,7 @@ class MainWindow(QMainWindow):
         ):
             widget.setEnabled(not running)
         self._cancel_button.setEnabled(running)
+        self._update_saved_results_controls(running)
 
     def _on_analysis_progress(self, progress: int | None, message: str) -> None:
         if self._session.active_job_id is None:
@@ -1566,6 +1605,7 @@ class MainWindow(QMainWindow):
             self._progress_label.setText(f"완료 · {outcome} · {origin_text}{elapsed}")
             self._set_result_banner(job.origin, job.model_id)
             self._display_segments(job)
+            self._refresh_saved_results(select_job_id=job.job_id)
         elif job.status is JobStatus.PARTIAL:
             elapsed = f" · {job.elapsed_seconds:.1f}초" if job.elapsed_seconds is not None else ""
             self._progress_label.setText(
@@ -1573,6 +1613,7 @@ class MainWindow(QMainWindow):
             )
             self._set_result_banner(job.origin, job.model_id)
             self._display_segments(job)
+            self._refresh_saved_results(select_job_id=job.job_id)
             self.statusBar().showMessage(job.error or "일부 배치만 완료되었습니다.", 10000)
         elif job.status is JobStatus.CANCELED:
             self._progress_label.setText("사용자 요청으로 취소됨")
@@ -1581,7 +1622,7 @@ class MainWindow(QMainWindow):
             self._progress_bar.setValue(0)
             self._progress_label.setText("오류로 종료됨")
             self._set_terminal_banner("모델 응답 실패", job.model_id, failed=True)
-            self._result_list.addItem(
+            self._review_panel.show_message(
                 f"분석 실패 — {job.model_id or '모델 없음'} · "
                 f"{job.error or '알 수 없는 분석 오류'}"
             )
@@ -1597,16 +1638,22 @@ class MainWindow(QMainWindow):
         self._update_post_run_buttons()
 
     def _display_segments(self, job: AnalysisJob) -> None:
-        if not job.segments:
-            self._result_list.addItem(
-                "분석된 프레임에서 목적에 맞는 후보를 찾지 못했습니다. "
-                "이는 해당 행동이 없다는 확정이 아닙니다."
-            )
-            return
-        for segment in job.segments:
-            item = QListWidgetItem(self._segment_text(segment, job.purpose))
-            item.setData(Qt.ItemDataRole.UserRole, segment)
-            self._result_list.addItem(item)
+        session = None
+        load_error = None
+        if job.segments:
+            try:
+                session = self._review_store.load(job.job_id)
+                if session is not None:
+                    session.validate_against(job)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                session = None
+                load_error = exc
+        self._review_panel.set_job(
+            job,
+            session=session,
+            persist=self._review_store.save,
+            load_error=load_error,
+        )
 
     def _update_post_run_buttons(self) -> None:
         self._motion_scan_button.setEnabled(
@@ -1771,6 +1818,7 @@ class MainWindow(QMainWindow):
         if not isinstance(segment, Segment):
             return
         position_ms = seconds_to_milliseconds(self._segment_playback_start_sec(segment))
+        self._playback_stop_ms = None
         self._player.setPosition(min(position_ms, self._duration_ms))
         evidence_start = format_milliseconds(
             seconds_to_milliseconds(segment.start_sec)
@@ -1781,6 +1829,101 @@ class MainWindow(QMainWindow):
             f"확인용 근거 범위는 {evidence_start}–{evidence_end}입니다.",
             6000,
         )
+
+    def _play_review_range(self, start_sec: float, end_sec: float) -> None:
+        start_ms = seconds_to_milliseconds(max(0.0, start_sec))
+        end_ms = seconds_to_milliseconds(end_sec)
+        if self._duration_ms > 0:
+            start_ms = min(start_ms, self._duration_ms)
+            end_ms = min(end_ms, self._duration_ms)
+        if end_ms <= start_ms:
+            return
+        self._playback_stop_ms = end_ms
+        self._player.setPosition(start_ms)
+        self._player.play()
+        self.statusBar().showMessage(
+            f"원본 {format_milliseconds(start_ms)}–{format_milliseconds(end_ms)}을 재생하고 "
+            "끝에서 일시정지합니다.",
+            6000,
+        )
+
+    def _on_application_state_changed(self, state: Qt.ApplicationState) -> None:
+        self._review_panel.set_app_active(state == Qt.ApplicationState.ApplicationActive)
+
+    def _refresh_saved_results(self, select_job_id: str | None = None) -> None:
+        self._saved_results = {}
+        self._saved_results_combo.clear()
+        if self._video_id is None:
+            self._saved_results_combo.addItem("영상을 먼저 선택하세요")
+            self._update_saved_results_controls()
+            return
+        try:
+            results, unreadable = self._result_store.list_for_video(self._video_id)
+        except OSError as exc:
+            results, unreadable = (), 0
+            self.statusBar().showMessage(f"저장된 결과 목록을 읽지 못했습니다: {exc}", 8000)
+        for stored in results:
+            self._saved_results[stored.job.job_id] = stored
+            self._saved_results_combo.addItem(self._saved_result_text(stored), stored.job.job_id)
+        if not results:
+            self._saved_results_combo.addItem("이 영상의 저장된 결과 없음")
+        elif select_job_id is not None:
+            index = self._saved_results_combo.findData(select_job_id)
+            if index >= 0:
+                self._saved_results_combo.setCurrentIndex(index)
+        if unreadable:
+            self.statusBar().showMessage(f"읽지 못한 결과 파일 {unreadable}개는 목록에서 제외했습니다.", 8000)
+        self._update_saved_results_controls()
+
+    @staticmethod
+    def _saved_result_text(stored: StoredResult) -> str:
+        job = stored.job
+        saved_at = datetime.fromtimestamp(stored.saved_at).strftime("%m-%d %H:%M")
+        if job.mode is AnalysisMode.SAMPLE:
+            mode = "샘플"
+        elif job.mode is AnalysisMode.LOCAL:
+            mode = f"로컬 {job.model_id or '모델 미기록'}"
+        else:
+            mode = f"외부 {job.model_id or '모델 미기록'}"
+        if job.origin is ResultOrigin.TEST_DOUBLE:
+            mode += " (테스트 응답)"
+        status = "일부 완료" if job.status is JobStatus.PARTIAL else "완료"
+        candidates = f"후보 {len(job.segments)}개" if job.segments else "후보 없음"
+        return f"{saved_at} · {mode} · {status} · {candidates}"
+
+    def _update_saved_results_controls(self, running: bool | None = None) -> None:
+        if running is None:
+            running = self._worker is not None and self._worker.isRunning()
+        has_results = bool(self._saved_results)
+        self._saved_results_combo.setEnabled(not running and has_results)
+        self._open_result_button.setEnabled(not running and has_results)
+
+    def _open_saved_result(self) -> None:
+        stored = self._saved_results.get(self._saved_results_combo.currentData())
+        if stored is None or self._background_work_running():
+            return
+        if not self._confirm_discard_unsaved_reviews("다른 결과를 열까요?"):
+            return
+        job = stored.job
+        self._set_result_banner(job.origin, job.model_id)
+        self._display_segments(job)
+        self.statusBar().showMessage(
+            f"저장된 결과를 열었습니다: {self._saved_result_text(stored)}", 6000
+        )
+
+    def _confirm_discard_unsaved_reviews(self, action: str = "닫을까요?") -> bool:
+        unsaved = self._review_panel.unsaved_indexes()
+        if not unsaved:
+            return True
+        names = ", ".join(f"후보 #{index + 1}" for index in unsaved)
+        answer = QMessageBox.question(
+            self,
+            "저장하지 않은 검토 기록",
+            f"{names}의 검토 기록을 저장하지 않았습니다. 저장하지 않고 {action}",
+            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        return answer == QMessageBox.StandardButton.Discard
 
     def _persist_settings(self) -> None:
         try:
@@ -1830,6 +1973,9 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "오류", message)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt override name
+        if not self._confirm_discard_unsaved_reviews():
+            event.ignore()
+            return
         workers = [
             item
             for item in (self._worker, self._motion_worker, self._metadata_worker)

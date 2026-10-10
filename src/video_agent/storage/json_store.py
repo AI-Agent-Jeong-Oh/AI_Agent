@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from video_agent.contracts import AnalysisJob, AnalysisMode, CaseRecord, ReviewSession
+from video_agent.contracts import AnalysisJob, AnalysisMode, CaseRecord, JobStatus, ReviewSession
 from video_agent.storage.paths import AppPaths
 
 
@@ -62,6 +62,12 @@ class SettingsStore:
         return AppSettings.from_dict(_read_json_object(self.path))
 
 
+@dataclass(frozen=True, slots=True)
+class StoredResult:
+    job: AnalysisJob
+    saved_at: float  # file modification time, seconds since the epoch
+
+
 class ResultStore:
     def __init__(self, paths: AppPaths) -> None:
         self._directory = paths.results_dir
@@ -77,6 +83,26 @@ class ResultStore:
         if not _SAFE_JOB_ID.fullmatch(job_id):
             raise ValueError("job_id contains unsafe path characters")
         return AnalysisJob.from_dict(_read_json_object(self._directory / f"{job_id}.json"))
+
+    def list_for_video(self, video_id: str) -> tuple[tuple[StoredResult, ...], int]:
+        """Completed or partial results for one video, newest first, and the unreadable file count."""
+        if not self._directory.exists():
+            return (), 0
+        results: list[StoredResult] = []
+        unreadable = 0
+        for path in self._directory.glob("*.json"):
+            if not path.is_file():
+                continue
+            try:
+                job = AnalysisJob.from_dict(_read_json_object(path))
+                saved_at = path.stat().st_mtime
+            except (OSError, ValueError, KeyError, TypeError):
+                unreadable += 1
+                continue
+            if job.video_id == video_id and job.status in {JobStatus.COMPLETED, JobStatus.PARTIAL}:
+                results.append(StoredResult(job=job, saved_at=saved_at))
+        results.sort(key=lambda item: (item.saved_at, item.job.job_id), reverse=True)
+        return tuple(results), unreadable
 
 
 class CaseStore:

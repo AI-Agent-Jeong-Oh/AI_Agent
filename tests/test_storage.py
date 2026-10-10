@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -197,6 +198,53 @@ class JsonStorageTests(unittest.TestCase):
         self.assertEqual(store.load("job-review"), session)
         self.assertEqual(result_path.read_bytes(), result_before)
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_result_list_filters_by_video_and_status_newest_first(self) -> None:
+        store = ResultStore(self.paths)
+
+        def save(job_id: str, video_id: str, status: JobStatus, mtime: float) -> None:
+            if status is JobStatus.PARTIAL:
+                job = AnalysisJob(
+                    job_id=job_id,
+                    status=status,
+                    progress=None,
+                    video_id=video_id,
+                    error="일부 배치만 완료",
+                    mode=AnalysisMode.LOCAL,
+                    model_id="vision-model",
+                    is_sample=False,
+                    origin=ResultOrigin.REAL_MODEL,
+                )
+            else:
+                failed = status is JobStatus.FAILED
+                job = AnalysisJob(
+                    job_id=job_id,
+                    status=status,
+                    progress=None if failed else 100,
+                    video_id=video_id,
+                    error="실패" if failed else None,
+                    origin=ResultOrigin.NONE if failed else ResultOrigin.SAMPLE,
+                )
+            path = store.save(job)
+            os.utime(path, (mtime, mtime))
+
+        save("job-old", "video-a", JobStatus.COMPLETED, 1_000)
+        save("job-new", "video-a", JobStatus.COMPLETED, 2_000)
+        save("job-partial", "video-a", JobStatus.PARTIAL, 1_500)
+        save("job-failed", "video-a", JobStatus.FAILED, 3_000)
+        save("job-other", "video-b", JobStatus.COMPLETED, 4_000)
+        (self.paths.results_dir / "broken.json").write_text("{", encoding="utf-8")
+
+        results, unreadable = store.list_for_video("video-a")
+
+        self.assertEqual(
+            [item.job.job_id for item in results], ["job-new", "job-partial", "job-old"]
+        )
+        self.assertEqual(results[0].saved_at, 2_000)
+        self.assertEqual(unreadable, 1)
+
+    def test_result_list_without_results_directory(self) -> None:
+        self.assertEqual(ResultStore(self.paths).list_for_video("video-a"), ((), 0))
 
     def test_review_store_missing_file_and_unsafe_ids(self) -> None:
         store = ReviewStore(self.paths)

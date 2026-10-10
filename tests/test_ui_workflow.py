@@ -279,8 +279,9 @@ class UiWorkflowTests(unittest.TestCase):
         )
 
         self.window._display_segments(job)
+        self.window._result_list.setCurrentRow(0)
 
-        text = self.window._result_list.item(0).text()
+        text = self.window._review_panel.detail_view.toPlainText()
         self.assertIn("확인용 재생 범위", text)
         self.assertIn("클릭 시 맥락 재생 시작 00:00", text)
         self.assertIn("관찰 프레임 원본 시각: 2.000초", text)

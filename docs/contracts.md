@@ -378,7 +378,10 @@ def analyze(request, cancel_event, on_progress) -> AnalysisJob: ...
 - 저장 위치는 사용자 데이터 폴더의 `reviews/<job_id>.json`입니다. `results/<job_id>.json`의 모델 결과는 수정하지 않습니다.
 - 검토 판단·메모·태그는 `AnalysisRequest`, 모델 프롬프트, `TransferManifest`에 넣지 않습니다.
 - 메모는 최대 4000자, 태그는 1~50자·최대 20개·중복 불가입니다. 시각은 ISO 8601 문자열입니다.
-- `review_seconds`, `total_review_seconds`, `completed_at`은 사람 확인 시간 측정용이며 AI 처리 시간(`AnalysisJob.elapsed_seconds`)과 분리합니다. 측정 구현 전에는 `0.0`과 `null`입니다.
+- `total_review_seconds`는 후보가 있는 결과를 검토 패널에 띄워 두고 앱 창이 활성일 때만 늘어나는 사람 확인 시간입니다. `review_seconds`는 그 후보를 선택해 둔 시간입니다. 다시 열면 저장된 값에 이어서 더합니다.
+- 시간은 [기록 저장]과 [분석 완료]를 누를 때만 파일에 기록합니다. 보기만 하고 버튼 없이 닫으면 그 사이 시간은 저장되지 않습니다. `review_seconds`는 기록을 저장한 후보에만 남고, 저장한 기록이 없는 후보를 본 시간은 `total_review_seconds`에만 포함됩니다.
+- `completed_at`은 마지막으로 [분석 완료]를 누른 시각입니다. 완료 후에도 기록을 수정할 수 있고 시간 측정도 계속됩니다.
+- 사람 확인 시간은 AI 처리 시간(`AnalysisJob.elapsed_seconds`)과 분리해 저장합니다. 발표·평가용 지표이므로 앱 화면과 결과 요약에는 표시하지 않습니다.
 
 ## PDF 검색 계약
 
