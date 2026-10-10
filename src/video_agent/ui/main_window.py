@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
     UI_ZOOM_MIN = 75
     UI_ZOOM_MAX = 150
     UI_ZOOM_STEP = 10
+    RESULT_CONTEXT_PREROLL_SECONDS = 1.0
 
     def __init__(self) -> None:
         super().__init__()
@@ -329,7 +330,8 @@ class MainWindow(QMainWindow):
         result_group = QGroupBox("6. 중요 구간 후보")
         result_layout = QVBoxLayout(result_group)
         help_label = QLabel(
-            "후보를 선택하면 원본 영상이 해당 시작 시점으로 이동합니다. "
+            "후보를 선택하면 맥락 확인을 위해 원본 영상이 확인용 범위 시작의 최대 1초 전으로 이동하고, "
+            "표시된 근거 범위를 지나 계속 재생합니다. "
             "입력한 분석 구간 수와 결과 후보 수는 같지 않을 수 있으며, 결과는 0개·1개·여러 개이거나 중복 정리로 합쳐질 수 있습니다."
         )
         help_label.setWordWrap(True)
@@ -1426,10 +1428,13 @@ class MainWindow(QMainWindow):
             self._mode_banner.setText("외부 API 모드 — 분석 승인과 전송 승인이 각각 필요")
             self._mode_banner.setStyleSheet("background:#fdeaea;color:#7a2020;border:1px solid #d89a9a;")
 
-    @staticmethod
-    def _segment_text(segment: Segment, purpose: str | None = None) -> str:
+    @classmethod
+    def _segment_text(cls, segment: Segment, purpose: str | None = None) -> str:
         start = format_milliseconds(seconds_to_milliseconds(segment.start_sec))
         end = format_milliseconds(seconds_to_milliseconds(segment.end_sec))
+        context_start = format_milliseconds(
+            seconds_to_milliseconds(cls._segment_playback_start_sec(segment))
+        )
         evidence = " / ".join(segment.evidence)
         frames = f"\n원본 프레임: {', '.join(segment.source_frame_ids)}" if segment.source_frame_ids else ""
         observed = (
@@ -1487,18 +1492,30 @@ class MainWindow(QMainWindow):
                 )
         return (
             f"확인용 재생 범위 {start}–{end}  {segment.summary}\n"
+            f"클릭 시 맥락 재생 시작 {context_start} "
+            f"(확인용 범위 시작 최대 {cls.RESULT_CONTEXT_PREROLL_SECONDS:g}초 전, 이후 계속 재생)\n"
             f"근거: {evidence}{frames}{observed}{duration_evidence}{temporal_evidence}\n"
             f"불확실성: {segment.uncertainty}"
         )
+
+    @classmethod
+    def _segment_playback_start_sec(cls, segment: Segment) -> float:
+        return max(0.0, segment.start_sec - cls.RESULT_CONTEXT_PREROLL_SECONDS)
 
     def _seek_to_segment(self, item: QListWidgetItem) -> None:
         segment = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(segment, Segment):
             return
-        position_ms = seconds_to_milliseconds(segment.start_sec)
+        position_ms = seconds_to_milliseconds(self._segment_playback_start_sec(segment))
         self._player.setPosition(min(position_ms, self._duration_ms))
+        evidence_start = format_milliseconds(
+            seconds_to_milliseconds(segment.start_sec)
+        )
+        evidence_end = format_milliseconds(seconds_to_milliseconds(segment.end_sec))
         self.statusBar().showMessage(
-            f"원본 {format_milliseconds(position_ms)} 위치로 이동했습니다.", 4000
+            f"맥락 확인을 위해 원본 {format_milliseconds(position_ms)}부터 재생합니다. "
+            f"확인용 근거 범위는 {evidence_start}–{evidence_end}입니다.",
+            6000,
         )
 
     def _persist_settings(self) -> None:

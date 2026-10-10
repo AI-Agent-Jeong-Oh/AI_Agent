@@ -4,10 +4,10 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QListWidgetItem
 
 from video_agent.contracts import (
     AnalysisJob,
@@ -222,7 +222,44 @@ class UiWorkflowTests(unittest.TestCase):
 
         text = self.window._result_list.item(0).text()
         self.assertIn("확인용 재생 범위", text)
+        self.assertIn("클릭 시 맥락 재생 시작 00:00", text)
         self.assertIn("관찰 프레임 원본 시각: 2.000초", text)
+
+    def test_result_click_starts_one_second_before_review_range(self) -> None:
+        segment = Segment(
+            video_id="video-ui",
+            start_sec=3.0,
+            end_sec=4.0,
+            summary="짧은 접촉 후보",
+            evidence=("3.5초 프레임에서 접촉 가능성이 관찰됨",),
+            uncertainty="원본 동작 확인 필요",
+            source_frame_ids=("video-ui:3500",),
+            source_timestamps_sec=(3.5,),
+        )
+        item = QListWidgetItem()
+        item.setData(Qt.ItemDataRole.UserRole, segment)
+        self.window._duration_ms = 10_000
+        self.window._player = MagicMock()
+
+        self.window._seek_to_segment(item)
+
+        self.window._player.setPosition.assert_called_once_with(2_000)
+        self.assertIn("원본 00:02부터", self.window.statusBar().currentMessage())
+        self.assertIn("00:03–00:04", self.window.statusBar().currentMessage())
+
+    def test_result_context_preroll_is_clamped_to_video_start(self) -> None:
+        segment = Segment(
+            video_id="video-ui",
+            start_sec=0.4,
+            end_sec=1.0,
+            summary="영상 시작 부근 후보",
+            evidence=("0.5초 프레임에서 변화가 관찰됨",),
+            uncertainty="원본 확인 필요",
+            source_frame_ids=("video-ui:500",),
+            source_timestamps_sec=(0.5,),
+        )
+
+        self.assertEqual(self.window._segment_playback_start_sec(segment), 0.0)
 
     def test_duration_purpose_displays_observation_span_without_claiming_continuity(self) -> None:
         segment = Segment(
