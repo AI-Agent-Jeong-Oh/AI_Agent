@@ -7,15 +7,18 @@ import unittest
 from pathlib import Path
 
 from video_agent.contracts import (
+    AnalysisClue,
     AnalysisJob,
     AnalysisMode,
+    CaseRecord,
+    CaseVideoLink,
     JobStatus,
     ModelExecutionInfo,
     ResultOrigin,
     SamplingStrategy,
     Segment,
 )
-from video_agent.storage.json_store import AppSettings, ResultStore, SettingsStore
+from video_agent.storage.json_store import AppSettings, CaseStore, ResultStore, SettingsStore
 from video_agent.storage.paths import AppPaths, CacheManager
 
 
@@ -102,6 +105,14 @@ class JsonStorageTests(unittest.TestCase):
             analyzed_frame_count=1,
             sampling_strategy=SamplingStrategy.TEMPORAL_SEQUENCE,
             observation_guidance=("머리 방향을 시간순으로 비교",),
+            case_id="case-1",
+            case_revision=2,
+            analysis_clues=(
+                AnalysisClue(
+                    clue_id="clue-1",
+                    text="신고자는 문 앞 물체가 이동했다고 설명함",
+                ),
+            ),
             model_execution=ModelExecutionInfo(
                 provider_id="ollama-local",
                 context_window_tokens=16384,
@@ -126,6 +137,24 @@ class JsonStorageTests(unittest.TestCase):
         store.save(job)
 
         self.assertEqual(store.load(job.job_id), job)
+
+    def test_case_store_round_trip_omits_original_video_path(self) -> None:
+        record = CaseRecord(
+            case_id="case-package",
+            revision=1,
+            title="문 앞 택배 이동 확인",
+            clues=(AnalysisClue(clue_id="clue-1", text="문 앞 상자 이동 신고"),),
+            video_links=(CaseVideoLink(video_id="video-hash", camera_location="현관"),),
+        )
+        store = CaseStore(self.paths)
+
+        path = store.save(record)
+
+        self.assertEqual(store.load(record.case_id), record)
+        self.assertEqual(store.list_records(), (record,))
+        text = path.read_text(encoding="utf-8")
+        self.assertNotIn("video_path", text)
+        self.assertNotIn("/Users/", text)
 
 
 class CacheManagerTests(unittest.TestCase):

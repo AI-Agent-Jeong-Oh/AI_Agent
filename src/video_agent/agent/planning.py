@@ -15,6 +15,7 @@ from video_agent.analysis.evidence import (
     temporal_motion_requirement,
 )
 from video_agent.contracts import (
+    AnalysisClue,
     AnalysisLimits,
     AnalysisMode,
     AnalysisRequest,
@@ -50,6 +51,9 @@ class AnalysisIntent:
     provider_id: str | None = None
     provider_endpoint: str | None = None
     sampling_strategy: SamplingStrategy | None = None
+    case_id: str | None = None
+    case_revision: int | None = None
+    analysis_clues: tuple[AnalysisClue, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, AnalysisMode):
@@ -79,6 +83,7 @@ class TransferManifest:
     sends_purpose_text: bool
     frame_timestamps_sec: tuple[float, ...]
     sends_pdf_content: bool = False
+    analysis_clues: tuple[AnalysisClue, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,6 +105,9 @@ class AnalysisPlan:
     observation_guidance: tuple[str, ...]
     limits: AnalysisLimits
     transfer_manifest: TransferManifest | None = None
+    case_id: str | None = None
+    case_revision: int | None = None
+    analysis_clues: tuple[AnalysisClue, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +190,18 @@ class PlanBuilder:
             )
             if item
         )
+        if (intent.case_id is None) != (intent.case_revision is None):
+            raise PlanningError("사건 ID와 버전은 함께 제공해야 합니다.")
+        if intent.case_revision is not None and intent.case_revision < 1:
+            raise PlanningError("사건 정보 버전은 1 이상이어야 합니다.")
+        analysis_clues = tuple(
+            item for item in intent.analysis_clues if item.use_for_analysis
+        )
+        if len(analysis_clues) > 20:
+            raise PlanningError("분석에 사용할 사전 정보는 최대 20개입니다.")
+        clue_ids = tuple(item.clue_id for item in analysis_clues)
+        if len(clue_ids) != len(set(clue_ids)):
+            raise PlanningError("사전 정보 ID가 중복되었습니다.")
         model_id = (intent.model_id or "").strip() or None
         if intent.mode is not AnalysisMode.SAMPLE and model_id is None:
             raise PlanningError("실제 분석 모드에서는 모델 입력란에서 영상 입력 모델을 선택해야 합니다.")
@@ -234,6 +254,7 @@ class PlanBuilder:
                 endpoint_origin=f"{endpoint.scheme}://{endpoint.netloc}",
                 sends_purpose_text=True,
                 frame_timestamps_sec=timestamps,
+                analysis_clues=analysis_clues,
             )
 
         fingerprint_payload = {
@@ -248,6 +269,9 @@ class PlanBuilder:
             "timestamps": timestamps,
             "sampling_strategy": sampling_strategy.value,
             "observation_guidance": observation_guidance,
+            "case_id": intent.case_id,
+            "case_revision": intent.case_revision,
+            "analysis_clues": [item.to_dict() for item in analysis_clues],
             "limits": asdict(active_limits),
             "transfer": asdict(transfer_manifest) if transfer_manifest else None,
         }
@@ -272,6 +296,9 @@ class PlanBuilder:
             observation_guidance=observation_guidance,
             limits=active_limits,
             transfer_manifest=transfer_manifest,
+            case_id=intent.case_id,
+            case_revision=intent.case_revision,
+            analysis_clues=analysis_clues,
         )
 
 
@@ -382,6 +409,9 @@ class AgentSession:
             sampling_strategy=self.plan.sampling_strategy,
             observation_guidance=self.plan.observation_guidance,
             limits=self.plan.limits,
+            case_id=self.plan.case_id,
+            case_revision=self.plan.case_revision,
+            analysis_clues=self.plan.analysis_clues,
         )
         self.active_job_id = job_id
         self._execution_counts[self.plan.fingerprint] = execution_count + 1

@@ -4,6 +4,9 @@ PC의 로컬 영상에서 사용자 목적에 맞는 중요 구간 후보를 만
 
 ## 구현 상태
 
+- 사건명·유형·발생 시각 확실성·관리 메모와 영상 연결 정보를 사용자 데이터 폴더에 버전 저장
+- 사전 단서별 출처·확실성·분석 사용 여부를 구분하고, 선택 단서만 계획·VLM 입력·결과 출처에 보존
+- 사전 정보 변경 시 기존 승인 무효화, 외부 모드에서는 전송할 단서 문구까지 별도 승인 화면에 표시
 - 로컬 파일 선택, 영상 재생, 원본 타임라인 탐색
 - FFprobe 기반 길이·해상도·평균/명목 FPS·회전·오디오·timebase 확인
 - FFmpeg로 승인된 원본 시각의 프레임만 제한 추출하고 디코딩 PTS 기록
@@ -39,10 +42,20 @@ Qt 공식 설치 문서는 Python 3.10 이상과 가상환경을 권장합니다
 FFmpeg가 없다면 먼저 설치하고 `ffprobe`, `ffmpeg`가 실행되는지 확인합니다. 앱은 PATH 외에도 Apple Silicon/Homebrew의 `/opt/homebrew/bin`과 Intel Homebrew의 `/usr/local/bin`을 확인합니다.
 
 ```bash
-cd /Users/seungjae/Desktop/SNU/AI_Agent
+git clone https://github.com/AI-Agent-Jeong-Oh/AI_Agent.git
+cd AI_Agent
+git switch codex/local-vlm-ollama
 python3.13 -m venv .venv
 ./.venv/bin/python -m pip install --upgrade pip
 ./.venv/bin/python -m pip install -r requirements.txt
+PYTHONPATH=src ./.venv/bin/python -m video_agent
+```
+
+새 팀원은 시스템 설정이나 모델을 자동 변경하지 않는 준비 스크립트를 사용할 수 있습니다.
+
+```bash
+./scripts/bootstrap_macos_dev.sh --check-only
+./scripts/bootstrap_macos_dev.sh --dev
 PYTHONPATH=src ./.venv/bin/python -m video_agent
 ```
 
@@ -134,6 +147,7 @@ PYTHONPATH=src ./.venv/bin/python -m video_agent
 
 ```text
 ~/Library/Application Support/VideoAnalysisAgent/settings.json
+~/Library/Application Support/VideoAnalysisAgent/cases/*.json
 ~/Library/Application Support/VideoAnalysisAgent/results/*.json
 ~/Library/Caches/VideoAnalysisAgent/<job-id>/
 ```
@@ -168,5 +182,6 @@ open dist/VideoAnalysisAgent.app
 - [UI/분석/PDF 연결 계약](docs/contracts.md)
 - [역할별 다음 작업](docs/tasks.md)
 - [승재 작업 인계](docs/handoff-seungjae.md)
+- [팀원 개발 시작 안내](docs/team-handoff.html)
 
 AI-Hub 데이터셋 515의 `VS9.zip`/`VL9.zip`은 다운로드하거나 확인하지 않았습니다. 제공되면 팀원 담당 절차에 따라 실제 MP4/JSON 구조와 파일명 대응부터 확인하며 정답 라벨을 분석 입력에 넣지 않습니다.

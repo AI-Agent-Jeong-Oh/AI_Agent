@@ -73,6 +73,9 @@ class SampleAnalyzer:
             elapsed_seconds=time.monotonic() - started,
             sampling_strategy=request.sampling_strategy,
             observation_guidance=request.observation_guidance,
+            case_id=request.case_id,
+            case_revision=request.case_revision,
+            analysis_clues=request.analysis_clues,
         )
         result.validate_for_duration(request.duration_seconds)
         on_progress(100, "샘플 결과 준비 완료")
@@ -93,6 +96,9 @@ class SampleAnalyzer:
             elapsed_seconds=time.monotonic() - started,
             sampling_strategy=request.sampling_strategy,
             observation_guidance=request.observation_guidance,
+            case_id=request.case_id,
+            case_revision=request.case_revision,
+            analysis_clues=request.analysis_clues,
         )
 
     @staticmethod

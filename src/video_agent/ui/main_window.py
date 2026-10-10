@@ -45,9 +45,11 @@ from video_agent.analysis.evidence import (
 from video_agent.analysis.factory import create_analyzer
 from video_agent.analysis.worker import AnalysisWorker
 from video_agent.contracts import (
+    AnalysisClue,
     AnalysisJob,
     AnalysisLimits,
     AnalysisMode,
+    CaseRecord,
     JobStatus,
     MotionProposal,
     MotionScanProfile,
@@ -57,8 +59,9 @@ from video_agent.contracts import (
     Segment,
 )
 from video_agent.models.config import RuntimeInventory
-from video_agent.storage.json_store import AppSettings, ResultStore, SettingsStore
+from video_agent.storage.json_store import AppSettings, CaseStore, ResultStore, SettingsStore
 from video_agent.storage.paths import AppPaths, CacheManager
+from video_agent.ui.case_panel import CaseContextPanel
 from video_agent.video.files import (
     build_video_id,
     format_milliseconds,
@@ -117,7 +120,14 @@ class MainWindow(QMainWindow):
         self._paths = AppPaths.default()
         self._settings_store = SettingsStore(self._paths.settings_file)
         self._result_store = ResultStore(self._paths)
+        self._case_store = CaseStore(self._paths)
         self._cache_manager = CacheManager(self._paths.cache_dir)
+        self._case_record = CaseRecord(
+            case_id=f"case-{uuid4().hex[:12]}",
+            revision=1,
+            title="새 사건",
+        )
+        self._case_saved = False
         try:
             self._settings = self._settings_store.load()
             self._settings_error: str | None = None
@@ -134,6 +144,8 @@ class MainWindow(QMainWindow):
         self._install_zoom_shortcuts()
         self._apply_ui_zoom()
         self._restore_settings()
+        self._case_panel.set_record(self._case_record)
+        self._refresh_case_choices()
         self._set_idle_state()
 
     def _build_ui(self) -> None:
@@ -231,6 +243,9 @@ class MainWindow(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(6, 0, 0, 0)
+
+        self._case_panel = CaseContextPanel()
+        layout.addWidget(self._case_panel)
 
         purpose_group = QGroupBox("2. 분석 목적과 범위")
         purpose_layout = QFormLayout(purpose_group)
@@ -368,6 +383,10 @@ class MainWindow(QMainWindow):
         return panel
 
     def _connect_signals(self) -> None:
+        self._case_panel.changed.connect(self._case_inputs_changed)
+        self._case_panel.save_requested.connect(self._save_case)
+        self._case_panel.load_requested.connect(self._load_case)
+        self._case_panel.new_requested.connect(self._new_case)
         self._choose_button.clicked.connect(self._choose_video)
         self._play_button.clicked.connect(self._toggle_playback)
         self._timeline.sliderPressed.connect(self._slider_pressed)
@@ -468,6 +487,7 @@ class MainWindow(QMainWindow):
         self._selected_motion_list.setMaximumHeight(scaled(140))
         self._plan_view.setMinimumHeight(scaled(145))
         self._plan_view.setMaximumHeight(scaled(260))
+        self._case_panel.clue_list.setMinimumHeight(scaled(100))
         self._plan_group.setMinimumHeight(scaled(635))
         purpose_height = 285 if self._current_mode() is AnalysisMode.EXTERNAL else 205
         self._purpose_group.setMinimumHeight(scaled(purpose_height))
@@ -513,6 +533,109 @@ class MainWindow(QMainWindow):
         if self._settings_error:
             self.statusBar().showMessage(f"설정 파일을 읽지 못해 기본값을 사용합니다: {self._settings_error}")
 
+    def _current_case_clues(self, *, for_analysis: bool = False) -> tuple[AnalysisClue, ...]:
+        clues = self._case_panel.clues()
+        if for_analysis:
+            return tuple(item for item in clues if item.use_for_analysis)
+        return clues
+
+    def _case_from_panel(self, revision: int) -> CaseRecord:
+        links = list(self._case_record.video_links)
+        if self._video_id is not None:
+            links = [item for item in links if item.video_id != self._video_id]
+            current_link = self._case_panel.video_link(self._video_id)
+            if current_link is not None:
+                links.append(current_link)
+        return CaseRecord(
+            case_id=self._case_record.case_id,
+            revision=revision,
+            title=self._case_panel.title_edit.text().strip() or "새 사건",
+            case_type=self._case_panel.type_edit.text().strip(),
+            occurrence_time_text=self._case_panel.occurrence_edit.text().strip(),
+            occurrence_time_certainty=self._case_panel.occurrence_certainty.currentData(),
+            management_notes=self._case_panel.notes_edit.toPlainText().strip(),
+            clues=self._current_case_clues(),
+            video_links=tuple(sorted(links, key=lambda item: item.video_id)),
+        )
+
+    @staticmethod
+    def _case_content(record: CaseRecord) -> dict[str, object]:
+        data = record.to_dict()
+        data.pop("revision", None)
+        return data
+
+    def _case_inputs_changed(self) -> None:
+        if self._background_work_running():
+            return
+        self._inputs_changed()
+
+    def _save_case(self) -> None:
+        if self._background_work_running():
+            self._show_error("작업 중에는 사건 정보를 저장할 수 없습니다.")
+            return
+        try:
+            candidate = self._case_from_panel(self._case_record.revision)
+            if self._case_saved and self._case_content(candidate) != self._case_content(
+                self._case_record
+            ):
+                candidate = self._case_from_panel(self._case_record.revision + 1)
+            path = self._case_store.save(candidate)
+        except (OSError, ValueError) as exc:
+            self._show_error(f"사건 정보 저장 실패: {exc}")
+            return
+        self._case_record = candidate
+        self._case_saved = True
+        self._refresh_case_choices()
+        self._inputs_changed()
+        self.statusBar().showMessage(
+            f"사건 정보 v{candidate.revision} 저장 완료: {path.name}",
+            6000,
+        )
+
+    def _load_case(self) -> None:
+        if self._background_work_running():
+            self._show_error("작업 중에는 사건을 바꿀 수 없습니다.")
+            return
+        case_id = self._case_panel.selected_case_id()
+        if case_id is None:
+            self.statusBar().showMessage("저장된 사건이 없습니다.", 4000)
+            return
+        try:
+            record = self._case_store.load(case_id)
+        except (OSError, ValueError) as exc:
+            self._show_error(f"사건 정보 불러오기 실패: {exc}")
+            return
+        self._case_record = record
+        self._case_saved = True
+        self._case_panel.set_record(record, self._video_id)
+        self._inputs_changed()
+        self.statusBar().showMessage(
+            f"사건 '{record.title}' v{record.revision}을 불러왔습니다. 원본 영상 경로는 다시 선택해야 할 수 있습니다.",
+            7000,
+        )
+
+    def _new_case(self) -> None:
+        if self._background_work_running():
+            self._show_error("작업 중에는 새 사건을 만들 수 없습니다.")
+            return
+        self._case_record = CaseRecord(
+            case_id=f"case-{uuid4().hex[:12]}",
+            revision=1,
+            title="새 사건",
+        )
+        self._case_saved = False
+        self._case_panel.set_record(self._case_record, self._video_id)
+        self._inputs_changed()
+        self.statusBar().showMessage("새 사건 입력을 시작합니다. 저장 전에도 계획에 단서를 사용할 수 있습니다.", 6000)
+
+    def _refresh_case_choices(self) -> None:
+        try:
+            records = self._case_store.list_records()
+        except (OSError, ValueError) as exc:
+            self.statusBar().showMessage(f"저장된 사건 목록을 읽지 못했습니다: {exc}", 7000)
+            records = ()
+        self._case_panel.set_saved_cases(records, self._case_record.case_id)
+
     def _set_idle_state(self) -> None:
         self._play_button.setEnabled(False)
         self._motion_scan_button.setEnabled(False)
@@ -551,6 +674,7 @@ class MainWindow(QMainWindow):
         self._player.stop()
         self._video_path = path
         self._video_id = video_id
+        self._case_panel.show_video_link(self._case_record, video_id)
         self._metadata = None
         self._duration_ms = 0
         self._file_label.setText(path.name)
@@ -1054,6 +1178,9 @@ class MainWindow(QMainWindow):
             provider_id=provider_id,
             provider_endpoint=endpoint,
             sampling_strategy=self._sampling_strategy_override,
+            case_id=self._case_record.case_id,
+            case_revision=self._case_record.revision,
+            analysis_clues=self._current_case_clues(for_analysis=True),
         )
 
     def _purpose_changed(self) -> None:
@@ -1211,6 +1338,8 @@ class MainWindow(QMainWindow):
                 "전체 화면 보기 + 중앙 60% 확대 보기(1280×1080)를 모델에 전달"
             )
         lines = [
+            f"사건: {self._case_panel.title_edit.text().strip() or self._case_record.title} · "
+            f"ID {plan.case_id or '미연결'} · 정보 버전 {plan.case_revision or '없음'}",
             f"모드: {plan.mode.value} · 모델: {plan.model_id or '없음(샘플)'}",
             f"분석 대상: {plan.video_id} · 원본 {plan.range_start_sec:.3f}~{plan.range_end_sec:.3f}초",
             f"분석 전략: {plan.sampling_strategy.value}",
@@ -1219,6 +1348,14 @@ class MainWindow(QMainWindow):
             f"모델 요청: 최대 {plan.limits.max_provider_requests}회 · 요청당 최대 {plan.limits.max_frames_per_request}프레임 · 자동 재시도 없음",
             "범위 확대가 필요하면 자동 실행하지 않고 제안 상태로 남깁니다.",
         ]
+        if plan.analysis_clues:
+            lines.append("분석에 사용하는 사전 정보(영상 관찰 사실 아님):")
+            lines.extend(
+                f"  - [{item.source.value}/{item.certainty.value}] {item.text}"
+                for item in plan.analysis_clues
+            )
+        else:
+            lines.append("분석에 사용하는 사전 정보: 없음")
         if plan.observation_guidance:
             lines.append("관찰 기준: " + " / ".join(plan.observation_guidance))
         if plan.transfer_manifest:
@@ -1229,6 +1366,12 @@ class MainWindow(QMainWindow):
                     "[외부 전송은 분석 승인과 별도 승인 필요]",
                     f"공급자/목적지: {manifest.provider_id} · {manifest.endpoint_origin}",
                     f"전송: 분석 목적 텍스트 + JPEG 프레임 {len(manifest.frame_timestamps_sec)}개 ({times})",
+                    "외부로 전송할 사전 정보: "
+                    + (
+                        " / ".join(item.text for item in manifest.analysis_clues)
+                        if manifest.analysis_clues
+                        else "없음"
+                    ),
                     "PDF·원본 영상 전체·라벨 JSON은 전송하지 않습니다.",
                 ]
             )
@@ -1325,6 +1468,7 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _set_analysis_running(self, running: bool) -> None:
+        self._case_panel.set_editing_enabled(not running)
         self._choose_button.setEnabled(not running and not self._metadata_probe_running())
         self._motion_scan_button.setEnabled(not running and self._metadata is not None)
         self._motion_list.setEnabled(not running)

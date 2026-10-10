@@ -103,6 +103,33 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertFalse(self.window._run_button.isEnabled())
         self.assertIsNone(self.window._session.analysis_approval)
 
+    def test_case_clue_is_saved_shown_in_plan_and_change_requires_reapproval(self) -> None:
+        panel = self.window._case_panel
+        panel.title_edit.setText("문 앞 택배 이동 확인")
+        panel.type_edit.setText("관리용 사건 분류")
+        panel.clue_text.setText("신고자는 사람이 문 앞 상자를 들었다고 설명함")
+        panel.add_clue_button.click()
+        self.window._save_case()
+
+        stored = self.window._case_store.load(self.window._case_record.case_id)
+        self.assertEqual(stored.title, "문 앞 택배 이동 확인")
+        self.assertEqual(len(stored.analysis_clues), 1)
+
+        self.window._purpose_edit.setPlainText(
+            "사람이 문 앞 상자를 들어 이동시키는 장면 후보 찾기"
+        )
+        self.window._make_plan()
+        self.assertIn("사전 정보(영상 관찰 사실 아님)", self.window._plan_view.toPlainText())
+        self.assertIn("문 앞 상자를 들었다고 설명함", self.window._plan_view.toPlainText())
+        self.window._approve_plan()
+        self.assertTrue(self.window._run_button.isEnabled())
+
+        item = panel.clue_list.item(0)
+        item.setCheckState(Qt.CheckState.Unchecked)
+
+        self.assertFalse(self.window._run_button.isEnabled())
+        self.assertIsNone(self.window._session.analysis_approval)
+
     def test_analysis_panel_preserves_readable_motion_and_plan_areas(self) -> None:
         self.assertGreaterEqual(self.window._motion_list.minimumHeight(), 120)
         self.assertGreaterEqual(self.window._plan_view.minimumHeight(), 140)

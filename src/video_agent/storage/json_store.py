@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from video_agent.contracts import AnalysisJob, AnalysisMode
+from video_agent.contracts import AnalysisJob, AnalysisMode, CaseRecord
 from video_agent.storage.paths import AppPaths
 
 
@@ -77,6 +77,37 @@ class ResultStore:
         if not _SAFE_JOB_ID.fullmatch(job_id):
             raise ValueError("job_id contains unsafe path characters")
         return AnalysisJob.from_dict(_read_json_object(self._directory / f"{job_id}.json"))
+
+
+class CaseStore:
+    """Versioned case context without original video paths or credentials."""
+
+    def __init__(self, paths: AppPaths) -> None:
+        self._directory = paths.cases_dir
+
+    def save(self, record: CaseRecord) -> Path:
+        if not _SAFE_JOB_ID.fullmatch(record.case_id):
+            raise ValueError("case_id contains unsafe path characters")
+        path = self._directory / f"{record.case_id}.json"
+        _atomic_json_write(path, record.to_dict())
+        return path
+
+    def load(self, case_id: str) -> CaseRecord:
+        if not _SAFE_JOB_ID.fullmatch(case_id):
+            raise ValueError("case_id contains unsafe path characters")
+        return CaseRecord.from_dict(
+            _read_json_object(self._directory / f"{case_id}.json")
+        )
+
+    def list_records(self) -> tuple[CaseRecord, ...]:
+        if not self._directory.exists():
+            return ()
+        records = tuple(
+            CaseRecord.from_dict(_read_json_object(path))
+            for path in self._directory.glob("*.json")
+            if path.is_file()
+        )
+        return tuple(sorted(records, key=lambda item: (item.title.casefold(), item.case_id)))
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

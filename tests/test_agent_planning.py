@@ -9,7 +9,14 @@ from video_agent.agent.planning import (
     PlanningError,
     WorkflowState,
 )
-from video_agent.contracts import AnalysisLimits, AnalysisMode, SamplingStrategy
+from video_agent.contracts import (
+    AnalysisClue,
+    AnalysisLimits,
+    AnalysisMode,
+    ClueSource,
+    InformationCertainty,
+    SamplingStrategy,
+)
 from video_agent.video.probe import VideoMetadata
 
 
@@ -34,6 +41,40 @@ def metadata(video_id: str = "video-1") -> VideoMetadata:
 
 
 class PlanBuilderTests(unittest.TestCase):
+    def test_selected_prior_information_is_snapshotted_and_changes_fingerprint(self) -> None:
+        first = AnalysisClue(
+            clue_id="clue-1",
+            text="신고자는 사람이 문 앞 상자를 들었다고 설명함",
+            source=ClueSource.REPORT,
+            certainty=InformationCertainty.ESTIMATED,
+        )
+        ignored = AnalysisClue(
+            clue_id="clue-2",
+            text="담당자만 볼 메모",
+            use_for_analysis=False,
+        )
+        base = AnalysisIntent(
+            purpose="사람이 문 앞 상자를 들어 이동시키는 장면 후보 찾기",
+            case_id="case-1",
+            case_revision=1,
+            analysis_clues=(first, ignored),
+        )
+
+        plan = PlanBuilder().build(metadata(), base)
+        changed = PlanBuilder().build(
+            metadata(),
+            AnalysisIntent(
+                purpose=base.purpose,
+                case_id="case-1",
+                case_revision=2,
+                analysis_clues=(
+                    AnalysisClue(clue_id="clue-1", text="상자 이동 시각은 미확인"),
+                ),
+            ),
+        )
+
+        self.assertEqual(plan.analysis_clues, (first,))
+        self.assertNotEqual(plan.fingerprint, changed.fingerprint)
     def test_questions_cover_missing_focus_and_vague_duration(self) -> None:
         builder = PlanBuilder()
         vague = AnalysisIntent(purpose="영상 분석")
@@ -226,12 +267,16 @@ class AgentSessionTests(unittest.TestCase):
             self.session.create_request("/tmp/example.mp4", "job-1")
 
     def test_external_transfer_needs_separate_approval(self) -> None:
+        clue = AnalysisClue(clue_id="clue-1", text="문 앞 상자 이동 신고")
         intent = AnalysisIntent(
             purpose="출입문 앞에 사람이 30초 이상 머무르는 장면 후보 찾기",
             mode=AnalysisMode.EXTERNAL,
             model_id="vision-model",
             provider_id="configured-provider",
             provider_endpoint="https://provider.invalid/v1/chat/completions",
+            case_id="case-1",
+            case_revision=1,
+            analysis_clues=(clue,),
         )
         self.session.update_context(metadata(), intent)
         self.session.prepare_plan()
@@ -245,6 +290,30 @@ class AgentSessionTests(unittest.TestCase):
         request = self.session.create_request("/tmp/example.mp4", "job-1")
         self.assertEqual(request.mode, AnalysisMode.EXTERNAL)
         self.assertIsNotNone(request.transfer_approval_id)
+        self.assertEqual(request.analysis_clues, (clue,))
+        self.assertEqual(self.session.plan.transfer_manifest.analysis_clues, (clue,))
+
+    def test_prior_information_change_invalidates_existing_approval(self) -> None:
+        first = AnalysisIntent(
+            purpose=self.intent.purpose,
+            case_id="case-1",
+            case_revision=1,
+            analysis_clues=(AnalysisClue(clue_id="clue-1", text="첫 단서"),),
+        )
+        self.session.update_context(metadata(), first)
+        self.session.prepare_plan()
+        self.session.approve_analysis()
+
+        changed = AnalysisIntent(
+            purpose=self.intent.purpose,
+            case_id="case-1",
+            case_revision=2,
+            analysis_clues=(AnalysisClue(clue_id="clue-1", text="수정된 단서"),),
+        )
+        self.session.update_context(metadata(), changed)
+
+        self.assertIsNone(self.session.plan)
+        self.assertIsNone(self.session.analysis_approval)
 
     def test_canceled_job_rejects_late_result(self) -> None:
         self.session.prepare_plan()

@@ -2,6 +2,9 @@
 
 ## 승재 구현 완료 범위
 
+- 사건 정보·사전 단서·영상 연결 공통 계약과 버전별 사용자 데이터 저장·불러오기
+- 관리 정보와 분석 단서 분리, 선택 단서의 계획 fingerprint·승인 무효화·VLM 프롬프트·결과 저장 연결
+- 외부 전송 manifest에 실제 전송할 사전 단서 문구 표시
 - FFprobe 메타데이터와 FFmpeg 원본 timestamp 프레임 추출
 - 추가 질문·계획 fingerprint·분석/전송 승인·실행 상한 상태 관리
 - 샘플/로컬/외부 분석기 분리와 자동 fallback 금지
@@ -46,10 +49,11 @@
 
 ### UI 디자인·접근성
 
-- 주 수정 파일: `src/video_agent/ui/main_window.py`
+- 주 수정 파일: `src/video_agent/ui/case_panel.py`, 필요 시 `src/video_agent/ui/main_window.py`
 - 유지할 연결 지점: `AgentSession`, `AnalysisPlan`, `AnalysisWorker`, `AnalysisJob`, `ResultOrigin`
 - 해야 할 일:
   - 현재 기능 순서와 승인 분리를 유지하면서 layout을 컴포넌트로 나눕니다.
+  - 사건 입력 패널의 단서별 출처·확실성·분석 사용 상태를 더 읽기 쉽게 개선합니다.
   - 움직임 제안 목록에서 `MotionProposal`을 선택·적용하는 최소 연결을 유지하되 점수를 확률이나 이상행동 판정처럼 보이지 않게 개선합니다.
   - 키보드 tab 순서, VoiceOver 이름/설명, 작은 화면, 긴 근거 표시를 개선합니다.
   - `sample`, `test_double`, `real_model` banner가 시각·텍스트 모두 구분되는지 확인합니다.

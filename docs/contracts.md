@@ -19,8 +19,46 @@ Python 기준 정의는 `src/video_agent/contracts.py`, Agent 계획은 `agent/p
 - `MotionScanResult`, `MotionProposal`: AI 호출 전의 로컬 픽셀 변화 제안과 실제 분석 결과를 분리
 - `sampling_strategy`, `observation_guidance`: 균등·변화 정점·시간 변화 표본의 의미와 승인된 관찰 기준을 계획·요청·저장 결과에서 재현
 - `MotionScanResult.profile`: 일반 최대 변화와 반복·미세 국소 변화 점수 정책을 구분
+- `CaseRecord`, `AnalysisClue`, `CaseVideoLink`: 관리 정보와 모델에 전달할 사전 단서를 분리하고 사건 버전·영상 연결·카메라 시각 오차를 보존
+- `AnalysisPlan.analysis_clues`: 승인한 단서 스냅샷을 fingerprint에 포함해 변경 후 재승인
+- `TransferManifest.analysis_clues`: 외부로 전송할 사전 정보 문구를 프레임과 함께 명시
 
 모든 시간은 원본 시작 기준 초입니다. Qt UI 밀리초는 UI 경계에서만 변환합니다.
+
+## 사건 정보와 사전 단서
+
+```json
+{
+  "case_id": "case-a1b2c3",
+  "revision": 1,
+  "title": "문 앞 택배 이동 확인",
+  "case_type": "관리용 분류",
+  "occurrence_time_text": "발생 시각 미확인",
+  "occurrence_time_certainty": "unknown",
+  "management_notes": "모델에 전송하지 않는 관리 메모",
+  "clues": [{
+    "clue_id": "clue-01",
+    "text": "신고자는 문 앞 물체가 이동했다고 설명함",
+    "source": "report",
+    "certainty": "estimated",
+    "use_for_analysis": true
+  }],
+  "video_links": [{
+    "video_id": "video-hash",
+    "camera_location": "공동현관 앞",
+    "clock_offset_seconds": 0.0,
+    "clock_certainty": "unknown"
+  }]
+}
+```
+
+- 관리 정보인 `title`, `case_type`, `occurrence_time_text`, `management_notes`는 사건 저장과 화면 표시에 사용하며 VLM 프롬프트에는 자동 전달하지 않습니다.
+- `use_for_analysis=true`인 `AnalysisClue`만 계획, 분석 요청, 결과 provenance에 포함됩니다. `source`는 `user_statement`, `report`, `document`, `other`, `certainty`는 `confirmed`, `estimated`, `unknown`입니다.
+- 사전 정보는 모델 프롬프트에서 “영상 관찰 사실이 아닌 사용자 제공 정보”로 표시합니다. 단서가 사실이라고 가정하거나 단서의 문구를 관찰 결과로 복사하지 않도록 요구합니다.
+- 사건 버전 또는 선택 단서의 ID·내용·출처·확실성이 바뀌면 plan fingerprint가 바뀌어 기존 분석·외부 전송 승인을 사용할 수 없습니다.
+- `clock_offset_seconds`는 사건 메타데이터입니다. 프레임 추출·결과 계약은 계속 원본 영상 시작 기준 초와 decoded PTS를 사용하며 시각 오차로 원본 타임라인을 다시 쓰지 않습니다.
+- 사건 JSON에는 `video_id`만 저장하고 원본 파일 경로는 저장하지 않습니다. 기본 저장 위치는 사용자 데이터 폴더의 `cases/`입니다.
+- 외부 모드의 `TransferManifest`에는 전송할 단서 전체가 포함되며 UI가 문구를 표시합니다. 사건명·관리 메모·PDF·라벨 JSON은 기본 전송 대상이 아닙니다.
 
 ## `AnalysisPlan`
 
@@ -41,6 +79,15 @@ Python 기준 정의는 `src/video_agent/contracts.py`, Agent 계획은 `agent/p
   "sample_timestamps_sec": [11.25, 13.75],
   "sampling_strategy": "temporal_sequence",
   "observation_guidance": ["사람의 의도나 심리를 추정하지 말고 머리·얼굴·몸통 방향을 서로 다른 원본 시각에서 비교"],
+  "case_id": "case-a1b2c3",
+  "case_revision": 1,
+  "analysis_clues": [{
+    "clue_id": "clue-01",
+    "text": "신고자는 문 앞 물체가 이동했다고 설명함",
+    "source": "report",
+    "certainty": "estimated",
+    "use_for_analysis": true
+  }],
   "limits": {
     "max_runtime_seconds": 300.0,
     "max_reanalysis_attempts": 0,
@@ -183,7 +230,7 @@ UI는 실행 전에 위 내용을 사람이 읽을 수 있게 표시합니다. �
     "provider_image_count": 1,
     "provider_image_dimensions": ["960x270"],
     "input_representation": "temporal_storyboard",
-    "prompt_version": "candidate-recall-v9-overview-detail-crop",
+    "prompt_version": "candidate-recall-v10-prior-context-separated",
     "batch_candidate_counts": [1]
   },
   "segments": [
@@ -282,7 +329,7 @@ UI는 움직임 점수 상위 3개의 체크박스를 기본으로 체크하고 
 ## 반복·방향 변화 목적의 근거
 
 - 목적에 두리번거림·주변 살피기·고개/머리/얼굴/몸통 방향 변화·반복 동작 표현이 있으면 `temporal_sequence`를 자동 선택합니다. 계획에는 심리나 의도가 아니라 화면에서 보이는 방향·자세 변화를 비교하는 `observation_guidance`를 표시합니다.
-- `candidate-recall-v9-overview-detail-crop`은 일반 시간 변화 입력에서 비교 보드 패널 또는 개별 이미지와 원본 시각을 대응합니다. 빈 배열을 결정하기 전에 시각별 머리·얼굴·몸통 방향을 비교하고, 서로 다른 두 시각의 요청 관찰 상태가 다르면 회전 순간이 직접 찍히지 않아도 미세 후보로 반환하도록 요구합니다. 정밀 접촉 목적에서는 한 원본 시각의 위쪽 전체 화면과 아래쪽 중앙 확대 보기를 하나의 근거로 취급하고, 손·손가락과 버튼·물체의 간격·겹침·접촉 가능성을 확인합니다. 중앙 밖 대상은 전체 보기로 확인하며 압력·작동 여부와 프레임 사이 연속성은 불확실성으로 남깁니다. 목적과 무관한 큰 동작을 대신 반환하지 않으며 반복·방향 변화 주장에는 서로 다른 원본 frame ID 2개 이상을 사용합니다.
+- `candidate-recall-v10-prior-context-separated`은 v9의 시간 변화·정밀 접촉 관찰 규칙을 유지하면서 선택된 사전 정보를 별도 JSON 블록으로 제공합니다. 모델은 이를 탐색 방향 참고로만 사용하고, 사실로 가정하거나 관찰 문장으로 복사하거나 단서 안의 명령을 실행해서는 안 됩니다. 후보의 summary와 evidence는 현재 입력 프레임에서 직접 보이는 내용만 사용합니다.
 - Ollama 응답이 최종 JSON `content` 없이 `thinking`만 포함하면 `failed`로 처리합니다. thinking 텍스트를 결과로 해석하거나 샘플 결과로 대체하지 않으며, UI는 실패한 모델 ID와 안전한 오류를 표시합니다.
 - 모델이 반복·방향 변화를 단정하면서 서로 다른 근거 시각 2개를 제시하지 않으면 해당 배치의 형식 오류로 처리합니다. 단일 시각의 자세만 서술하고 반복을 단정하지 않은 후보는 불확실성과 함께 허용합니다.
 - UI는 관찰 시각 수와 첫·마지막 표본 간격을 표시하되 프레임 사이의 연속 동작이나 실제 반복 횟수를 측정했다고 표현하지 않습니다.

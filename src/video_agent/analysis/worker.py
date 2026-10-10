@@ -50,5 +50,8 @@ class AnalysisWorker(QThread):
                 requested_frame_count=len(self._request.sample_timestamps_sec),
                 sampling_strategy=self._request.sampling_strategy,
                 observation_guidance=self._request.observation_guidance,
+                case_id=self._request.case_id,
+                case_revision=self._request.case_revision,
+                analysis_clues=self._request.analysis_clues,
             )
         self.result_ready.emit(result)

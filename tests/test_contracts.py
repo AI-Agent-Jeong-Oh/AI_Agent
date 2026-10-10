@@ -3,7 +3,12 @@ from __future__ import annotations
 import unittest
 
 from video_agent.contracts import (
+    AnalysisClue,
     AnalysisJob,
+    CaseRecord,
+    CaseVideoLink,
+    ClueSource,
+    InformationCertainty,
     JobStatus,
     ModelExecutionInfo,
     MotionProposal,
@@ -11,6 +16,55 @@ from video_agent.contracts import (
     ResultOrigin,
     Segment,
 )
+
+
+class CaseContractTests(unittest.TestCase):
+    def test_case_round_trip_separates_management_info_and_selected_clues(self) -> None:
+        record = CaseRecord(
+            case_id="case-1",
+            revision=2,
+            title="문 앞 택배 이동 확인",
+            case_type="관리용 분류",
+            occurrence_time_text="20시 전후",
+            occurrence_time_certainty=InformationCertainty.ESTIMATED,
+            management_notes="담당자 메모",
+            clues=(
+                AnalysisClue(
+                    clue_id="clue-1",
+                    text="신고자는 사람이 상자를 들었다고 설명함",
+                    source=ClueSource.REPORT,
+                    certainty=InformationCertainty.ESTIMATED,
+                ),
+                AnalysisClue(
+                    clue_id="clue-2",
+                    text="내부 관리 메모",
+                    use_for_analysis=False,
+                ),
+            ),
+            video_links=(
+                CaseVideoLink(
+                    video_id="video-1",
+                    camera_location="공동현관",
+                    clock_offset_seconds=2.5,
+                    clock_certainty=InformationCertainty.CONFIRMED,
+                ),
+            ),
+        )
+
+        restored = CaseRecord.from_dict(record.to_dict())
+
+        self.assertEqual(restored, record)
+        self.assertEqual(restored.analysis_clues, (record.clues[0],))
+
+    def test_case_rejects_duplicate_clue_ids(self) -> None:
+        clue = AnalysisClue(clue_id="same", text="첫 단서")
+        with self.assertRaisesRegex(ValueError, "unique"):
+            CaseRecord(
+                case_id="case-1",
+                revision=1,
+                title="사건",
+                clues=(clue, AnalysisClue(clue_id="same", text="둘째 단서")),
+            )
 
 
 class AnalysisJobTests(unittest.TestCase):

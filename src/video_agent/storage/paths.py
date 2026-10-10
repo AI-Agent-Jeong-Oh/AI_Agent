@@ -41,6 +41,10 @@ class AppPaths:
     def results_dir(self) -> Path:
         return self.data_dir / "results"
 
+    @property
+    def cases_dir(self) -> Path:
+        return self.data_dir / "cases"
+
 
 class CacheManager:
     ROOT_MARKER = ".video-agent-cache-root"

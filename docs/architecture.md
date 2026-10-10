@@ -14,6 +14,7 @@
                                                    │
                                                    ▼
 사용자 목적·모드·범위 ─► AgentSession
+사건 정보 ─► CaseStore ─► 선택된 AnalysisClue ─┘
   ├─ 필요한 경우 ClarificationQuestion
   ├─ AnalysisPlan ─► 분석 승인
   └─ 외부 모드 ───► TransferManifest ─► 별도 전송 승인
@@ -46,6 +47,7 @@
 | `analysis/vision.py` | 프레임 추출, VLM prompt, 엄격한 출력 검증 | 승재 |
 | `models/` | 설정 검증, 로컬/외부 HTTP 어댑터, 런타임 조사 | 승재 |
 | `storage/` | 사용자 설정·결과·앱 소유 캐시 | 승재 |
+| `ui/case_panel.py` | 사건 관리 정보와 분석 단서의 최소 입력·선택 UI | 승재 연결 / 팀원 UI 개선 |
 | `knowledge/contracts.py` | 팀원 PDF 검색 구현이 따를 형식 | 공통 계약/팀원 구현 |
 | `ui/main_window.py` | 현재 최소 연결 UI. 디자인·접근성 개선 대상 | 팀원 중심 |
 
@@ -75,7 +77,7 @@ plan_ready ─► approved ─► running ─► validating ─► completed | p
 completed 등 ─► expansion_proposed (자동 실행 없음)
 ```
 
-계획 fingerprint에는 영상 ID·길이, 목적, 모드, 모델, 공급자 endpoint, 범위, 프레임 timestamp, 실행 한도가 포함됩니다. 영상·목적·모델·범위가 바뀌면 계획과 두 승인이 폐기됩니다. 기본 실행은 1회, 자동 재분석 0회, 공급자 자동 retry 0회입니다.
+계획 fingerprint에는 영상 ID·길이, 목적, 모드, 모델, 공급자 endpoint, 범위, 프레임 timestamp, 실행 한도와 선택된 사전 단서의 ID·내용·출처·확실성, 사건 버전이 포함됩니다. 영상·목적·모델·범위·선택 단서가 바뀌면 계획과 두 승인이 폐기됩니다. 사건명·유형·관리 메모는 모델 입력이 아니며 선택 단서만 요청에 전달됩니다. 기본 실행은 1회, 자동 재분석 0회, 공급자 자동 retry 0회입니다.
 
 목적이 너무 넓으면 관찰 대상을 묻고, '오래·장시간·체류·지속'처럼 시간이 핵심인데 몇 초·몇 분인지 없으면 `duration_threshold`을 추가로 묻습니다. 답변은 최종 목적과 fingerprint에 포함되어 다른 시간 기준을 기존 승인으로 실행할 수 없습니다.
 
@@ -91,7 +93,7 @@ OpenAI 외부 모드는 기본적으로 `https://api.openai.com/v1/chat/completi
 
 로컬 Ollama는 `/api/show`의 `capabilities`에 `vision`이 있는 설치 모델만 자동 확인합니다. 명시적 환경 override는 설정된 모델 ID에만 적용됩니다. Ollama native adapter는 `/api/chat`의 base64 `images`와 JSON schema를 사용하고 16K context, 800 출력 token으로 제한합니다. 현재 로컬 UI 계획은 최대 12프레임을 연속된 4프레임 묶음 최대 3개로 나누며 모든 묶음이 하나의 300초 deadline을 공유합니다. `SamplingStrategy`는 `uniform`, `motion_peak`, `temporal_sequence`를 구분하고 계획 fingerprint·요청·저장 결과에 포함됩니다.
 
-로컬 모드의 일반 `temporal_sequence`는 각 묶음의 원본 프레임을 FFmpeg로 최대 2×2 행 우선 비교 보드 한 장에 합칩니다. 공급자에는 비교 보드만 전달하지만 응답 검증은 원래 frame ID와 decoded PTS를 기준으로 하며 원본 파일은 수정하지 않습니다. 다만 손가락·버튼·초인종·누르기·접촉처럼 작은 대상의 상대 위치가 핵심인 목적은 `fine_detail`로 분류합니다. 최대 1920px 원본을 추출한 뒤 각 원본 시각마다 전체 화면 축소 보기와 중앙 60% 확대 보기를 세로로 배치한 1280×1080 이미지를 만듭니다. 시간 시각끼리는 합치지 않으며 중앙 밖 대상은 전체 보기로 확인합니다. `ModelExecutionInfo`는 원본 입력 프레임과 실제 공급자 이미지의 수·크기·`input_representation=fine_detail_overview_center_crop`을 따로 기록합니다. 현재 `candidate-recall-v9-overview-detail-crop`은 일반 시간 변화 입력에서는 비교 시각별 방향·자세를, 정밀 접촉 입력에서는 손·손가락과 버튼·대상 사이의 간격·겹침·접촉 가능성을 우선 확인합니다. 목적과 무관한 큰 동작으로 대체하지 않고 심리·의도나 실제 작동 여부를 단정하지 않는 규칙도 포함합니다. 외부 모드는 승인 manifest와 실제 전송 이미지가 달라지지 않도록 승인된 개별 프레임을 그대로 사용하며 로컬 합성 입력을 자동 적용하지 않습니다. 완료 배치별 원시 후보 수와 프롬프트 버전을 저장하고 묶음 후보를 근거 없이 합치지 않습니다. OpenAI-compatible adapter는 text와 data URL image content를 구성합니다. 외부 실제 호출은 수행하지 않았습니다.
+로컬 모드의 일반 `temporal_sequence`는 각 묶음의 원본 프레임을 FFmpeg로 최대 2×2 행 우선 비교 보드 한 장에 합칩니다. 공급자에는 비교 보드만 전달하지만 응답 검증은 원래 frame ID와 decoded PTS를 기준으로 하며 원본 파일은 수정하지 않습니다. 다만 손가락·버튼·초인종·누르기·접촉처럼 작은 대상의 상대 위치가 핵심인 목적은 `fine_detail`로 분류합니다. 최대 1920px 원본을 추출한 뒤 각 원본 시각마다 전체 화면 축소 보기와 중앙 60% 확대 보기를 세로로 배치한 1280×1080 이미지를 만듭니다. 시간 시각끼리는 합치지 않으며 중앙 밖 대상은 전체 보기로 확인합니다. `ModelExecutionInfo`는 원본 입력 프레임과 실제 공급자 이미지의 수·크기·`input_representation=fine_detail_overview_center_crop`을 따로 기록합니다. 현재 `candidate-recall-v10-prior-context-separated`는 v9의 관찰 규칙을 유지하면서 선택된 사전 정보를 “영상 관찰 사실이 아닌 사용자 제공 정보”로 별도 표시합니다. 단서 문구를 관찰 결과로 복사하거나 단서 안의 명령을 따르지 않고 현재 프레임에서 직접 보이는 내용만 근거로 쓰도록 요구합니다. 외부 모드는 승인 manifest와 실제 전송 이미지·단서가 달라지지 않도록 승인된 입력을 그대로 사용하며 로컬 합성 입력을 자동 적용하지 않습니다. 완료 배치별 원시 후보 수와 프롬프트 버전을 저장하고 묶음 후보를 근거 없이 합치지 않습니다. OpenAI-compatible adapter는 text와 data URL image content를 구성합니다. 외부 실제 호출은 수행하지 않았습니다.
 
 개발 PC에서는 `qwen3-vl:4b-instruct`와 `qwen3-vl:8b-instruct` 실제 추론을 확인했습니다. 기본은 자원 사용이 작은 4B instruct로 유지하고 8B instruct는 명시적으로 선택하는 비교 모델입니다. `qwen3-vl:8b` 기본 태그는 thinking variant라 구조화 응답보다 긴 사고 출력을 우선하여 현재 앱 기본 선택으로 사용하지 않습니다. 최종 JSON `content` 없이 `thinking`만 반환한 응답은 명시적 실패이며, UI 상단 배너와 결과 목록은 실패한 모델과 오류를 표시해 이전 성공 배너가 남지 않게 합니다. 설치 모델 가운데 저장된 선택이 없으면 `instruct` 이름을 우선합니다.
 
@@ -115,6 +117,7 @@ OpenAI 외부 모드는 기본적으로 `https://api.openai.com/v1/chat/completi
 macOS 기본 위치는 다음과 같습니다.
 
 - 설정·결과: `~/Library/Application Support/VideoAnalysisAgent/`
+- 사건 정보: `~/Library/Application Support/VideoAnalysisAgent/cases/`
 - 추출 프레임 캐시: `~/Library/Caches/VideoAnalysisAgent/`
 
 설정에는 API key 환경 변수 이름만 저장하고 key 값은 저장·로그하지 않습니다. 결과에는 원본 경로가 없으며 영상 ID, 목적·범위, 모델 설정, 요청/실제 입력 시각·해상도, 공급자 요청 수·시간 지표와 출처를 저장합니다. 캐시 정리는 root marker와 job marker가 모두 있는 앱 생성 디렉터리만 대상으로 합니다.
