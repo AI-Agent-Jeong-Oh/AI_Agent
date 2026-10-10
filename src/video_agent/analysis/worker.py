@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from threading import Event
 
 from PySide6.QtCore import QThread, Signal
@@ -22,6 +23,7 @@ class AnalysisWorker(QThread):
         self._cancel_event.set()
 
     def run(self) -> None:
+        started = time.monotonic()
         try:
             result = self._analyzer.analyze(
                 self._request,
@@ -39,10 +41,14 @@ class AnalysisWorker(QThread):
                 mode=self._request.mode,
                 model_id=self._request.model_id,
                 is_sample=self._request.mode.value == "sample",
-                origin=(
-                    ResultOrigin.SAMPLE
-                    if self._request.mode.value == "sample"
-                    else ResultOrigin.REAL_MODEL
-                ),
+                origin=ResultOrigin.NONE,
+                purpose=self._request.purpose,
+                range_start_sec=self._request.range_start_sec,
+                range_end_sec=self._request.range_end_sec,
+                sample_timestamps_sec=self._request.sample_timestamps_sec,
+                elapsed_seconds=time.monotonic() - started,
+                requested_frame_count=len(self._request.sample_timestamps_sec),
+                sampling_strategy=self._request.sampling_strategy,
+                observation_guidance=self._request.observation_guidance,
             )
         self.result_ready.emit(result)

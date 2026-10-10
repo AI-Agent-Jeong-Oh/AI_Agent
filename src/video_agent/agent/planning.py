@@ -9,7 +9,17 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from video_agent.contracts import AnalysisLimits, AnalysisMode, AnalysisRequest
+from video_agent.analysis.evidence import (
+    duration_requirement,
+    fine_detail_requirement,
+    temporal_motion_requirement,
+)
+from video_agent.contracts import (
+    AnalysisLimits,
+    AnalysisMode,
+    AnalysisRequest,
+    SamplingStrategy,
+)
 from video_agent.video.probe import VideoMetadata
 
 
@@ -22,6 +32,7 @@ class WorkflowState(StrEnum):
     RUNNING = "running"
     VALIDATING = "validating"
     COMPLETED = "completed"
+    PARTIAL = "partial"
     CANCELED = "canceled"
     FAILED = "failed"
     EXPANSION_PROPOSED = "expansion_proposed"
@@ -35,12 +46,23 @@ class AnalysisIntent:
     range_start_sec: float = 0.0
     range_end_sec: float | None = None
     sampling_interval_sec: float | None = None
+    sample_timestamps_sec: tuple[float, ...] = ()
     provider_id: str | None = None
     provider_endpoint: str | None = None
+    sampling_strategy: SamplingStrategy | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, AnalysisMode):
             object.__setattr__(self, "mode", AnalysisMode(self.mode))
+        if self.sampling_strategy is not None and not isinstance(
+            self.sampling_strategy,
+            SamplingStrategy,
+        ):
+            object.__setattr__(
+                self,
+                "sampling_strategy",
+                SamplingStrategy(self.sampling_strategy),
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +96,8 @@ class AnalysisPlan:
     range_end_sec: float
     sampling_interval_sec: float
     sample_timestamps_sec: tuple[float, ...]
+    sampling_strategy: SamplingStrategy
+    observation_guidance: tuple[str, ...]
     limits: AnalysisLimits
     transfer_manifest: TransferManifest | None = None
 
@@ -101,7 +125,8 @@ class PlanBuilder:
         answers = answers or {}
         questions: list[ClarificationQuestion] = []
         purpose = " ".join(intent.purpose.split())
-        if (len(purpose) < 10 or purpose in self._GENERIC_PURPOSES) and not answers.get("focus", "").strip():
+        focus = answers.get("focus", "").strip()
+        if (len(purpose) < 10 or purpose in self._GENERIC_PURPOSES) and not focus:
             questions.append(
                 ClarificationQuestion(
                     question_id="focus",
@@ -109,14 +134,16 @@ class PlanBuilder:
                     reason="목적이 넓어 후보 구간의 판단 기준을 정할 수 없습니다.",
                 )
             )
-        if intent.mode is not AnalysisMode.SAMPLE and not (
-            intent.model_id or answers.get("model_id") or ""
-        ).strip():
+        effective_purpose = f"{purpose} {focus}".strip()
+        duration = duration_requirement(effective_purpose)
+        duration_answer = answers.get("duration_threshold", "").strip()
+        answered_threshold = duration_requirement(duration_answer).threshold_seconds
+        if duration.required and duration.threshold_seconds is None and answered_threshold is None:
             questions.append(
                 ClarificationQuestion(
-                    question_id="model_id",
-                    prompt="영상 입력을 지원한다고 확인한 모델 ID를 입력해 주세요.",
-                    reason="텍스트 전용 모델을 영상 분석 모델처럼 사용할 수 없습니다.",
+                    question_id="duration_threshold",
+                    prompt="몇 초 또는 몇 분 이상을 '오래 머무름'으로 볼지 시간 기준을 적어 주세요. (예: 30초 이상)",
+                    reason="단일 프레임만으로는 지속 시간 조건을 확인할 수 없습니다.",
                 )
             )
         return tuple(questions)
@@ -137,7 +164,27 @@ class PlanBuilder:
         focus = answers.get("focus", "").strip()
         if focus:
             purpose = f"{purpose}\n추가 기준: {focus}"
-        model_id = (intent.model_id or answers.get("model_id") or "").strip() or None
+        duration_threshold = answers.get("duration_threshold", "").strip()
+        if duration_threshold:
+            purpose = f"{purpose}\n지속 시간 기준: {duration_threshold}"
+        temporal_requirement = temporal_motion_requirement(purpose)
+        fine_detail = fine_detail_requirement(purpose)
+        sampling_strategy = intent.sampling_strategy or (
+            SamplingStrategy.TEMPORAL_SEQUENCE
+            if temporal_requirement.required and intent.mode is not AnalysisMode.SAMPLE
+            else SamplingStrategy.UNIFORM
+        )
+        observation_guidance = tuple(
+            item
+            for item in (
+                fine_detail.observation_guidance,
+                temporal_requirement.observation_guidance,
+            )
+            if item
+        )
+        model_id = (intent.model_id or "").strip() or None
+        if intent.mode is not AnalysisMode.SAMPLE and model_id is None:
+            raise PlanningError("실제 분석 모드에서는 모델 입력란에서 영상 입력 모델을 선택해야 합니다.")
         active_limits = limits or AnalysisLimits()
         start = intent.range_start_sec
         end = metadata.duration_seconds if intent.range_end_sec is None else intent.range_end_sec
@@ -145,14 +192,31 @@ class PlanBuilder:
             raise PlanningError("분석 시간 범위가 원본 영상 길이를 벗어났습니다.")
 
         span = end - start
-        interval = intent.sampling_interval_sec or max(0.25, span / active_limits.max_frames)
-        if interval <= 0:
+        requested_interval = intent.sampling_interval_sec or max(
+            0.25,
+            span / active_limits.max_frames,
+        )
+        if requested_interval <= 0:
             raise PlanningError("샘플링 간격은 0보다 커야 합니다.")
+        explicit_timestamps = tuple(float(value) for value in intent.sample_timestamps_sec)
+        if explicit_timestamps:
+            if len(explicit_timestamps) > active_limits.max_frames:
+                raise PlanningError("지정한 샘플 시각이 승인된 프레임 수를 초과했습니다.")
+            if explicit_timestamps != tuple(sorted(set(explicit_timestamps))):
+                raise PlanningError("지정한 샘플 시각은 중복 없이 시간순이어야 합니다.")
+            if any(not start <= value < end for value in explicit_timestamps):
+                raise PlanningError("지정한 샘플 시각이 분석 범위를 벗어났습니다.")
         if intent.mode is AnalysisMode.SAMPLE:
             timestamps: tuple[float, ...] = ()
+            interval = requested_interval
+        elif explicit_timestamps:
+            timestamps = tuple(round(value, 6) for value in explicit_timestamps)
+            gaps = tuple(later - earlier for earlier, later in zip(timestamps, timestamps[1:]))
+            interval = min(gaps, default=requested_interval)
         else:
-            count = min(active_limits.max_frames, max(1, math.ceil(span / interval)))
+            count = min(active_limits.max_frames, max(1, math.ceil(span / requested_interval)))
             step = span / count
+            interval = step
             timestamps = tuple(
                 round(min(end - 0.001, start + (index + 0.5) * step), 6)
                 for index in range(count)
@@ -182,6 +246,8 @@ class PlanBuilder:
             "provider_endpoint": intent.provider_endpoint,
             "range": [start, end],
             "timestamps": timestamps,
+            "sampling_strategy": sampling_strategy.value,
+            "observation_guidance": observation_guidance,
             "limits": asdict(active_limits),
             "transfer": asdict(transfer_manifest) if transfer_manifest else None,
         }
@@ -202,6 +268,8 @@ class PlanBuilder:
             range_end_sec=end,
             sampling_interval_sec=interval,
             sample_timestamps_sec=timestamps,
+            sampling_strategy=sampling_strategy,
+            observation_guidance=observation_guidance,
             limits=active_limits,
             transfer_manifest=transfer_manifest,
         )
@@ -311,6 +379,8 @@ class AgentSession:
             range_start_sec=self.plan.range_start_sec,
             range_end_sec=self.plan.range_end_sec,
             sample_timestamps_sec=self.plan.sample_timestamps_sec,
+            sampling_strategy=self.plan.sampling_strategy,
+            observation_guidance=self.plan.observation_guidance,
             limits=self.plan.limits,
         )
         self.active_job_id = job_id
@@ -325,12 +395,21 @@ class AgentSession:
             self.state = WorkflowState.CANCELED
         return job_id
 
-    def accept_result(self, job_id: str, *, failed: bool = False, canceled: bool = False) -> bool:
+    def accept_result(
+        self,
+        job_id: str,
+        *,
+        failed: bool = False,
+        canceled: bool = False,
+        partial: bool = False,
+    ) -> bool:
         if job_id != self.active_job_id:
             return False
         self.active_job_id = None
         if canceled:
             self.state = WorkflowState.CANCELED
+        elif partial:
+            self.state = WorkflowState.PARTIAL
         else:
             self.state = WorkflowState.FAILED if failed else WorkflowState.COMPLETED
         return True

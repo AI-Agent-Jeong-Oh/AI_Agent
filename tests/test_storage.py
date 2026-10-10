@@ -6,7 +6,15 @@ import time
 import unittest
 from pathlib import Path
 
-from video_agent.contracts import AnalysisJob, AnalysisMode, JobStatus, Segment
+from video_agent.contracts import (
+    AnalysisJob,
+    AnalysisMode,
+    JobStatus,
+    ModelExecutionInfo,
+    ResultOrigin,
+    SamplingStrategy,
+    Segment,
+)
 from video_agent.storage.json_store import AppSettings, ResultStore, SettingsStore
 from video_agent.storage.paths import AppPaths, CacheManager
 
@@ -44,6 +52,11 @@ class JsonStorageTests(unittest.TestCase):
             status=JobStatus.COMPLETED,
             progress=100,
             video_id="video-1",
+            origin=ResultOrigin.SAMPLE,
+            purpose="샘플 목적",
+            range_start_sec=0.0,
+            range_end_sec=3.0,
+            elapsed_seconds=1.25,
             segments=(
                 Segment(
                     video_id="video-1",
@@ -62,6 +75,51 @@ class JsonStorageTests(unittest.TestCase):
 
         self.assertEqual(restored, job)
         self.assertNotIn("video_path", json.loads(path.read_text(encoding="utf-8")))
+
+    def test_real_model_provenance_round_trip(self) -> None:
+        job = AnalysisJob(
+            job_id="job-real",
+            plan_id="plan-real",
+            status=JobStatus.COMPLETED,
+            progress=100,
+            video_id="video-1",
+            mode=AnalysisMode.LOCAL,
+            model_id="vision-model",
+            is_sample=False,
+            origin=ResultOrigin.REAL_MODEL,
+            purpose="사람의 발이 물체에 접촉하는 것으로 보이는 장면 후보",
+            range_start_sec=0.0,
+            range_end_sec=10.0,
+            sample_timestamps_sec=(2.0,),
+            elapsed_seconds=4.5,
+            requested_frame_count=1,
+            analyzed_frame_count=1,
+            sampling_strategy=SamplingStrategy.TEMPORAL_SEQUENCE,
+            observation_guidance=("머리 방향을 시간순으로 비교",),
+            model_execution=ModelExecutionInfo(
+                provider_id="ollama-local",
+                context_window_tokens=16384,
+                max_output_tokens=800,
+                temperature=0.0,
+                provider_request_count=1,
+                completed_request_count=1,
+                input_frame_count=1,
+                input_frame_dimensions=("320x240",),
+                input_frame_ids=("video-1:2000",),
+                input_frame_timestamps_sec=(2.0,),
+                provider_image_count=1,
+                provider_image_dimensions=("960x540",),
+                input_representation="temporal_storyboard",
+                provider_total_seconds=4.0,
+                prompt_version="candidate-recall-v9-overview-detail-crop",
+                batch_candidate_counts=(1,),
+            ),
+        )
+        store = ResultStore(self.paths)
+
+        store.save(job)
+
+        self.assertEqual(store.load(job.job_id), job)
 
 
 class CacheManagerTests(unittest.TestCase):
