@@ -16,6 +16,7 @@ from video_agent.contracts import (
     AnalysisMode,
     CandidateReview,
     CaseRecord,
+    CaseVideoLink,
     ClueSource,
     InformationCertainty,
     JobStatus,
@@ -26,7 +27,12 @@ from video_agent.contracts import (
 )
 from video_agent.knowledge.common_rules import load_common_rules
 from video_agent.models.config import RuntimeInventory
-from video_agent.review.summary import build_summary, render_html
+from video_agent.review.summary import (
+    CameraSummaryInput,
+    build_case_summary,
+    build_summary,
+    render_html,
+)
 from video_agent.storage.json_store import CaseStore
 from video_agent.storage.paths import AppPaths
 from video_agent.ui.main_window import MainWindow
@@ -265,6 +271,129 @@ class SummaryBuilderTests(unittest.TestCase):
         self.assertIn("작성 2026-10-10 23:30", page)
 
 
+def other_camera_job(origin: ResultOrigin = ResultOrigin.REAL_MODEL) -> AnalysisJob:
+    second = replace(
+        job(origin),
+        job_id="local-side",
+        video_id="video-side",
+        segments=(
+            replace(segment(12.0, "사람이 계단 쪽으로 걸어감"), video_id="video-side",
+                    source_frame_ids=("video-side:13000",)),
+        ),
+    )
+    return second
+
+
+def case_cameras(**side_changes) -> list[CameraSummaryInput]:
+    front = CameraSummaryInput(
+        video_id="video-sum",
+        camera="문앞 CCTV",
+        file_name="front_door.mp4",
+        link=CaseVideoLink(
+            video_id="video-sum",
+            camera_location="문앞 CCTV",
+            clock_offset_seconds=-3.5,
+            clock_certainty=InformationCertainty.ESTIMATED,
+        ),
+        job=job(),
+        session=session(
+            review(0, ReviewJudgement.RELEVANT, "41초에 손이 상자에 닿음"),
+            review(2, ReviewJudgement.EXCLUDED, "그림자일 뿐 사람 없음"),
+        ),
+    )
+    side_job = side_changes.pop("job", other_camera_job())
+    side = CameraSummaryInput(
+        video_id="video-side",
+        camera="복도 CCTV",
+        file_name=None,
+        link=CaseVideoLink(video_id="video-side", camera_location="복도 CCTV"),
+        job=side_job,
+        session=None,
+        **side_changes,
+    )
+    empty = CameraSummaryInput(video_id="video-none", camera="주차장 CCTV", file_name="park.mp4")
+    return [front, side, empty]
+
+
+class CaseSummaryBuilderTests(unittest.TestCase):
+    def build(self, cameras=None, **kwargs):
+        return build_case_summary(
+            CASE,
+            cameras or case_cameras(),
+            case_id="case-sum",
+            generated_at=GENERATED,
+            **kwargs,
+        )
+
+    def test_case_section_lists_cameras_with_clock_as_entered(self) -> None:
+        text = self.build().section("case").body
+        self.assertIn("사건명: 문 앞 택배 이동 확인", text)
+        self.assertIn("CCTV 영상 3대:", text)
+        self.assertIn(
+            "- 문앞 CCTV: front_door.mp4 (영상 ID video-sum) · 카메라 시각 오차 -3.5초 (추정)", text
+        )
+        self.assertIn("- 복도 CCTV: 파일명 미확인 (영상 ID video-side)", text)
+        self.assertIn("카메라 사이의 시간 순서는 비교하지 않았습니다", text)
+        # Shared clues are listed once, still marked as user information.
+        self.assertEqual(text.count(CLUE.text), 1)
+        self.assertIn("영상으로 확인한 사실이 아님", text)
+
+    def test_sections_are_grouped_by_camera(self) -> None:
+        summary = self.build()
+        scope = summary.section("scope").body
+        self.assertIn("[문앞 CCTV]\n  영상: front_door.mp4 (영상 ID video-sum)", scope)
+        self.assertIn("[주차장 CCTV]\n  분석 결과 없음", scope)
+        observations = summary.section("observations").body
+        self.assertIn("[문앞 CCTV]\n  후보 #1 [관련 있음] 확인 범위 00:40–00:42", observations)
+        self.assertIn("[복도 CCTV]\n  해당 후보 없음", observations)
+        self.assertNotIn("주차장 CCTV", observations)
+        opinions = summary.section("opinions").body
+        self.assertIn("사건 전체 판단 현황: 미검토 3 · 관련 있음 1 · 추가 확인 0 · 제외 1 (전체 5)", opinions)
+        self.assertIn("  - 후보 #3: 그림자일 뿐 사람 없음", opinions)
+        open_items = summary.section("open_items").body
+        self.assertIn("[복도 CCTV]\n  추가 확인으로 표시한 후보: 없음\n  미검토 후보: 1개", open_items)
+        self.assertIn("분석 결과가 없는 카메라: 주차장 CCTV", open_items)
+        self.assertEqual(open_items.count("후보가 없는 구간에 해당 장면이"), 1)
+
+    def test_no_corrected_or_cross_camera_times(self) -> None:
+        everything = "\n".join(section.body for section in self.build().sections)
+        self.assertNotIn("보정", everything)
+        self.assertNotIn("00:36", everything)  # 40 s minus the 3.5 s offset
+
+    def test_mixed_origins_are_named_per_camera(self) -> None:
+        summary = self.build(case_cameras(job=other_camera_job(ResultOrigin.SAMPLE)))
+        self.assertIs(summary.origin, ResultOrigin.SAMPLE)
+        self.assertIn("카메라마다 결과 출처가 다릅니다", summary.origin_notice)
+        self.assertIn("문앞 CCTV: 실제 모델 응답(qwen3-vl:8b-instruct)", summary.origin_notice)
+        self.assertIn("복도 CCTV: 샘플 결과(실제 AI 분석 아님)", summary.origin_notice)
+        self.assertIn("결과 출처: 샘플 결과(실제 AI 분석 아님)", summary.section("scope").body)
+
+        same = self.build()
+        self.assertIs(same.origin, ResultOrigin.REAL_MODEL)
+        self.assertIn("실제 모델 응답 — qwen3-vl:8b-instruct", same.origin_notice)
+
+    def test_warnings_name_the_camera(self) -> None:
+        summary = self.build(case_cameras(unsaved_count=2, review_load_error="손상된 파일"))
+        self.assertIn("복도 CCTV: 저장하지 않은 기록 2건은 요약에 포함되지 않았습니다.", summary.warnings)
+        self.assertIn("복도 CCTV: 검토 기록을 읽지 못해 미검토로 표시했습니다 (손상된 파일)", summary.warnings)
+
+    def test_needs_a_saved_result(self) -> None:
+        with self.assertRaises(ValueError):
+            build_case_summary(None, case_cameras()[2:], case_id="case-sum")
+
+    def test_html_names_the_case_and_camera_count(self) -> None:
+        page = render_html(self.build())
+        self.assertIn("사건 ID case-sum · CCTV 3대 · 작성 2026-10-10 23:30", page)
+        self.assertIn("<title>검토 결과 요약 — 사건_case-sum</title>", page)
+        self.assertIn('class="banner real"', page)
+
+    def test_case_text_contains_no_judgement_of_guilt_or_intent(self) -> None:
+        summary = self.build()
+        generated = summary.origin_notice + "\n".join(s.body for s in summary.sections)
+        for phrase in ("범인", "가해자", "범죄가 성립", "유죄", "고의", "의도적으로", "절도"):
+            self.assertNotIn(phrase, generated)
+
+
 class SummaryDialogTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -328,6 +457,44 @@ class SummaryDialogTests(unittest.TestCase):
         ):
             self.assertIsNone(self.dialog.export_html())
         self.assertEqual(self.dialog.export_status_label.text(), "")
+
+    def test_single_scope_has_no_scope_buttons(self) -> None:
+        self.assertEqual(self.dialog.scope_buttons, {})
+        self.assertEqual(self.dialog.scope, "camera")
+
+    def test_case_scope_opens_first_and_switches_with_confirmation(self) -> None:
+        dialog = ResultSummaryDialog(
+            lambda: reviewed_summary(),
+            case_build=lambda: build_case_summary(
+                CASE, case_cameras(), case_id="case-sum", generated_at=GENERATED
+            ),
+        )
+        try:
+            self.assertEqual(dialog.scope, "case")
+            self.assertTrue(dialog.scope_buttons["case"].isChecked())
+            self.assertIn("[복도 CCTV]", dialog.editors["scope"].toPlainText())
+
+            dialog.editors["opinions"].setPlainText("고친 문구")
+            with patch.object(dialog, "_confirm_regenerate", return_value=False):
+                dialog.scope_buttons["camera"].click()
+            self.assertEqual(dialog.scope, "case")
+            self.assertTrue(dialog.scope_buttons["case"].isChecked())
+            self.assertEqual(dialog.editors["opinions"].toPlainText(), "고친 문구")
+
+            with patch.object(dialog, "_confirm_regenerate", return_value=True):
+                dialog.scope_buttons["camera"].click()
+            self.assertEqual(dialog.scope, "camera")
+            self.assertNotIn("[복도 CCTV]", dialog.editors["scope"].toPlainText())
+
+            dialog.scope_buttons["case"].click()  # nothing edited: no question
+            self.assertEqual(dialog.scope, "case")
+            with patch(
+                "video_agent.ui.summary_dialog.QFileDialog.getSaveFileName", return_value=("", "")
+            ) as chooser:
+                dialog.export_html()
+            self.assertTrue(chooser.call_args.args[2].endswith("검토요약_사건_case-sum.html"))
+        finally:
+            dialog.close()
 
     def test_regenerate_asks_before_discarding_edits(self) -> None:
         original = self.dialog.editors["opinions"].toPlainText()

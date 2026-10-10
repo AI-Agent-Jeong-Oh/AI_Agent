@@ -6,6 +6,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QDialog,
     QFileDialog,
     QGroupBox,
@@ -24,6 +25,9 @@ from video_agent.review.summary import ResultSummary, render_html
 from video_agent.ui import theme
 
 
+SCOPE_CASE = "case"
+SCOPE_CAMERA = "camera"
+
 _BANNER_KINDS = {
     ResultOrigin.SAMPLE: "sample",
     ResultOrigin.TEST_DOUBLE: "test_double",
@@ -35,21 +39,54 @@ class ResultSummaryDialog(QDialog):
     """Editable six-section summary draft with HTML export.
 
     Edits live only in this window and in exported files; they are not stored by the app.
+    With `case_build`, the window opens on the case-wide draft and can switch to the
+    current camera's draft.
     """
 
-    def __init__(self, build: Callable[[], ResultSummary], parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        build: Callable[[], ResultSummary],
+        parent: QWidget | None = None,
+        *,
+        case_build: Callable[[], ResultSummary] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("결과 요약 — 검토 기록 기반 초안")
         self.setModal(True)
         self.resize(760, 820)
-        self._build = build
-        self._summary = build()
+        self._builders = {SCOPE_CAMERA: build}
+        if case_build is not None:
+            self._builders[SCOPE_CASE] = case_build
+        self._scope = SCOPE_CASE if case_build is not None else SCOPE_CAMERA
+        self._build = self._builders[self._scope]
+        self._summary = self._build()
         self.editors: dict[str, QPlainTextEdit] = {}
         self._build_ui()
         self._fill(self._summary)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        self.scope_buttons: dict[str, QPushButton] = {}
+        if len(self._builders) > 1:
+            scope_row = QHBoxLayout()
+            scope_label = QLabel("요약 범위")
+            scope_label.setObjectName("fieldLabel")
+            scope_row.addWidget(scope_label)
+            scope_row.addSpacing(8)
+            self._scope_group = QButtonGroup(self)
+            scopes = ((SCOPE_CASE, "사건 전체"), (SCOPE_CAMERA, "현재 카메라"))
+            for position, (key, label) in enumerate(scopes):
+                button = QPushButton(label)
+                button.setCheckable(True)
+                button.setAccessibleName(f"요약 범위: {label}")
+                theme.set_segment(button, position, len(scopes))
+                self._scope_group.addButton(button)
+                self.scope_buttons[key] = button
+                scope_row.addWidget(button)
+                button.clicked.connect(lambda _checked=False, k=key: self.set_scope(k))
+            self.scope_buttons[self._scope].setChecked(True)
+            scope_row.addStretch(1)
+            layout.addLayout(scope_row)
         self.banner_label = QLabel()
         self.banner_label.setWordWrap(True)
         self.warning_label = QLabel()
@@ -152,6 +189,24 @@ class ResultSummaryDialog(QDialog):
             if section.editable
         )
 
+    @property
+    def scope(self) -> str:
+        return self._scope
+
+    def set_scope(self, scope: str) -> bool:
+        """Rebuild the draft for another scope; edits are lost only after confirmation."""
+        if scope == self._scope or scope not in self._builders:
+            return False
+        if self.is_edited() and not self._confirm_regenerate():
+            self.scope_buttons[self._scope].setChecked(True)
+            return False
+        self._scope = scope
+        self.scope_buttons[scope].setChecked(True)
+        self._build = self._builders[scope]
+        self._fill(self._build())
+        self.export_status_label.setText("")
+        return True
+
     def regenerate(self) -> None:
         if self.is_edited() and not self._confirm_regenerate():
             return
@@ -172,7 +227,7 @@ class ResultSummaryDialog(QDialog):
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "결과 요약 HTML로 내보내기",
-            str(Path.home() / f"검토요약_{self._summary.job_id}.html"),
+            str(Path.home() / f"검토요약_{self._summary.file_stem}.html"),
             "HTML 파일 (*.html)",
         )
         if not filename:

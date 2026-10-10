@@ -534,6 +534,9 @@ class MainWindowReviewIntegrationTests(unittest.TestCase):
         self.window = MainWindow()
         self.window._display_segments(job())
         self.panel = self.window._review_panel
+        # The job's video file is open in the player, as after choosing it in the CCTV list.
+        self.window._video_id = "video-review"
+        self.window._video_path = root / "video.mp4"
 
     def tearDown(self) -> None:
         with patch.object(self.window, "_confirm_discard_unsaved_reviews", return_value=True):
@@ -542,6 +545,15 @@ class MainWindowReviewIntegrationTests(unittest.TestCase):
         self.runtime.stop()
         self.env.stop()
         self.temporary.cleanup()
+
+    def test_playback_needs_the_candidates_video_file_open(self) -> None:
+        self.window._player = MagicMock()
+        self.window._video_id = "another-video"
+
+        self.window._play_review_range(0.0, 5.0)
+
+        self.window._player.play.assert_not_called()
+        self.assertIn("영상 파일이 열려 있지 않아", self.window.statusBar().currentMessage())
 
     def test_playback_range_is_clamped_to_video_and_stops_at_end(self) -> None:
         self.window._duration_ms = 30_000
@@ -745,8 +757,8 @@ class MainWindowReviewIntegrationTests(unittest.TestCase):
 
         with (
             patch(
-                "video_agent.ui.main_window.QFileDialog.getOpenFileName",
-                return_value=(str(video), ""),
+                "video_agent.ui.main_window.QFileDialog.getOpenFileNames",
+                return_value=([str(video)], ""),
             ),
             patch.object(
                 self.window, "_confirm_discard_unsaved_reviews", return_value=False

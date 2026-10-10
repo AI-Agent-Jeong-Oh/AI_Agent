@@ -42,10 +42,12 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSplitter,
     QStackedWidget,
     QStyle,
+    QTabBar,
     QVBoxLayout,
     QWidget,
 )
@@ -65,7 +67,10 @@ from video_agent.contracts import (
     AnalysisLimits,
     AnalysisMode,
     CaseRecord,
+    CaseVideoLink,
     JobStatus,
+    ReviewJudgement,
+    ReviewSession,
     MotionProposal,
     MotionScanProfile,
     MotionScanResult,
@@ -85,9 +90,15 @@ from video_agent.storage.json_store import (
 from video_agent.storage.paths import AppPaths, CacheManager
 from video_agent.ui.case_panel import CaseContextPanel
 from video_agent.ui import theme
+from video_agent.ui.video_list import CaseVideoList, VideoEntry
 from video_agent.knowledge.common_rules import CommonRules, load_common_rules
-from video_agent.review.summary import build_summary
-from video_agent.ui.review_panel import CandidateReviewPanel
+from video_agent.review.summary import (
+    CameraSummaryInput,
+    build_case_summary,
+    build_summary,
+)
+from video_agent.ui.case_overview import CaseCandidateOverview, OverviewRow
+from video_agent.ui.review_panel import JUDGEMENT_LABELS, CandidateReviewPanel
 from video_agent.ui.summary_dialog import ResultSummaryDialog
 from video_agent.video.files import (
     build_video_id,
@@ -162,6 +173,23 @@ class MainWindow(QMainWindow):
 
         self._video_path: Path | None = None
         self._video_id: str | None = None
+        # Videos of the current case in list order: video ID -> path chosen in this run, or
+        # None when a saved case links a video whose file has not been chosen again.
+        self._case_videos: dict[str, Path | None] = {}
+        # Unsaved camera details of videos that are not open right now.
+        self._link_drafts: dict[str, CaseVideoLink] = {}
+        self._video_durations: dict[str, float] = {}
+        # Per-video analysis status shown in the CCTV list: (text, has stored result).
+        self._video_statuses: dict[str, tuple[str, bool]] = {}
+        # Failed or canceled runs of this app session, newer than any stored result.
+        self._video_run_notes: dict[str, str] = {}
+        # Video whose results the review step shows. Usually the open video; a camera tab
+        # can show a linked video's saved results even before its file is chosen again.
+        self._review_video_id: str | None = None
+        # Newest stored result per case video and its saved review records, for the
+        # case-wide candidate list (read on refresh, not on every keystroke).
+        self._newest_jobs: dict[str, AnalysisJob] = {}
+        self._overview_sessions: dict[str, ReviewSession | None] = {}
         self._metadata: VideoMetadata | None = None
         self._duration_ms = 0
         self._seeking = False
@@ -221,6 +249,7 @@ class MainWindow(QMainWindow):
         self._apply_ui_zoom()
         self._restore_settings()
         self._case_panel.set_record(self._case_record)
+        self._case_panel.set_video_open(False)
         self._refresh_case_choices()
         self._set_idle_state()
         self._refresh_saved_results()
@@ -313,6 +342,9 @@ class MainWindow(QMainWindow):
         self._prev_step_button = QPushButton()
         self._next_step_button = QPushButton()
         theme.mark_primary(self._next_step_button)
+        for button in (self._prev_step_button, self._next_step_button):
+            # Keep each button at its text width when the other one is hidden.
+            button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         row.addWidget(self._prev_step_button)
         row.addWidget(self._next_step_button)
         # QStatusBar paints messages 6px from its left edge; its own text is transparent in
@@ -324,6 +356,8 @@ class MainWindow(QMainWindow):
         status_bar.messageChanged.connect(self._status_label.setText)
         status_bar.addPermanentWidget(self._status_label, 1)
         status_bar.addPermanentWidget(navigation)
+        navigation.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._step_navigation = navigation
 
     def _build_step_area(self, pages: tuple[QWidget, ...]) -> QWidget:
         """Right side: one scrollable page per step."""
@@ -354,20 +388,10 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 6, 0)
 
-        file_group = QGroupBox("로컬 영상")
-        file_box = QVBoxLayout(file_group)
-        file_row = QHBoxLayout()
-        self._file_label = QLabel("선택된 파일 없음")
-        self._file_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._choose_button = QPushButton("영상 선택…")
-        file_row.addWidget(self._file_label, 1)
-        file_row.addWidget(self._choose_button)
-        self._metadata_label = QLabel("메타데이터 미확인")
-        self._metadata_label.setWordWrap(True)
-        self._metadata_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        file_box.addLayout(file_row)
-        file_box.addWidget(self._metadata_label)
-        layout.addWidget(file_group)
+        self._video_list = CaseVideoList()
+        self._choose_button = self._video_list.add_button
+        self._metadata_label = self._video_list.metadata_label
+        layout.addWidget(self._video_list)
 
         self._video_widget = QVideoWidget()
         self._video_widget.setMinimumHeight(350)
@@ -558,6 +582,21 @@ class MainWindow(QMainWindow):
         saved_row.addWidget(self._saved_results_combo, 1)
         saved_row.addWidget(self._open_result_button)
         saved_row.addWidget(help_label)
+        self._camera_tabs = QTabBar()
+        self._camera_tabs.setObjectName("cameraTabs")
+        self._camera_tabs.setExpanding(False)
+        self._camera_tabs.setDrawBase(False)
+        self._camera_tabs.setElideMode(Qt.TextElideMode.ElideMiddle)
+        self._camera_tabs.setAccessibleName("검토할 카메라")
+        self._case_overview = CaseCandidateOverview()
+        self._camera_row = QWidget()
+        camera_row = QHBoxLayout(self._camera_row)
+        camera_row.setContentsMargins(0, 0, 0, 0)
+        camera_row.addWidget(self._camera_tabs, 1)
+        camera_row.addWidget(self._case_overview.toggle_button)
+        self._camera_row.setVisible(False)
+        result_layout.addWidget(self._camera_row)
+        result_layout.addWidget(self._case_overview)
         result_layout.addLayout(saved_row)
         self._review_panel = CandidateReviewPanel(self._segment_text)
         self._result_list = self._review_panel.candidate_list
@@ -590,6 +629,14 @@ class MainWindow(QMainWindow):
         self._case_panel.load_requested.connect(self._load_case)
         self._case_panel.new_requested.connect(self._new_case)
         self._choose_button.clicked.connect(self._choose_video)
+        self._video_list.video_activated.connect(self._activate_listed_video)
+        self._video_list.relink_requested.connect(self._relink_video)
+        self._video_list.remove_requested.connect(self._remove_video)
+        self._camera_tabs.currentChanged.connect(self._camera_tab_changed)
+        # A click on the already selected tab still opens its result when none is shown.
+        self._camera_tabs.tabBarClicked.connect(self._camera_tab_changed)
+        self._case_overview.candidate_activated.connect(self._activate_overview_candidate)
+        self._review_panel.records_changed.connect(self._review_records_changed)
         self._play_button.clicked.connect(self._toggle_playback)
         self._timeline.sliderPressed.connect(self._slider_pressed)
         self._timeline.sliderReleased.connect(self._slider_released)
@@ -715,6 +762,8 @@ class MainWindow(QMainWindow):
         purpose_height = 265 if self._current_mode() is AnalysisMode.EXTERNAL else 185
         self._purpose_group.setMinimumHeight(scaled(purpose_height))
         self._review_panel.apply_scale(scaled)
+        self._video_list.apply_scale(scaled)
+        self._case_overview.apply_scale(scaled)
 
         self._zoom_reset_button.setText(f"{self._ui_zoom_percent}%")
         self._zoom_out_button.setEnabled(self._ui_zoom_percent > self.UI_ZOOM_MIN)
@@ -745,12 +794,7 @@ class MainWindow(QMainWindow):
         return clues
 
     def _case_from_panel(self, revision: int) -> CaseRecord:
-        links = list(self._case_record.video_links)
-        if self._video_id is not None:
-            links = [item for item in links if item.video_id != self._video_id]
-            current_link = self._case_panel.video_link(self._video_id)
-            if current_link is not None:
-                links.append(current_link)
+        links = [self._link_for(video_id) for video_id in self._case_videos]
         return CaseRecord(
             case_id=self._case_record.case_id,
             revision=revision,
@@ -770,6 +814,7 @@ class MainWindow(QMainWindow):
         return data
 
     def _case_inputs_changed(self) -> None:
+        self._refresh_video_list()
         if self._background_work_running():
             return
         self._inputs_changed()
@@ -812,7 +857,11 @@ class MainWindow(QMainWindow):
             return
         self._case_record = record
         self._case_saved = True
+        self._reset_case_videos(record)
+        self._refresh_video_statuses()
         self._case_panel.set_record(record, self._video_id)
+        self._case_panel.set_video_open(self._video_id is not None)
+        self._refresh_video_list()
         self._inputs_changed()
         self.statusBar().showMessage(
             f"사건 '{record.title}' v{record.revision}을 불러왔습니다. 원본 영상 경로는 다시 선택해야 할 수 있습니다.",
@@ -829,9 +878,23 @@ class MainWindow(QMainWindow):
             title="새 사건",
         )
         self._case_saved = False
+        self._reset_case_videos(self._case_record)
+        self._refresh_video_statuses()
         self._case_panel.set_record(self._case_record, self._video_id)
+        self._case_panel.set_video_open(self._video_id is not None)
+        self._refresh_video_list()
         self._inputs_changed()
         self.statusBar().showMessage("새 사건 입력을 시작합니다. 저장 전에도 계획에 단서를 사용할 수 있습니다.", 6000)
+
+    def _reset_case_videos(self, record: CaseRecord) -> None:
+        """List the case's linked videos, reusing files chosen in this run, plus the open one."""
+        known = dict(self._case_videos)
+        self._case_videos = {
+            item.video_id: known.get(item.video_id) for item in record.video_links
+        }
+        if self._video_id is not None and self._video_path is not None:
+            self._case_videos.setdefault(self._video_id, self._video_path)
+        self._link_drafts = {}
 
     def _refresh_case_choices(self) -> None:
         try:
@@ -856,36 +919,328 @@ class MainWindow(QMainWindow):
         self._progress_bar.setValue(0)
 
     def _choose_video(self) -> None:
+        """Add one or more videos to the case list and open the first new one."""
+        filenames, _ = QFileDialog.getOpenFileNames(
+            self,
+            "사건 CCTV 영상 추가",
+            "",
+            "영상 파일 (*.mp4 *.mov *.m4v *.avi *.mkv *.webm);;모든 파일 (*)",
+        )
+        if not filenames:
+            self.statusBar().showMessage("영상 선택을 취소했습니다.", 4000)
+            return
+        if self._background_work_running():
+            self._show_error("작업 중에는 영상을 추가할 수 없습니다. 먼저 작업을 취소해 주세요.")
+            return
+        added: list[tuple[Path, str]] = []
+        errors: list[str] = []
+        for filename in filenames:
+            path = Path(filename)
+            try:
+                validate_video_path(path)
+                video_id = build_video_id(path)
+            except (OSError, ValueError) as exc:
+                errors.append(f"{path.name}: {exc}")
+                continue
+            if self._case_videos.get(video_id) is None:
+                self._case_videos[video_id] = path
+                added.append((path, video_id))
+        self._refresh_video_statuses()
+        self._refresh_video_list()
+        if errors:
+            self._show_error("추가하지 못한 영상이 있습니다.\n" + "\n".join(errors))
+        if not added:
+            if not errors:
+                self.statusBar().showMessage("이미 목록에 있는 영상입니다.", 4000)
+            return
+        if len(added) > 1:
+            self.statusBar().showMessage(f"영상 {len(added)}개를 사건 목록에 추가했습니다.", 5000)
+        path, video_id = added[0]
+        if video_id != self._video_id:
+            self._switch_to_video(path, video_id)
+
+    def _activate_listed_video(self, video_id: str) -> None:
+        path = self._case_videos.get(video_id)
+        if path is None or video_id == self._video_id:
+            return
+        if self._background_work_running():
+            self._show_error("작업 중에는 영상을 바꿀 수 없습니다. 먼저 작업을 취소해 주세요.")
+            self._refresh_video_list()
+            return
+        self._switch_to_video(path, video_id)
+
+    def _switch_to_video(self, path: Path, video_id: str) -> None:
+        if not self._confirm_discard_unsaved_reviews("다른 영상을 열까요?"):
+            self._refresh_video_list()
+            return
+        self._open_video(path, video_id)
+
+    def _relink_video(self, video_id: str) -> None:
+        if self._background_work_running():
+            self._show_error("작업 중에는 파일을 연결할 수 없습니다.")
+            return
         filename, _ = QFileDialog.getOpenFileName(
             self,
-            "로컬 영상 선택",
+            "같은 영상 파일 다시 연결",
             "",
             "영상 파일 (*.mp4 *.mov *.m4v *.avi *.mkv *.webm);;모든 파일 (*)",
         )
         if not filename:
-            self.statusBar().showMessage("영상 선택을 취소했습니다.", 4000)
             return
         path = Path(filename)
         try:
             validate_video_path(path)
-            video_id = build_video_id(path)
+            chosen_id = build_video_id(path)
         except (OSError, ValueError) as exc:
             self._show_error(str(exc))
             return
-        if self._background_work_running():
-            self._show_error("작업 중에는 영상을 바꿀 수 없습니다. 먼저 작업을 취소해 주세요.")
+        if chosen_id != video_id:
+            self._show_error(
+                "고른 파일은 사건에 연결된 영상과 다릅니다. 같은 위치·크기·수정 시각의 원본 파일을 골라 주세요."
+            )
             return
-        if not self._confirm_discard_unsaved_reviews("다른 영상을 열까요?"):
-            return
+        self._case_videos[video_id] = path
+        self._refresh_video_list()
+        self._switch_to_video(path, video_id)
 
+    def _remove_video(self, video_id: str) -> None:
+        if self._background_work_running():
+            self._show_error("작업 중에는 영상을 뺄 수 없습니다.")
+            return
+        if video_id == self._video_id:
+            self.statusBar().showMessage("지금 연 영상은 다른 영상을 고른 뒤 뺄 수 있습니다.", 5000)
+            return
+        self._case_videos.pop(video_id, None)
+        self._link_drafts.pop(video_id, None)
+        self._refresh_video_list()
+        self._inputs_changed()
+        self.statusBar().showMessage("사건 목록에서 영상을 뺐습니다. 사건을 저장하면 연결이 끊깁니다.", 6000)
+
+    def _link_for(self, video_id: str, *, from_panel: bool = True) -> CaseVideoLink:
+        """Camera details of a video: unsaved edits first, then the saved case."""
+        if from_panel and video_id == self._video_id:
+            current = self._case_panel.video_link(video_id)
+            if current is not None:
+                return current
+        if video_id in self._link_drafts:
+            return self._link_drafts[video_id]
+        saved = next(
+            (item for item in self._case_record.video_links if item.video_id == video_id), None
+        )
+        return saved or CaseVideoLink(video_id=video_id)
+
+    _ORIGIN_SHORT = {
+        ResultOrigin.SAMPLE: "샘플",
+        ResultOrigin.TEST_DOUBLE: "테스트 응답",
+        ResultOrigin.REAL_MODEL: "실제 모델",
+    }
+
+    def _refresh_video_statuses(self) -> None:
+        """Read each listed video's newest stored result once; the list reuses it."""
+        statuses: dict[str, tuple[str, bool]] = {}
+        for video_id in self._case_videos:
+            try:
+                stored, _unreadable = self._result_store.list_for_video(video_id)
+            except OSError:
+                stored = ()
+            if stored:
+                job = stored[0].job
+                self._newest_jobs[video_id] = job
+                label = "분석 완료" if job.status is JobStatus.COMPLETED else "일부 완료"
+                origin = self._ORIGIN_SHORT.get(job.origin, "출처 미확인")
+                found = f"후보 {len(job.segments)}" if job.segments else "후보 없음"
+                more = f" · 결과 {len(stored)}개" if len(stored) > 1 else ""
+                statuses[video_id] = (f"{label}({origin}) · {found}{more}", True)
+            else:
+                self._newest_jobs.pop(video_id, None)
+                statuses[video_id] = ("분석 전", False)
+        self._video_statuses = statuses
+        self._overview_sessions = {}
+        for job in self._newest_jobs.values():
+            try:
+                self._overview_sessions[job.job_id] = self._review_store.load(job.job_id)
+            except (OSError, ValueError, KeyError, TypeError):
+                self._overview_sessions[job.job_id] = None
+
+    def _record_run_outcome(self, job: AnalysisJob) -> None:
+        if job.status is JobStatus.FAILED:
+            self._video_run_notes[job.video_id] = "최근 실행 실패"
+        elif job.status is JobStatus.CANCELED:
+            self._video_run_notes[job.video_id] = "최근 실행 취소"
+        else:
+            self._video_run_notes.pop(job.video_id, None)
+        self._refresh_video_statuses()
+        self._refresh_video_list()
+
+    def _video_status_text(self, video_id: str) -> tuple[str, bool]:
+        text, analyzed = self._video_statuses.get(video_id, ("분석 전", False))
+        # The analysis worker is set before it starts and cleared when it finishes.
+        if video_id == self._video_id and self._worker is not None:
+            return "분석 중", analyzed
+        note = self._video_run_notes.get(video_id)
+        if note is not None:
+            text = f"{note} · 이전 {text}" if analyzed else note
+        return text, analyzed
+
+    def _refresh_video_list(self) -> None:
+        entries = []
+        for video_id, path in self._case_videos.items():
+            link = self._link_for(video_id)
+            status, analyzed = self._video_status_text(video_id)
+            entries.append(
+                VideoEntry(
+                    video_id=video_id,
+                    file_name=path.name if path is not None else None,
+                    camera_location=link.camera_location,
+                    duration_seconds=self._video_durations.get(video_id),
+                    clock_certainty=link.clock_certainty,
+                    analysis_status=status,
+                    analyzed=analyzed,
+                )
+            )
+        self._video_list.set_entries(tuple(entries), self._video_id)
+        self._refresh_camera_tabs()
+        self._refresh_case_overview()
+
+    def _review_target(self) -> str | None:
+        return self._review_video_id or self._video_id
+
+    def _camera_name(self, video_id: str) -> str:
+        location = self._link_for(video_id).camera_location
+        if location:
+            return location
+        path = self._case_videos.get(video_id)
+        return path.stem if path is not None else f"영상 {video_id[:6]}"
+
+    def _refresh_camera_tabs(self) -> None:
+        """One tab per case video; shown only when the case has two or more videos."""
+        tabs = self._camera_tabs
+        tabs.blockSignals(True)
+        try:
+            while tabs.count():
+                tabs.removeTab(0)
+            target = self._review_target()
+            for video_id in self._case_videos:
+                job = self._newest_jobs.get(video_id)
+                found = f"({len(job.segments)})" if job is not None else "(결과 없음)"
+                index = tabs.addTab(f"{self._camera_name(video_id)} {found}")
+                tabs.setTabData(index, video_id)
+                linked = self._case_videos[video_id] is not None
+                tabs.setTabToolTip(
+                    index,
+                    "파일 연결됨" if linked else "파일 다시 연결 필요 · 저장된 결과와 기록만 볼 수 있음",
+                )
+                if video_id == target:
+                    tabs.setCurrentIndex(index)
+        finally:
+            tabs.blockSignals(False)
+        several = len(self._case_videos) > 1
+        self._camera_row.setVisible(several)
+        if not several and self._case_overview.toggle_button.isChecked():
+            self._case_overview.toggle_button.setChecked(False)
+
+    def _refresh_case_overview(self) -> None:
+        rows: list[OverviewRow] = []
+        current = self._review_panel.job
+        for video_id in self._case_videos:
+            job = self._newest_jobs.get(video_id)
+            if job is None:
+                continue
+            if current is not None and current.job_id == job.job_id:
+                session = self._review_panel.review_session
+            else:
+                session = self._overview_sessions.get(job.job_id)
+            camera = self._camera_name(video_id)
+            order = sorted(
+                range(len(job.segments)),
+                key=lambda i: (job.segments[i].start_sec, job.segments[i].end_sec, i),
+            )
+            for index in order:
+                segment = job.segments[index]
+                review = session.review_for(index) if session is not None else None
+                judgement = review.judgement if review is not None else ReviewJudgement.UNREVIEWED
+                rows.append(
+                    OverviewRow(
+                        video_id=video_id,
+                        job_id=job.job_id,
+                        segment_index=index,
+                        camera=camera,
+                        start_sec=segment.start_sec,
+                        end_sec=segment.end_sec,
+                        summary=segment.summary,
+                        judgement=JUDGEMENT_LABELS[judgement],
+                        bookmarked=bool(review is not None and review.bookmarked),
+                    )
+                )
+        self._case_overview.set_rows(
+            tuple(rows), tuple(JUDGEMENT_LABELS[item] for item in ReviewJudgement)
+        )
+
+    def _review_records_changed(self) -> None:
+        job = self._review_panel.job
+        if job is not None:
+            self._overview_sessions[job.job_id] = self._review_panel.review_session
+        self._refresh_case_overview()
+
+    def _camera_tab_changed(self, index: int) -> None:
+        video_id = self._camera_tabs.tabData(index)
+        if isinstance(video_id, str):
+            self._show_camera(video_id)
+
+    def _show_camera(self, video_id: str) -> bool:
+        """Show one case video's newest result in the review step; opens its file if linked."""
+        if video_id == self._review_target() and self._review_panel.job is not None:
+            return True
+        if self._background_work_running():
+            self._show_error("작업 중에는 카메라를 바꿀 수 없습니다. 먼저 작업을 취소해 주세요.")
+            self._refresh_camera_tabs()
+            return False
+        if not self._confirm_discard_unsaved_reviews("다른 카메라를 볼까요?"):
+            self._refresh_camera_tabs()
+            return False
+        path = self._case_videos.get(video_id)
+        if path is not None and video_id != self._video_id:
+            self._open_video(path, video_id)
+        else:
+            self._review_video_id = video_id
+            self._review_panel.clear()
+            self._refresh_review_empty_state()
+            self._refresh_saved_results()
+            self._refresh_camera_tabs()
+        newest = next(iter(self._saved_results.values()), None)
+        if newest is not None:
+            self._set_result_banner(newest.job.origin, newest.job.model_id)
+            self._display_segments(newest.job)
+        if path is None:
+            self.statusBar().showMessage(
+                "이 영상은 파일이 연결되지 않아 재생할 수 없습니다. 저장된 결과와 검토 기록은 볼 수 있습니다.",
+                7000,
+            )
+        return True
+
+    def _activate_overview_candidate(self, video_id: str, job_id: str, index: int) -> None:
+        if not self._show_camera(video_id):
+            return
+        job = self._review_panel.job
+        if job is None or job.job_id != job_id:
+            stored = self._saved_results.get(job_id)
+            if stored is None:
+                return
+            self._display_segments(stored.job)
+        self._review_panel.select_segment(index)
+
+    def _open_video(self, path: Path, video_id: str) -> None:
         self._player.stop()
+        if self._video_id is not None and self._video_id != video_id:
+            self._link_drafts[self._video_id] = self._case_panel.video_link(self._video_id)
         self._video_path = path
         self._video_id = video_id
-        self._case_panel.show_video_link(self._case_record, video_id)
+        self._review_video_id = video_id
+        self._case_videos[video_id] = path
+        self._case_panel.show_link(self._link_for(video_id, from_panel=False))
+        self._case_panel.set_video_open(True)
         self._metadata = None
         self._duration_ms = 0
-        self._file_label.setText(path.name)
-        self._file_label.setToolTip(str(path))
         self._metadata_label.setText("FFprobe 메타데이터 확인 중…")
         self._timeline.setRange(0, 0)
         self._time_label.setText("00:00 / 길이 확인 중")
@@ -902,10 +1257,12 @@ class MainWindow(QMainWindow):
         self._invalidate_plan_display()
         self._player.setSource(QUrl.fromLocalFile(str(path)))
         self._refresh_saved_results()
+        self._refresh_video_list()
         self._start_metadata_probe(path)
 
     def _start_metadata_probe(self, path: Path) -> None:
         self._choose_button.setEnabled(False)
+        self._video_list.set_locked(True)
         worker = MetadataWorker(path)
         worker.metadata_ready.connect(self._on_metadata_ready)
         worker.error.connect(self._on_metadata_error)
@@ -918,6 +1275,8 @@ class MainWindow(QMainWindow):
             return
         self._metadata = metadata
         self._video_id = metadata.video_id
+        self._video_durations[metadata.video_id] = metadata.duration_seconds
+        self._refresh_video_list()
         maximum = max(0.001, metadata.duration_seconds)
         self._range_start.blockSignals(True)
         self._range_end.blockSignals(True)
@@ -952,6 +1311,7 @@ class MainWindow(QMainWindow):
 
     def _on_metadata_finished(self) -> None:
         self._choose_button.setEnabled(not self._background_work_running())
+        self._video_list.set_locked(self._background_work_running())
 
     def _start_motion_scan(self) -> None:
         if self._video_path is None or self._metadata is None:
@@ -1686,6 +2046,8 @@ class MainWindow(QMainWindow):
     def _set_analysis_running(self, running: bool) -> None:
         self._case_panel.set_editing_enabled(not running)
         self._choose_button.setEnabled(not running and not self._metadata_probe_running())
+        self._video_list.set_locked(running or self._metadata_probe_running())
+        self._refresh_video_list()
         self._motion_scan_button.setEnabled(not running and self._metadata is not None)
         self._motion_list.setEnabled(not running)
         self._selected_motion_list.setEnabled(not running)
@@ -1769,6 +2131,7 @@ class MainWindow(QMainWindow):
                 self._result_store.save(job)
             except (OSError, ValueError) as exc:
                 self.statusBar().showMessage(f"결과 저장 실패: {exc}", 8000)
+        self._record_run_outcome(job)
 
         self._progress_bar.setRange(0, 100)
         if job.status is JobStatus.COMPLETED:
@@ -1818,6 +2181,7 @@ class MainWindow(QMainWindow):
         self._cancel_button.setEnabled(False)
         self._worker = None
         self._update_post_run_buttons()
+        self._refresh_video_list()
 
     def _show_step(self, index: int) -> None:
         index = max(0, min(index, len(self.STEP_TITLES) - 1))
@@ -1836,6 +2200,7 @@ class MainWindow(QMainWindow):
         self._next_step_button.setText(
             f"{self.STEP_TITLES[index + 1]} →" if next_exists else "다음 →"
         )
+        self._step_navigation.adjustSize()
         self._refresh_review_empty_state()
 
     def _refresh_review_empty_state(self) -> None:
@@ -1865,6 +2230,7 @@ class MainWindow(QMainWindow):
             load_error=load_error,
         )
         self._refresh_review_empty_state()
+        self._refresh_case_overview()
 
     def _update_post_run_buttons(self) -> None:
         self._motion_scan_button.setEnabled(
@@ -2018,9 +2384,22 @@ class MainWindow(QMainWindow):
     def _segment_playback_start_sec(cls, segment: Segment) -> float:
         return max(0.0, segment.start_sec - cls.RESULT_CONTEXT_PREROLL_SECONDS)
 
+    def _review_video_playable(self, video_id: str | None = None) -> bool:
+        """Playback only for candidates of the video file that is open in the player."""
+        if video_id is None:
+            job = self._review_panel.job
+            video_id = job.video_id if job is not None else None
+        if video_id is not None and self._video_path is not None and video_id == self._video_id:
+            return True
+        self.statusBar().showMessage(
+            "이 후보의 영상 파일이 열려 있지 않아 재생할 수 없습니다. CCTV 목록에서 파일을 연결해 주세요.",
+            7000,
+        )
+        return False
+
     def _seek_to_segment(self, item: QListWidgetItem) -> None:
         segment = item.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(segment, Segment):
+        if not isinstance(segment, Segment) or not self._review_video_playable(segment.video_id):
             return
         position_ms = seconds_to_milliseconds(self._segment_playback_start_sec(segment))
         self._playback_stop_ms = None
@@ -2036,6 +2415,8 @@ class MainWindow(QMainWindow):
         )
 
     def _play_review_range(self, start_sec: float, end_sec: float) -> None:
+        if not self._review_video_playable():
+            return
         start_ms = seconds_to_milliseconds(max(0.0, start_sec))
         end_ms = seconds_to_milliseconds(end_sec)
         if self._duration_ms > 0:
@@ -2058,12 +2439,13 @@ class MainWindow(QMainWindow):
     def _refresh_saved_results(self, select_job_id: str | None = None) -> None:
         self._saved_results = {}
         self._saved_results_combo.clear()
-        if self._video_id is None:
+        target = self._review_target()
+        if target is None:
             self._saved_results_combo.addItem("영상을 먼저 선택하세요")
             self._update_saved_results_controls()
             return
         try:
-            results, unreadable = self._result_store.list_for_video(self._video_id)
+            results, unreadable = self._result_store.list_for_video(target)
         except OSError as exc:
             results, unreadable = (), 0
             self.statusBar().showMessage(f"저장된 결과 목록을 읽지 못했습니다: {exc}", 8000)
@@ -2149,10 +2531,69 @@ class MainWindow(QMainWindow):
                 common_rules_error=self._common_rules_error,
             )
 
-        dialog = ResultSummaryDialog(build, self)
+        cameras = self._case_summary_inputs()
+        case_build = None
+        if sum(camera.job is not None for camera in cameras) > 1:
+
+            def case_build():
+                case = None
+                case_error = None
+                try:
+                    case = self._case_store.load(self._case_record.case_id)
+                except FileNotFoundError:
+                    case = None
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    case_error = str(exc)
+                return build_case_summary(
+                    case,
+                    self._case_summary_inputs(),
+                    case_id=self._case_record.case_id,
+                    case_load_error=case_error,
+                    common_rules=self._common_rules,
+                    common_rules_error=self._common_rules_error,
+                )
+
+        dialog = ResultSummaryDialog(build, self, case_build=case_build)
         self._summary_dialog = dialog
         dialog.show()
         return dialog
+
+    def _case_summary_inputs(self) -> list[CameraSummaryInput]:
+        """Each case camera with the result the reviewer sees for it.
+
+        The open camera uses the result shown in the review panel; the others use their
+        newest saved result. Review files are read again so the draft uses saved records.
+        """
+        panel = self._review_panel
+        cameras = []
+        for video_id, path in self._case_videos.items():
+            unsaved = 0
+            load_error = None
+            if panel.job is not None and panel.job.video_id == video_id:
+                job = panel.job
+                session = panel.review_session
+                unsaved = len(panel.unsaved_indexes())
+            else:
+                job = self._newest_jobs.get(video_id)
+                session = None
+                if job is not None:
+                    try:
+                        session = self._review_store.load(job.job_id)
+                    except (OSError, ValueError, KeyError, TypeError) as exc:
+                        load_error = str(exc)
+            cameras.append(
+                CameraSummaryInput(
+                    video_id=video_id,
+                    camera=self._camera_name(video_id),
+                    file_name=path.name if path is not None else None,
+                    link=self._link_for(video_id),
+                    job=job,
+                    session=session,
+                    unsaved_count=unsaved,
+                    review_load_error=load_error,
+                )
+            )
+        return cameras
 
     def _confirm_discard_unsaved_reviews(self, action: str = "닫을까요?") -> bool:
         unsaved = self._review_panel.unsaved_indexes()

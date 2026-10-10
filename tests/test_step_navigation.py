@@ -183,7 +183,7 @@ class StepNavigationTests(unittest.TestCase):
     def test_section_titles_have_no_step_numbers(self) -> None:
         titles = [box.title() for box in self.window.findChildren(QGroupBox)]
         self.assertIn("사건·사전 정보", titles)
-        self.assertIn("로컬 영상", titles)
+        self.assertIn("CCTV 영상", titles)
         self.assertIn("중요 구간 후보", titles)
         for title in titles:
             self.assertNotRegex(title, r"^\d\.\s")

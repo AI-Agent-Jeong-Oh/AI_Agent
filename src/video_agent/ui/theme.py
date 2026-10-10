@@ -130,6 +130,15 @@ def build_stylesheet(scaled: Callable[[int], int], font_point_size: float) -> st
     QPushButton#stepButton:checked {{ color: {PRIMARY}; font-weight: 700; background: transparent; }}
 
     QLabel#fieldLabel {{ color: {TEXT_SUB}; }}
+    QTabBar#cameraTabs::tab {{ background: transparent; color: {TEXT_SUB}; border: none;
+                               border-bottom: 2px solid transparent;
+                               padding: {s(4)}px {s(10)}px; margin-right: {s(2)}px; }}
+    QTabBar#cameraTabs::tab:selected {{ color: {PRIMARY}; border-bottom-color: {PRIMARY};
+                                        font-weight: 600; }}
+    QTabBar#cameraTabs::tab:hover:!selected {{ color: {TEXT}; }}
+    QPushButton#overviewToggle {{ padding: {s(3)}px {s(9)}px; color: {TEXT_SUB}; }}
+    QPushButton#overviewToggle:checked {{ background: {PRIMARY_SOFT}; color: {PRIMARY};
+                                          border-color: {PRIMARY}; }}
     QLabel#infoMark {{ color: {PRIMARY}; padding: 0 {s(2)}px; }}
     QPushButton[variant="chip"] {{ padding: {s(3)}px {s(9)}px; color: {TEXT_SUB}; }}
     QPushButton[variant="chip"]:checked {{ background: {PRIMARY_SOFT}; color: {PRIMARY};

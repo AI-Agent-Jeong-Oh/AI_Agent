@@ -138,11 +138,11 @@ class UiWorkflowTests(unittest.TestCase):
 
     def test_ui_zoom_scales_controls_and_is_bounded(self) -> None:
         base_size = self.window.font().pointSizeF()
-        card_text_size = self.window._file_label.font().pointSizeF()
+        card_text_size = self.window._metadata_label.font().pointSizeF()
 
         self.window._set_ui_zoom(130)
         self.app.processEvents()
-        self.assertGreater(self.window._file_label.font().pointSizeF(), card_text_size)
+        self.assertGreater(self.window._metadata_label.font().pointSizeF(), card_text_size)
 
         self.assertEqual(self.window._ui_zoom_percent, 130)
         self.assertEqual(self.window._zoom_reset_button.text(), "130%")
@@ -302,6 +302,8 @@ class UiWorkflowTests(unittest.TestCase):
         )
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, segment)
+        self.window._video_id = "video-ui"
+        self.window._video_path = self.video
         self.window._duration_ms = 10_000
         self.window._player = MagicMock()
 

@@ -53,6 +53,8 @@ class CaseContextPanel(QGroupBox):
 
     def __init__(self) -> None:
         super().__init__("사건·사전 정보")
+        self._video_open = False
+        self._editing_enabled = True
         self._loading = False
         self._build_ui()
         self._connect_signals()
@@ -293,12 +295,16 @@ class CaseContextPanel(QGroupBox):
             self._loading = False
 
     def show_video_link(self, record: CaseRecord, video_id: str | None) -> None:
+        link = next(
+            (item for item in record.video_links if item.video_id == video_id),
+            None,
+        )
+        self.show_link(link)
+
+    def show_link(self, link: CaseVideoLink | None) -> None:
+        """Show one video's camera details without reporting an edit."""
         self._loading = True
         try:
-            link = next(
-                (item for item in record.video_links if item.video_id == video_id),
-                None,
-            )
             self._set_video_link(link)
         finally:
             self._loading = False
@@ -334,7 +340,20 @@ class CaseContextPanel(QGroupBox):
         value = self.saved_cases.currentData()
         return str(value) if value else None
 
+    def set_video_open(self, video_open: bool) -> None:
+        """Camera details belong to one video; without an open video they stay empty."""
+        self._video_open = video_open
+        if not video_open:
+            self.show_link(None)
+        self._update_camera_fields()
+
+    def _update_camera_fields(self) -> None:
+        enabled = self._video_open and self._editing_enabled
+        for widget in (self.camera_location_edit, self.clock_offset, self.clock_certainty):
+            widget.setEnabled(enabled)
+
     def set_editing_enabled(self, enabled: bool) -> None:
+        self._editing_enabled = enabled
         for widget in (
             self.saved_cases,
             self.load_button,
@@ -345,9 +364,6 @@ class CaseContextPanel(QGroupBox):
             self.occurrence_edit,
             self.occurrence_certainty,
             self.notes_edit,
-            self.camera_location_edit,
-            self.clock_offset,
-            self.clock_certainty,
             self.clue_text,
             self.clue_source,
             self.clue_certainty,
@@ -357,3 +373,4 @@ class CaseContextPanel(QGroupBox):
             self.clue_list,
         ):
             widget.setEnabled(enabled)
+        self._update_camera_fields()

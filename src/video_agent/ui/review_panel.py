@@ -341,8 +341,8 @@ class CandidateReviewPanel(QWidget):
         self.summary_button.clicked.connect(self.summary_requested.emit)
 
     def apply_scale(self, scaled: Callable[[int], int]) -> None:
-        self.candidate_list.setMinimumHeight(scaled(80))
-        self.detail_view.setMinimumHeight(scaled(80))
+        self.candidate_list.setMinimumHeight(scaled(72))
+        self.detail_view.setMinimumHeight(scaled(72))
         self.memo_edit.setMinimumHeight(scaled(48))
         self.memo_edit.setMaximumHeight(scaled(110))
 
@@ -745,6 +745,19 @@ class CandidateReviewPanel(QWidget):
             else ""
         )
         self._record_layout.setRowVisible(self.unsaved_label, bool(unsaved))
+
+    def select_segment(self, index: int) -> bool:
+        """Select one candidate, showing every candidate first if a filter hides it."""
+        if self._job is None or not 0 <= index < len(self._job.segments):
+            return False
+        if index not in self._visible_indexes():
+            self.filter_buttons[FILTER_ALL].setChecked(True)
+            self._rebuild_list()
+        for row in range(self.candidate_list.count()):
+            if self.candidate_list.item(row).data(SEGMENT_INDEX_ROLE) == index:
+                self.candidate_list.setCurrentRow(row)
+                return True
+        return False
 
     def _set_filter_counts(self, totals: dict[str, int] | None) -> None:
         """Show each filter's candidate count on its chip (labels only without a result)."""

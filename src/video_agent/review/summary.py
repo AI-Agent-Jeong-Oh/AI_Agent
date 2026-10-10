@@ -9,15 +9,17 @@ something the video confirmed.
 from __future__ import annotations
 
 import html
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
 from video_agent.knowledge.common_rules import CommonRules
 from video_agent.contracts import (
+    AnalysisClue,
     AnalysisJob,
     AnalysisMode,
     CaseRecord,
+    CaseVideoLink,
     ClueSource,
     InformationCertainty,
     JobStatus,
@@ -70,9 +72,34 @@ class ResultSummary:
     generated_at: str
     warnings: tuple[str, ...]
     sections: tuple[SummarySection, ...]
+    # Set only for a case-wide summary that covers several cameras; job_id is then empty.
+    case_id: str | None = None
+    camera_count: int = 0
 
     def section(self, key: str) -> SummarySection:
         return next(item for item in self.sections if item.key == key)
+
+    @property
+    def document_id(self) -> str:
+        return f"사건 ID {self.case_id}" if self.case_id is not None else f"결과 ID {self.job_id}"
+
+    @property
+    def file_stem(self) -> str:
+        return f"사건_{self.case_id}" if self.case_id is not None else self.job_id
+
+
+@dataclass(frozen=True, slots=True)
+class CameraSummaryInput:
+    """One case video for the case-wide summary; job is None when it has no saved result."""
+
+    video_id: str
+    camera: str
+    file_name: str | None
+    link: CaseVideoLink | None = None
+    job: AnalysisJob | None = None
+    session: ReviewSession | None = None
+    unsaved_count: int = 0
+    review_load_error: str | None = None
 
 
 def build_summary(
@@ -125,6 +152,76 @@ def build_summary(
     )
 
 
+def build_case_summary(
+    case: CaseRecord | None,
+    cameras: Sequence[CameraSummaryInput],
+    *,
+    case_id: str,
+    case_load_error: str | None = None,
+    common_rules: CommonRules | None = None,
+    common_rules_error: str | None = None,
+    generated_at: datetime | None = None,
+) -> ResultSummary:
+    """Case-wide draft: the same six sections, grouped by camera.
+
+    Times stay relative to each video's own start; cameras are never put on one timeline.
+    """
+    analyzed = [camera for camera in cameras if camera.job is not None]
+    if not analyzed:
+        raise ValueError("case summary needs at least one camera with a saved result")
+    judgements: dict[str, dict[int, ReviewJudgement]] = {}
+    for camera in analyzed:
+        if camera.session is not None:
+            camera.session.validate_against(camera.job)
+        judgements[camera.video_id] = {
+            index: _judgement(camera.session, index) for index in range(len(camera.job.segments))
+        }
+    warnings: list[str] = []
+    for camera in cameras:
+        if camera.review_load_error:
+            warnings.append(
+                f"{camera.camera}: 검토 기록을 읽지 못해 미검토로 표시했습니다 "
+                f"({camera.review_load_error})"
+            )
+        if camera.unsaved_count:
+            warnings.append(
+                f"{camera.camera}: 저장하지 않은 기록 {camera.unsaved_count}건은 "
+                "요약에 포함되지 않았습니다."
+            )
+    if case_load_error:
+        warnings.append(f"사건 정보를 불러오지 못했습니다: {case_load_error}")
+    sections = (
+        SummarySection("case", "① 사건 개요·사전 정보", _case_wide_text(case, cameras)),
+        SummarySection("scope", "② 분석 범위·조건", _case_scope_text(cameras, case)),
+        SummarySection(
+            "observations", "③ 주요 관찰", _case_observations_text(analyzed, judgements)
+        ),
+        SummarySection(
+            "opinions", "④ 수사관 검토 의견", _case_opinions_text(analyzed, judgements)
+        ),
+        _law_section(common_rules, common_rules_error),
+        SummarySection(
+            "open_items", "⑥ 미확인·추가 확인 사항", _case_open_items_text(cameras, judgements)
+        ),
+    )
+    moment = generated_at or datetime.now().astimezone()
+    jobs = [camera.job for camera in analyzed]
+    return ResultSummary(
+        job_id="",
+        # A case with any sample result gets the sample banner colour, and so on.
+        origin=next(
+            (origin for origin in _CAUTION_ORDER if any(job.origin is origin for job in jobs)),
+            jobs[0].origin,
+        ),
+        origin_notice=_case_origin_notice(analyzed),
+        generated_at=moment.isoformat(timespec="seconds"),
+        warnings=tuple(warnings),
+        sections=sections,
+        case_id=case_id,
+        camera_count=len(cameras),
+    )
+
+
 def origin_notice(job: AnalysisJob) -> str:
     if job.origin is ResultOrigin.SAMPLE:
         return "샘플 결과 — 실제 AI 분석 아님. 후보는 영상 내용을 보지 않고 만든 예시입니다."
@@ -150,12 +247,14 @@ def render_html(summary: ResultSummary, bodies: Mapping[str, str] | None = None)
         "<!doctype html>",
         '<html lang="ko"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f"<title>검토 결과 요약 — {html.escape(summary.job_id)}</title>",
+        f"<title>검토 결과 요약 — {html.escape(summary.file_stem)}</title>",
         f"<style>{_HTML_STYLE}</style></head><body><main>",
         "<h1>검토 결과 요약</h1>",
         f'<p class="banner {banner_class}">{html.escape(summary.origin_notice)}</p>',
         '<p class="meta">'
-        f"결과 ID {html.escape(summary.job_id)} · 작성 "
+        f"{html.escape(summary.document_id)}"
+        + (f" · CCTV {summary.camera_count}대" if summary.case_id is not None else "")
+        + " · 작성 "
         f"{datetime.fromisoformat(summary.generated_at):%Y-%m-%d %H:%M}<br>"
         "저장된 분석 결과와 검토 기록으로 자동 작성한 초안을 수사관이 확인·수정한 문서입니다. "
         "영상만으로 범죄 성립이나 사람의 의도를 판단하지 않습니다.</p>",
@@ -230,13 +329,7 @@ def _time(seconds: float) -> str:
 def _case_text(job: AnalysisJob, case: CaseRecord | None) -> str:
     lines: list[str] = []
     if case is not None:
-        lines.append(f"사건명: {case.title}")
-        lines.append(f"사건 유형: {case.case_type or '미입력'}")
-        occurrence = case.occurrence_time_text or "미입력"
-        lines.append(
-            f"발생 시각: {occurrence} "
-            f"({_CERTAINTY_LABELS[case.occurrence_time_certainty]})"
-        )
+        lines.extend(_case_lines(case))
         if job.case_revision is not None and job.case_revision != case.revision:
             lines.append(
                 f"분석 당시 사건 버전 {job.case_revision}, 현재 저장본 버전 {case.revision}"
@@ -246,16 +339,33 @@ def _case_text(job: AnalysisJob, case: CaseRecord | None) -> str:
     else:
         lines.append("연결된 사건 정보가 없습니다.")
     lines.append("")
-    lines.append("분석에 사용한 사전 정보 (사용자 제공 정보이며 영상으로 확인한 사실이 아님):")
-    if job.analysis_clues:
-        for clue in job.analysis_clues:
+    lines.extend(_clue_lines(job.analysis_clues))
+    return "\n".join(lines)
+
+
+def _case_lines(case: CaseRecord) -> list[str]:
+    occurrence = case.occurrence_time_text or "미입력"
+    return [
+        f"사건명: {case.title}",
+        f"사건 유형: {case.case_type or '미입력'}",
+        f"발생 시각: {occurrence} ({_CERTAINTY_LABELS[case.occurrence_time_certainty]})",
+    ]
+
+
+_CLUE_HEADING = "분석에 사용한 사전 정보 (사용자 제공 정보이며 영상으로 확인한 사실이 아님):"
+
+
+def _clue_lines(clues: Sequence[AnalysisClue], *, heading: bool = True) -> list[str]:
+    lines = [_CLUE_HEADING] if heading else []
+    if clues:
+        for clue in clues:
             lines.append(
                 f"- {clue.text} (출처: {_SOURCE_LABELS[clue.source]} · "
                 f"확실성: {_CERTAINTY_LABELS[clue.certainty]})"
             )
     else:
         lines.append("- 없음")
-    return "\n".join(lines)
+    return lines
 
 
 def _scope_text(job: AnalysisJob, video_file_name: str | None) -> str:
@@ -351,6 +461,8 @@ def _open_items_text(
     job: AnalysisJob,
     session: ReviewSession | None,
     judgements: Mapping[int, ReviewJudgement],
+    *,
+    sampling_note: bool = True,
 ) -> str:
     needs_check = [
         f"#{index + 1}"
@@ -371,16 +483,165 @@ def _open_items_text(
         )
     if not job.segments:
         lines.append("모델이 후보를 반환하지 않았습니다.")
-    lines.append(
-        "모델 후보는 분석한 프레임에서 고른 것이므로, 후보가 없는 구간에 해당 장면이 "
-        "없다는 뜻은 아닙니다."
-    )
+    if sampling_note:
+        lines.append(_SAMPLING_NOTE)
     completed = session.completed_at if session is not None else None
     if completed:
         lines.append(f"분석 완료 기록: {datetime.fromisoformat(completed):%Y-%m-%d %H:%M}")
     else:
         lines.append("분석 완료 기록: 없음")
     return "\n".join(lines)
+
+
+_SAMPLING_NOTE = (
+    "모델 후보는 분석한 프레임에서 고른 것이므로, 후보가 없는 구간에 해당 장면이 "
+    "없다는 뜻은 아닙니다."
+)
+
+
+# ----- case-wide sections -------------------------------------------------------
+
+_CAUTION_ORDER = (ResultOrigin.SAMPLE, ResultOrigin.TEST_DOUBLE, ResultOrigin.REAL_MODEL)
+_TIMELINE_NOTE = (
+    "각 시각은 해당 영상의 시작 기준입니다. 카메라 사이의 시간 순서는 비교하지 않았습니다."
+)
+
+
+def _origin_short(job: AnalysisJob) -> str:
+    if job.origin is ResultOrigin.SAMPLE:
+        return "샘플 결과(실제 AI 분석 아님)"
+    if job.origin is ResultOrigin.TEST_DOUBLE:
+        return "테스트용 가짜 응답(실제 모델 검증 아님)"
+    if job.origin is ResultOrigin.REAL_MODEL:
+        return f"실제 모델 응답({job.model_id})"
+    return "출처 확인 안 됨"
+
+
+def _case_origin_notice(analyzed: Sequence[CameraSummaryInput]) -> str:
+    jobs = [camera.job for camera in analyzed]
+    if len({(job.origin, job.model_id) for job in jobs}) == 1:
+        return origin_notice(jobs[0])
+    text = "카메라마다 결과 출처가 다릅니다 — " + " · ".join(
+        f"{camera.camera}: {_origin_short(camera.job)}" for camera in analyzed
+    )
+    if any(job.origin is ResultOrigin.SAMPLE for job in jobs):
+        text += ". 샘플 결과의 후보는 영상 내용을 보지 않고 만든 예시입니다."
+    return text
+
+
+def _camera_block(camera: CameraSummaryInput, body: str) -> str:
+    indented = "\n".join(f"  {line}" if line else "" for line in body.split("\n"))
+    return f"[{camera.camera}]\n{indented}"
+
+
+def _case_wide_text(case: CaseRecord | None, cameras: Sequence[CameraSummaryInput]) -> str:
+    lines = _case_lines(case) if case is not None else ["저장된 사건 정보가 없습니다."]
+    lines.append("")
+    lines.append(f"CCTV 영상 {len(cameras)}대:")
+    for camera in cameras:
+        if camera.link is not None:
+            certainty = _CERTAINTY_LABELS[camera.link.clock_certainty]
+            clock = f"카메라 시각 오차 {camera.link.clock_offset_seconds:+.1f}초 ({certainty})"
+        else:
+            clock = "카메라 시각 오차 미입력"
+        lines.append(
+            f"- {camera.camera}: {camera.file_name or '파일명 미확인'} "
+            f"(영상 ID {camera.video_id}) · {clock}"
+        )
+    lines.append(_TIMELINE_NOTE)
+    lines.append("")
+    analyzed = [camera for camera in cameras if camera.job is not None]
+    if len({camera.job.analysis_clues for camera in analyzed}) == 1:
+        lines.extend(_clue_lines(analyzed[0].job.analysis_clues))
+    else:
+        lines.append(_CLUE_HEADING)
+        for camera in analyzed:
+            lines.append(
+                _camera_block(
+                    camera, "\n".join(_clue_lines(camera.job.analysis_clues, heading=False))
+                )
+            )
+    return "\n".join(lines)
+
+
+def _case_scope_text(cameras: Sequence[CameraSummaryInput], case: CaseRecord | None) -> str:
+    blocks = []
+    for camera in cameras:
+        job = camera.job
+        if job is None:
+            blocks.append(_camera_block(camera, "분석 결과 없음"))
+            continue
+        lines = [_scope_text(job, camera.file_name), f"결과 출처: {_origin_short(job)}"]
+        if case is not None and job.case_revision is not None and job.case_revision != case.revision:
+            lines.append(
+                f"분석 당시 사건 버전 {job.case_revision}, 현재 저장본 버전 {case.revision}"
+            )
+        blocks.append(_camera_block(camera, "\n".join(lines)))
+    return "\n\n".join(blocks)
+
+
+def _case_observations_text(
+    analyzed: Sequence[CameraSummaryInput],
+    judgements: Mapping[str, Mapping[int, ReviewJudgement]],
+) -> str:
+    chosen = {ReviewJudgement.RELEVANT, ReviewJudgement.NEEDS_CHECK}
+    if not any(
+        judgement in chosen
+        for camera in analyzed
+        for judgement in judgements[camera.video_id].values()
+    ):
+        return "관련 있음 또는 추가 확인으로 판단한 후보가 없습니다."
+    blocks = [_TIMELINE_NOTE]
+    for camera in analyzed:
+        own = judgements[camera.video_id]
+        if any(judgement in chosen for judgement in own.values()):
+            body = _observations_text(camera.job, camera.session, own)
+        else:
+            body = "해당 후보 없음"
+        blocks.append(_camera_block(camera, body))
+    return "\n\n".join(blocks)
+
+
+def _case_opinions_text(
+    analyzed: Sequence[CameraSummaryInput],
+    judgements: Mapping[str, Mapping[int, ReviewJudgement]],
+) -> str:
+    counts = {judgement: 0 for judgement in ReviewJudgement}
+    for camera in analyzed:
+        for judgement in judgements[camera.video_id].values():
+            counts[judgement] += 1
+    blocks = [
+        "사건 전체 판단 현황: "
+        + " · ".join(f"{JUDGEMENT_LABELS[j]} {counts[j]}" for j in ReviewJudgement)
+        + f" (전체 {sum(counts.values())})"
+    ]
+    for camera in analyzed:
+        body = _opinions_text(camera.job, camera.session, judgements[camera.video_id])
+        blocks.append(_camera_block(camera, body))
+    return "\n\n".join(blocks)
+
+
+def _case_open_items_text(
+    cameras: Sequence[CameraSummaryInput],
+    judgements: Mapping[str, Mapping[int, ReviewJudgement]],
+) -> str:
+    blocks = [
+        _camera_block(
+            camera,
+            _open_items_text(
+                camera.job, camera.session, judgements[camera.video_id], sampling_note=False
+            ),
+        )
+        for camera in cameras
+        if camera.job is not None
+    ]
+    footer = []
+    missing = [camera.camera for camera in cameras if camera.job is None]
+    if missing:
+        footer.append(f"분석 결과가 없는 카메라: {', '.join(missing)}")
+    footer.extend([_SAMPLING_NOTE, _TIMELINE_NOTE])
+    blocks.append("\n".join(footer))
+    return "\n\n".join(blocks)
 
 
 _HTML_STYLE = """
