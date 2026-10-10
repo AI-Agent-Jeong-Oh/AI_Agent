@@ -21,12 +21,13 @@ from PySide6.QtWidgets import (
 
 from video_agent.contracts import ResultOrigin
 from video_agent.review.summary import ResultSummary, render_html
+from video_agent.ui import theme
 
 
-_BANNER_STYLES = {
-    ResultOrigin.SAMPLE: "background:#fff0d7;color:#813f00;border:1px solid #e6a654;",
-    ResultOrigin.TEST_DOUBLE: "background:#f5e9ff;color:#5d2b7a;border:1px solid #b98bd0;",
-    ResultOrigin.REAL_MODEL: "background:#e4f4eb;color:#125d35;border:1px solid #75b991;",
+_BANNER_KINDS = {
+    ResultOrigin.SAMPLE: "sample",
+    ResultOrigin.TEST_DOUBLE: "test_double",
+    ResultOrigin.REAL_MODEL: "real_model",
 }
 
 
@@ -54,15 +55,14 @@ class ResultSummaryDialog(QDialog):
         self.warning_label = QLabel()
         self.warning_label.setWordWrap(True)
         self.warning_label.setStyleSheet(
-            "background:#fff6d8;color:#6e5200;border:1px solid #d6b858;"
-            "padding:6px;border-radius:5px;"
+            theme.banner_style("running") + "padding:6px;border-radius:5px;"
         )
         note = QLabel(
             "저장된 분석 결과와 검토 기록으로 만든 초안입니다. 문구를 고칠 수 있으며, "
             "고친 문구는 앱에 저장되지 않고 내보낸 파일에만 남습니다."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color:#4a5a6a;")
+        note.setStyleSheet(f"color:{theme.TEXT_MUTED};")
         layout.addWidget(self.banner_label)
         layout.addWidget(self.warning_label)
         layout.addWidget(note)
@@ -102,6 +102,7 @@ class ResultSummaryDialog(QDialog):
         self.regenerate_button = QPushButton("초안 다시 만들기")
         self.regenerate_button.setToolTip("지금 저장된 검토 기록으로 초안을 다시 만듭니다")
         self.export_button = QPushButton("HTML로 내보내기")
+        theme.mark_primary(self.export_button)
         self.close_button = QPushButton("닫기")
         buttons.addStretch(1)
         buttons.addWidget(self.regenerate_button)
@@ -117,9 +118,7 @@ class ResultSummaryDialog(QDialog):
         self._summary = summary
         self.banner_label.setText(summary.origin_notice)
         self.banner_label.setStyleSheet(
-            _BANNER_STYLES.get(
-                summary.origin, "background:#eef1f4;color:#46515a;border:1px solid #adb7c0;"
-            )
+            theme.banner_style(_BANNER_KINDS.get(summary.origin, "neutral"))
             + "padding:8px;border-radius:5px;font-weight:700;"
         )
         self.warning_label.setText("\n".join(summary.warnings))
@@ -185,10 +184,10 @@ class ResultSummaryDialog(QDialog):
             path.write_text(render_html(self._summary, self.bodies()), encoding="utf-8")
         except OSError as exc:
             self.export_status_label.setText(f"내보내기 실패: {exc.strerror or exc}")
-            self.export_status_label.setStyleSheet("color:#b3261e;")
+            self.export_status_label.setStyleSheet(f"color:{theme.status_color('error')};")
             self.export_status_label.setToolTip(str(exc))
             return None
         self.export_status_label.setText(f"내보냄: {path.name}")
-        self.export_status_label.setStyleSheet("color:#1f6b3a;")
+        self.export_status_label.setStyleSheet(f"color:{theme.status_color('ok')};")
         self.export_status_label.setToolTip(str(path))
         return path

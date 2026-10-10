@@ -52,7 +52,7 @@ class CaseContextPanel(QGroupBox):
     new_requested = Signal()
 
     def __init__(self) -> None:
-        super().__init__("0. 사건·사전 정보")
+        super().__init__("사건·사전 정보")
         self._loading = False
         self._build_ui()
         self._connect_signals()

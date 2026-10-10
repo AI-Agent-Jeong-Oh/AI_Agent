@@ -134,12 +134,15 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertGreaterEqual(self.window._motion_list.minimumHeight(), 120)
         self.assertGreaterEqual(self.window._plan_view.minimumHeight(), 140)
         self.assertGreaterEqual(self.window._plan_group.minimumHeight(), 450)
-        self.assertIs(self.window._analysis_scroll.widget(), self.window._plan_group.parentWidget())
+        self.assertIs(self.window._step_scrolls[1].widget(), self.window._plan_group.parentWidget())
 
     def test_ui_zoom_scales_controls_and_is_bounded(self) -> None:
         base_size = self.window.font().pointSizeF()
+        card_text_size = self.window._file_label.font().pointSizeF()
 
         self.window._set_ui_zoom(130)
+        self.app.processEvents()
+        self.assertGreater(self.window._file_label.font().pointSizeF(), card_text_size)
 
         self.assertEqual(self.window._ui_zoom_percent, 130)
         self.assertEqual(self.window._zoom_reset_button.text(), "130%")

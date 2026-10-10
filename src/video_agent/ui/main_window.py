@@ -6,17 +6,30 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QCloseEvent, QFont, QGuiApplication, QKeySequence
+from PySide6.QtCore import QPointF, Qt, QTimer, QUrl
+from PySide6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QColor,
+    QFont,
+    QGuiApplication,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -31,6 +44,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSplitter,
+    QStackedWidget,
     QStyle,
     QVBoxLayout,
     QWidget,
@@ -70,6 +84,7 @@ from video_agent.storage.json_store import (
 )
 from video_agent.storage.paths import AppPaths, CacheManager
 from video_agent.ui.case_panel import CaseContextPanel
+from video_agent.ui import theme
 from video_agent.knowledge.common_rules import CommonRules, load_common_rules
 from video_agent.review.summary import build_summary
 from video_agent.ui.review_panel import CandidateReviewPanel
@@ -88,18 +103,58 @@ from video_agent.video.motion import (
 from video_agent.video.worker import MetadataWorker, MotionScanWorker
 
 
+class _StepIndicator(QWidget):
+    """Dots on a thin line above the step names; reached steps are drawn in blue."""
+
+    DOT_Y = 11
+
+    def __init__(self, buttons: list[QPushButton]) -> None:
+        super().__init__()
+        self.setObjectName("stepBar")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._buttons = buttons
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 2)
+        layout.setSpacing(0)
+        for button in buttons:
+            layout.addWidget(button, 1)
+            button.toggled.connect(self.update)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().paintEvent(event)
+        if not self._buttons:
+            return
+        current = next((i for i, b in enumerate(self._buttons) if b.isChecked()), 0)
+        centers = [b.geometry().center().x() for b in self._buttons]
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        y = self.DOT_Y
+        painter.setPen(QPen(QColor(theme.BORDER), 2))
+        painter.drawLine(centers[0], y, centers[-1], y)
+        painter.setPen(QPen(QColor(theme.PRIMARY), 2))
+        painter.drawLine(centers[0], y, centers[current], y)
+        painter.setPen(Qt.PenStyle.NoPen)
+        for index, x in enumerate(centers):
+            painter.setBrush(QColor(theme.PRIMARY if index <= current else theme.BORDER))
+            painter.drawEllipse(QPointF(x, y), 4.5, 4.5)
+        painter.end()
+
+
 class MainWindow(QMainWindow):
     UI_ZOOM_MIN = 75
     UI_ZOOM_MAX = 150
     UI_ZOOM_STEP = 10
     RESULT_CONTEXT_PREROLL_SECONDS = 1.0
+    APP_TITLE = "CCTV 영상수사 지원 Agent"
+    ORGANIZATION = "대한민국 경찰청"
+    STEP_TITLES = ("사건·영상", "분석 계획·실행", "후보 검토")
     OPENAI_PROVIDER_ID = "openai"
     OPENAI_CHAT_COMPLETIONS_ENDPOINT = "https://api.openai.com/v1/chat/completions"
     OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("영상 중요 구간 분석 Agent")
+        self.setWindowTitle(self.APP_TITLE)
         self.resize(1220, 850)
 
         self._base_font = self.font()
@@ -169,66 +224,137 @@ class MainWindow(QMainWindow):
         self._refresh_case_choices()
         self._set_idle_state()
         self._refresh_saved_results()
+        self._show_step(0)
 
     def _build_ui(self) -> None:
         root = QWidget(self)
         root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(18, 16, 18, 18)
-        root_layout.setSpacing(12)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+        root_layout.addWidget(self._build_header())
 
-        title_row = QHBoxLayout()
-        title = QLabel("영상 데이터 중요 구간 선별 Agent")
+        self._step_button_group = QButtonGroup(self)
+        self._step_buttons: list[QPushButton] = []
+        for index, title in enumerate(self.STEP_TITLES):
+            button = QPushButton(title)
+            button.setObjectName("stepButton")
+            button.setCheckable(True)
+            button.setAccessibleName(f"{index + 1}단계 {title}로 이동")
+            self._step_button_group.addButton(button, index)
+            self._step_buttons.append(button)
+        self._step_indicator = _StepIndicator(self._step_buttons)
+        root_layout.addWidget(self._step_indicator)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        self._mode_banner = QLabel()
+        self._mode_banner.setObjectName("modeBanner")
+        self._mode_banner.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        content_layout.addWidget(self._mode_banner)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.addWidget(self._build_video_panel())
+        splitter.addWidget(self._build_step_area(self._build_analysis_panel()))
+        splitter.setSizes([660, 540])
+        content_layout.addWidget(splitter, 1)
+        root_layout.addWidget(content, 1)
+
+        self._root_layout = content_layout
+
+        self.setCentralWidget(root)
+        self._build_step_navigation()
+        self.statusBar().showMessage("영상 파일을 선택해 주세요.")
+
+    def _build_header(self) -> QWidget:
+        """Organization mark and app name on the left, zoom controls on the right."""
+        header = QWidget()
+        header.setObjectName("appHeader")
+        header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        row = QHBoxLayout(header)
+        row.setContentsMargins(24, 8, 24, 8)
+        row.setSpacing(10)
+        self._emblem_label = QLabel()
+        self._emblem_label.setObjectName("emblem")
+        self._emblem_pixmap = QPixmap(str(theme.ASSETS_DIR / "police_emblem.png"))
+        self._emblem_label.setAccessibleName(f"{self.ORGANIZATION} 상징마크")
+        organization = QLabel(self.ORGANIZATION)
+        organization.setObjectName("organization")
+        divider = QFrame()
+        divider.setObjectName("headerDivider")
+        divider.setFrameShape(QFrame.Shape.VLine)
+        divider.setFixedWidth(1)
+        title = QLabel(self.APP_TITLE)
         title.setObjectName("title")
-        mascot = QLabel("[포돌이·포순이 이미지 자리]")
-        mascot.setObjectName("placeholder")
-        title_row.addWidget(title)
-        title_row.addStretch()
-        zoom_controls = QHBoxLayout()
-        zoom_controls.setSpacing(4)
+        row.addWidget(self._emblem_label)
+        row.addWidget(organization)
+        row.addWidget(divider)
+        row.addWidget(title)
+        row.addStretch()
         zoom_label = QLabel("화면 크기")
+        zoom_label.setObjectName("headerHint")
         self._zoom_out_button = QPushButton("−")
         self._zoom_out_button.setToolTip("화면 축소 (⌘-)")
         self._zoom_reset_button = QPushButton("100%")
         self._zoom_reset_button.setToolTip("기본 화면 크기 (⌘0)")
         self._zoom_in_button = QPushButton("+")
         self._zoom_in_button.setToolTip("화면 확대 (⌘+)")
-        zoom_controls.addWidget(zoom_label)
-        zoom_controls.addWidget(self._zoom_out_button)
-        zoom_controls.addWidget(self._zoom_reset_button)
-        zoom_controls.addWidget(self._zoom_in_button)
-        title_row.addLayout(zoom_controls)
-        title_row.addWidget(mascot)
-        root_layout.addLayout(title_row)
+        row.addWidget(zoom_label)
+        row.addWidget(self._zoom_out_button)
+        row.addWidget(self._zoom_reset_button)
+        row.addWidget(self._zoom_in_button)
+        return header
 
-        self._mode_banner = QLabel()
-        self._mode_banner.setObjectName("modeBanner")
-        self._mode_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        root_layout.addWidget(self._mode_banner)
+    def _build_step_navigation(self) -> None:
+        """Previous/next buttons on the right of the bottom status bar."""
+        navigation = QWidget()
+        row = QHBoxLayout(navigation)
+        row.setContentsMargins(0, 0, 12, 0)
+        row.setSpacing(8)
+        self._prev_step_button = QPushButton()
+        self._next_step_button = QPushButton()
+        theme.mark_primary(self._next_step_button)
+        row.addWidget(self._prev_step_button)
+        row.addWidget(self._next_step_button)
+        # QStatusBar paints messages 6px from its left edge; its own text is transparent in
+        # the theme and this label repeats the message with the page margin instead.
+        self._status_label = QLabel()
+        self._status_label.setObjectName("statusMessage")
+        self._status_label.setAccessibleName("상태 메시지")
+        status_bar = self.statusBar()
+        status_bar.messageChanged.connect(self._status_label.setText)
+        status_bar.addPermanentWidget(self._status_label, 1)
+        status_bar.addPermanentWidget(navigation)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(self._build_video_panel())
-        analysis_panel = self._build_analysis_panel()
-        self._analysis_scroll = QScrollArea()
-        self._analysis_scroll.setWidgetResizable(True)
-        self._analysis_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        self._analysis_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._analysis_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self._analysis_scroll.setWidget(analysis_panel)
-        splitter.addWidget(self._analysis_scroll)
-        splitter.setSizes([660, 540])
-        root_layout.addWidget(splitter, 1)
+    def _build_step_area(self, pages: tuple[QWidget, ...]) -> QWidget:
+        """Right side: one scrollable page per step."""
+        area = QWidget()
+        layout = QVBoxLayout(area)
+        layout.setContentsMargins(6, 0, 0, 0)
 
-        self._root_layout = root_layout
-
-        self.setCentralWidget(root)
-        self.statusBar().showMessage("영상 파일을 선택해 주세요.")
+        self._step_stack = QStackedWidget()
+        self._step_scrolls: list[QScrollArea] = []
+        for page in pages:
+            if page.findChild(QScrollArea) is self._plan_scroll:
+                self._step_stack.addWidget(page)
+                self._step_scrolls.append(self._plan_scroll)
+                continue
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            scroll.setWidget(page)
+            self._step_stack.addWidget(scroll)
+            self._step_scrolls.append(scroll)
+        layout.addWidget(self._step_stack, 1)
+        return area
 
     def _build_video_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 6, 0)
 
-        file_group = QGroupBox("1. 로컬 영상")
+        file_group = QGroupBox("로컬 영상")
         file_box = QVBoxLayout(file_group)
         file_row = QHBoxLayout()
         self._file_label = QLabel("선택된 파일 없음")
@@ -245,7 +371,7 @@ class MainWindow(QMainWindow):
 
         self._video_widget = QVideoWidget()
         self._video_widget.setMinimumHeight(350)
-        self._video_widget.setStyleSheet("background: #101820;")
+        self._video_widget.setStyleSheet(f"background: {theme.VIDEO_BACKGROUND};")
         self._player.setVideoOutput(self._video_widget)
         layout.addWidget(self._video_widget, 1)
 
@@ -261,15 +387,20 @@ class MainWindow(QMainWindow):
         layout.addLayout(controls)
         return panel
 
-    def _build_analysis_panel(self) -> QWidget:
+    def _build_analysis_panel(self) -> tuple[QWidget, QWidget, QWidget]:
+        """Build the step pages: case/video, planning and execution, candidate review."""
+        case_page = QWidget()
+        case_layout = QVBoxLayout(case_page)
+        case_layout.setContentsMargins(0, 0, 0, 0)
+        self._case_panel = CaseContextPanel()
+        case_layout.addWidget(self._case_panel)
+        case_layout.addStretch(1)
+
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(6, 0, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
 
-        self._case_panel = CaseContextPanel()
-        layout.addWidget(self._case_panel)
-
-        purpose_group = QGroupBox("2. 분석 목적과 범위")
+        purpose_group = QGroupBox("분석 목적과 범위")
         purpose_layout = QFormLayout(purpose_group)
         self._mode_combo = QComboBox()
         self._mode_combo.addItem("샘플 — 실제 AI 분석 아님", AnalysisMode.SAMPLE)
@@ -317,7 +448,7 @@ class MainWindow(QMainWindow):
         self._purpose_form_layout = purpose_layout
         layout.addWidget(purpose_group)
 
-        self._plan_group = QGroupBox("3. 추가 질문과 분석 계획")
+        self._plan_group = QGroupBox("추가 질문과 분석 계획")
         plan_layout = QVBoxLayout(self._plan_group)
         self._motion_help = QLabel(
             "로컬 픽셀 변화가 큰 짧은 구간을 먼저 제안합니다. 상위 3개가 기본 선택되며 "
@@ -364,54 +495,94 @@ class MainWindow(QMainWindow):
         plan_layout.addWidget(self._make_plan_button)
         layout.addWidget(self._plan_group)
 
-        approval_group = QGroupBox("4. 승인과 실행")
-        approval_layout = QVBoxLayout(approval_group)
+        approval_group = QGroupBox("승인과 실행")
+        approval_layout = QGridLayout(approval_group)
         self._approve_button = QPushButton("분석 계획 승인")
         self._transfer_button = QPushButton("표시된 외부 전송 내용·범위 별도 승인")
         self._run_button = QPushButton("승인된 계획 실행")
-        approval_layout.addWidget(self._approve_button)
-        approval_layout.addWidget(self._transfer_button)
-        approval_layout.addWidget(self._run_button)
-        layout.addWidget(approval_group)
+        theme.mark_primary(self._approve_button)
+        theme.mark_primary(self._run_button)
+        approval_layout.addWidget(self._approve_button, 0, 0)
+        approval_layout.addWidget(self._run_button, 0, 1)
+        approval_layout.addWidget(self._transfer_button, 1, 0, 1, 2)
 
-        progress_group = QGroupBox("5. 실행 상태")
-        progress_layout = QFormLayout(progress_group)
+        progress_group = QGroupBox("실행 상태")
+        progress_layout = QGridLayout(progress_group)
         self._progress_bar = QProgressBar()
         self._progress_label = QLabel("대기 중")
+        self._progress_label.setWordWrap(True)
         self._cancel_button = QPushButton("작업 취소")
-        progress_layout.addRow("진행", self._progress_bar)
-        progress_layout.addRow("상태", self._progress_label)
-        progress_layout.addRow("", self._cancel_button)
-        layout.addWidget(progress_group)
+        progress_layout.addWidget(self._progress_bar, 0, 0)
+        progress_layout.addWidget(self._cancel_button, 0, 1)
+        progress_layout.addWidget(self._progress_label, 1, 0, 1, 2)
+        layout.addStretch(1)
 
-        result_group = QGroupBox("6. 중요 구간 후보")
+        # Approval and run stay visible below the scrolling plan content.
+        self._plan_scroll = QScrollArea()
+        self._plan_scroll.setWidgetResizable(True)
+        self._plan_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self._plan_scroll.setWidget(panel)
+        plan_step = QWidget()
+        plan_step_layout = QVBoxLayout(plan_step)
+        plan_step_layout.setContentsMargins(0, 0, 0, 0)
+        plan_step_layout.addWidget(self._plan_scroll, 1)
+        plan_step_layout.addWidget(approval_group)
+        plan_step_layout.addWidget(progress_group)
+
+        result_group = QGroupBox("중요 구간 후보")
         result_layout = QVBoxLayout(result_group)
-        help_label = QLabel(
+        help_text = (
             "후보를 선택하면 맥락 확인을 위해 원본 영상이 확인용 범위 시작의 최대 1초 전으로 이동하고, "
             "표시된 근거 범위를 지나 계속 재생합니다. "
             "입력한 분석 구간 수와 결과 후보 수는 같지 않을 수 있으며, 결과는 0개·1개·여러 개이거나 중복 정리로 합쳐질 수 있습니다."
         )
-        help_label.setWordWrap(True)
+        # Kept as a tooltip (like the demo's info marks) so the review step fits one screen.
+        help_label = QLabel("ⓘ 재생 안내")
+        help_label.setObjectName("infoMark")
+        help_label.setCursor(Qt.CursorShape.WhatsThisCursor)
+        help_label.setToolTip(help_text)
+        help_label.setAccessibleName("후보 재생과 결과 수 안내")
+        help_label.setAccessibleDescription(help_text)
         saved_row = QHBoxLayout()
         self._saved_results_combo = QComboBox()
         self._saved_results_combo.setAccessibleName("이 영상의 저장된 분석 결과")
+        # Long result names are cut in the closed box (full text in the list) so the row
+        # never forces a horizontal scroll bar.
+        self._saved_results_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self._saved_results_combo.setMinimumContentsLength(8)
         self._open_result_button = QPushButton("열기")
         self._open_result_button.setToolTip("선택한 저장 결과와 검토 기록을 불러옵니다")
         saved_row.addWidget(QLabel("저장된 결과"))
         saved_row.addWidget(self._saved_results_combo, 1)
         saved_row.addWidget(self._open_result_button)
+        saved_row.addWidget(help_label)
         result_layout.addLayout(saved_row)
         self._review_panel = CandidateReviewPanel(self._segment_text)
         self._result_list = self._review_panel.candidate_list
-        result_layout.addWidget(help_label)
+        self._review_empty_label = QLabel(
+            "아직 표시할 결과가 없습니다. 분석 계획·실행 단계에서 분석을 실행하거나, "
+            "위의 저장된 결과를 열어 주세요."
+        )
+        self._review_empty_label.setWordWrap(True)
+        self._review_empty_label.setObjectName("placeholder")
+        self._result_help_label = help_label
+        result_layout.addWidget(self._review_empty_label)
         result_layout.addWidget(self._review_panel, 1)
-        layout.addWidget(result_group, 1)
-        self._analysis_layout = layout
+        result_layout.addStretch(1)
+        self._result_layout = result_layout
+
+        review_page = QWidget()
+        review_layout = QVBoxLayout(review_page)
+        review_layout.setContentsMargins(0, 0, 0, 0)
+        review_layout.addWidget(result_group, 1)
+        self._step_layouts = (case_layout, layout, review_layout)
         self._purpose_group = purpose_group
         self._approval_group = approval_group
         self._progress_group = progress_group
         self._result_group = result_group
-        return panel
+        return case_page, plan_step, review_page
 
     def _connect_signals(self) -> None:
         self._case_panel.changed.connect(self._case_inputs_changed)
@@ -452,6 +623,13 @@ class MainWindow(QMainWindow):
         self._result_list.itemClicked.connect(self._seek_to_segment)
         self._review_panel.playback_range_requested.connect(self._play_review_range)
         self._open_result_button.clicked.connect(self._open_saved_result)
+        self._step_button_group.idClicked.connect(self._show_step)
+        self._prev_step_button.clicked.connect(
+            lambda: self._show_step(self._step_stack.currentIndex() - 1)
+        )
+        self._next_step_button.clicked.connect(
+            lambda: self._show_step(self._step_stack.currentIndex() + 1)
+        )
         self._review_panel.summary_requested.connect(self._open_summary)
         application = QGuiApplication.instance()
         if application is not None:
@@ -513,47 +691,35 @@ class MainWindow(QMainWindow):
             return max(1, round(value * scale))
 
         self._root_layout.setContentsMargins(
-            scaled(18), scaled(16), scaled(18), scaled(18)
+            scaled(18), scaled(12), scaled(18), scaled(12)
         )
-        self._root_layout.setSpacing(scaled(12))
-        self._analysis_layout.setSpacing(scaled(8))
-        self._purpose_edit.setMinimumHeight(scaled(72))
-        self._purpose_edit.setMaximumHeight(scaled(120))
+        self._root_layout.setSpacing(scaled(10))
+        if not self._emblem_pixmap.isNull():
+            self._emblem_label.setPixmap(
+                self._emblem_pixmap.scaledToHeight(
+                    scaled(34), Qt.TransformationMode.SmoothTransformation
+                )
+            )
+        for step_layout in self._step_layouts:
+            step_layout.setSpacing(scaled(8))
+        self._purpose_edit.setMinimumHeight(scaled(60))
+        self._purpose_edit.setMaximumHeight(scaled(96))
         self._motion_list.setMinimumHeight(scaled(128))
-        self._motion_list.setMaximumHeight(scaled(210))
-        self._selected_motion_list.setMinimumHeight(scaled(84))
-        self._selected_motion_list.setMaximumHeight(scaled(140))
+        self._motion_list.setMaximumHeight(scaled(170))
+        self._selected_motion_list.setMinimumHeight(scaled(64))
+        self._selected_motion_list.setMaximumHeight(scaled(110))
         self._plan_view.setMinimumHeight(scaled(145))
-        self._plan_view.setMaximumHeight(scaled(260))
+        self._plan_view.setMaximumHeight(scaled(220))
         self._case_panel.clue_list.setMinimumHeight(scaled(100))
-        self._plan_group.setMinimumHeight(scaled(635))
-        purpose_height = 285 if self._current_mode() is AnalysisMode.EXTERNAL else 205
+        self._plan_group.setMinimumHeight(scaled(480))
+        purpose_height = 265 if self._current_mode() is AnalysisMode.EXTERNAL else 185
         self._purpose_group.setMinimumHeight(scaled(purpose_height))
-        self._approval_group.setMinimumHeight(scaled(150))
-        self._progress_group.setMinimumHeight(scaled(145))
-        self._result_group.setMinimumHeight(scaled(820))
         self._review_panel.apply_scale(scaled)
 
         self._zoom_reset_button.setText(f"{self._ui_zoom_percent}%")
         self._zoom_out_button.setEnabled(self._ui_zoom_percent > self.UI_ZOOM_MIN)
         self._zoom_in_button.setEnabled(self._ui_zoom_percent < self.UI_ZOOM_MAX)
-        self.setStyleSheet(
-            f"""
-            QMainWindow {{ background: #f3f6fa; }}
-            QLabel#title {{ font-size: {scaled(22)}px; font-weight: 700; color: #18324a; }}
-            QLabel#placeholder {{ color: #61758a; border: 1px dashed #9aacbc;
-                                  padding: {scaled(7)}px; }}
-            QLabel#modeBanner {{ border-radius: {scaled(6)}px; padding: {scaled(9)}px;
-                                 font-weight: 700; }}
-            QGroupBox {{ font-weight: 700; border: 1px solid #ccd7e2;
-                         border-radius: {scaled(7)}px; margin-top: {scaled(9)}px;
-                         padding-top: {scaled(10)}px; background: white; }}
-            QGroupBox::title {{ subcontrol-origin: margin; left: {scaled(10)}px;
-                                padding: 0 {scaled(4)}px; }}
-            QPushButton {{ padding: {scaled(7)}px {scaled(12)}px; }}
-            QListWidget, QPlainTextEdit, QLineEdit {{ background: white; }}
-            """
-        )
+        self.setStyleSheet(theme.build_stylesheet(scaled, font.pointSizeF()))
 
     def _restore_settings(self) -> None:
         index = self._mode_combo.findData(self._settings.mode)
@@ -725,6 +891,7 @@ class MainWindow(QMainWindow):
         self._time_label.setText("00:00 / 길이 확인 중")
         self._play_button.setEnabled(False)
         self._review_panel.clear()
+        self._refresh_review_empty_state()
         self._clear_motion_proposals()
         self._sampling_interval_override = None
         self._sampling_timestamps_override = ()
@@ -1505,6 +1672,7 @@ class MainWindow(QMainWindow):
         worker.finished.connect(self._on_worker_finished)
         self._worker = worker
         self._review_panel.clear()
+        self._refresh_review_empty_state()
         self._set_running_banner(request.mode, request.model_id)
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
@@ -1616,6 +1784,9 @@ class MainWindow(QMainWindow):
             self._set_result_banner(job.origin, job.model_id)
             self._display_segments(job)
             self._refresh_saved_results(select_job_id=job.job_id)
+            self.statusBar().showMessage(
+                f"분석이 끝났습니다. [{self.STEP_TITLES[2]} →]에서 후보를 검토하세요.", 10000
+            )
         elif job.status is JobStatus.PARTIAL:
             elapsed = f" · {job.elapsed_seconds:.1f}초" if job.elapsed_seconds is not None else ""
             self._progress_label.setText(
@@ -1636,6 +1807,7 @@ class MainWindow(QMainWindow):
                 f"분석 실패 — {job.model_id or '모델 없음'} · "
                 f"{job.error or '알 수 없는 분석 오류'}"
             )
+            self._refresh_review_empty_state()
             self._show_error(job.error or "알 수 없는 분석 오류가 발생했습니다.")
 
     def _on_worker_finished(self) -> None:
@@ -1646,6 +1818,34 @@ class MainWindow(QMainWindow):
         self._cancel_button.setEnabled(False)
         self._worker = None
         self._update_post_run_buttons()
+
+    def _show_step(self, index: int) -> None:
+        index = max(0, min(index, len(self.STEP_TITLES) - 1))
+        self._step_stack.setCurrentIndex(index)
+        self._step_buttons[index].setChecked(True)
+        previous_exists = index > 0
+        next_exists = index < len(self.STEP_TITLES) - 1
+        self._prev_step_button.setEnabled(previous_exists)
+        self._prev_step_button.setVisible(previous_exists)
+        self._prev_step_button.setText("← 이전")
+        self._prev_step_button.setToolTip(
+            f"{self.STEP_TITLES[index - 1]} 단계로" if previous_exists else ""
+        )
+        self._next_step_button.setEnabled(next_exists)
+        self._next_step_button.setVisible(next_exists)
+        self._next_step_button.setText(
+            f"{self.STEP_TITLES[index + 1]} →" if next_exists else "다음 →"
+        )
+        self._refresh_review_empty_state()
+
+    def _refresh_review_empty_state(self) -> None:
+        has_job = self._review_panel.job is not None
+        has_content = has_job or self._result_list.count() > 0
+        self._review_empty_label.setVisible(not has_job)
+        self._review_panel.setVisible(has_content)
+        # The trailing stretch keeps the empty state at the top; with a result the
+        # review panel takes the spare height instead.
+        self._result_layout.setStretch(self._result_layout.count() - 1, 0 if has_content else 1)
 
     def _display_segments(self, job: AnalysisJob) -> None:
         session = None
@@ -1664,6 +1864,7 @@ class MainWindow(QMainWindow):
             persist=self._review_store.save,
             load_error=load_error,
         )
+        self._refresh_review_empty_state()
 
     def _update_post_run_buttons(self) -> None:
         self._motion_scan_button.setEnabled(
@@ -1688,13 +1889,13 @@ class MainWindow(QMainWindow):
     def _set_result_banner(self, origin: ResultOrigin, model_id: str | None) -> None:
         if origin is ResultOrigin.SAMPLE:
             self._mode_banner.setText("샘플 결과 — 실제 AI 분석 아님")
-            self._mode_banner.setStyleSheet("background:#fff0d7;color:#813f00;border:1px solid #e6a654;")
+            self._mode_banner.setStyleSheet(theme.banner_style("sample"))
         elif origin is ResultOrigin.TEST_DOUBLE:
             self._mode_banner.setText("테스트용 가짜 모델 응답 — 실제 모델 검증 아님")
-            self._mode_banner.setStyleSheet("background:#f5e9ff;color:#5d2b7a;border:1px solid #b98bd0;")
+            self._mode_banner.setStyleSheet(theme.banner_style("test_double"))
         else:
             self._mode_banner.setText(f"실제 모델 응답 — {model_id}")
-            self._mode_banner.setStyleSheet("background:#e4f4eb;color:#125d35;border:1px solid #75b991;")
+            self._mode_banner.setStyleSheet(theme.banner_style("real_model"))
 
     def _set_running_banner(self, mode: AnalysisMode, model_id: str | None) -> None:
         if mode is AnalysisMode.SAMPLE:
@@ -1702,9 +1903,7 @@ class MainWindow(QMainWindow):
         else:
             text = f"분석 실행 중 — {model_id or '모델 미지정'}"
         self._mode_banner.setText(text)
-        self._mode_banner.setStyleSheet(
-            "background:#fff6d8;color:#6e5200;border:1px solid #d6b858;"
-        )
+        self._mode_banner.setStyleSheet(theme.banner_style("running"))
 
     def _set_terminal_banner(
         self,
@@ -1714,11 +1913,7 @@ class MainWindow(QMainWindow):
         failed: bool,
     ) -> None:
         self._mode_banner.setText(f"{label} — {model_id or '모델 없음'}")
-        self._mode_banner.setStyleSheet(
-            "background:#fdeaea;color:#7a2020;border:1px solid #d89a9a;"
-            if failed
-            else "background:#eef1f4;color:#46515a;border:1px solid #adb7c0;"
-        )
+        self._mode_banner.setStyleSheet(theme.banner_style("failed" if failed else "neutral"))
 
     def _update_mode_banner(self) -> None:
         mode = self._current_mode()
@@ -1737,7 +1932,7 @@ class MainWindow(QMainWindow):
                     else "설치 모델은 있으나 vision 기능 확인 안 됨"
                 )
             self._mode_banner.setText(f"로컬 VLM 모드 — {status} · 자동 외부 전환 없음")
-            self._mode_banner.setStyleSheet("background:#e8f1fb;color:#174d78;border:1px solid #8bb6d9;")
+            self._mode_banner.setStyleSheet(theme.banner_style("local"))
         else:
             key_status = (
                 "API 키 준비됨(저장 안 함)"
@@ -1747,7 +1942,7 @@ class MainWindow(QMainWindow):
             self._mode_banner.setText(
                 f"OpenAI API 모드 — {key_status} · 분석 승인과 외부 전송 승인 별도"
             )
-            self._mode_banner.setStyleSheet("background:#fdeaea;color:#7a2020;border:1px solid #d89a9a;")
+            self._mode_banner.setStyleSheet(theme.banner_style("failed"))
 
     @classmethod
     def _segment_text(cls, segment: Segment, purpose: str | None = None) -> str:

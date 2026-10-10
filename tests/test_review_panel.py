@@ -98,7 +98,8 @@ class CandidateReviewPanelTests(unittest.TestCase):
 
     def test_default_sort_is_time_and_model_order_is_available(self) -> None:
         self.assertEqual(self.visible_indexes(), [1, 2, 0])
-        self.panel.sort_combo.setCurrentIndex(self.panel.sort_combo.findData("model"))
+        self.assertTrue(self.panel.sort_buttons["time"].isChecked())
+        self.panel.sort_buttons["model"].click()
         self.assertEqual(self.visible_indexes(), [0, 1, 2])
 
     def test_items_start_unreviewed_and_show_badge(self) -> None:
@@ -172,20 +173,28 @@ class CandidateReviewPanelTests(unittest.TestCase):
         self.panel.bookmark_check.setChecked(True)
         self.panel.save_current()
 
-        combo = self.panel.filter_combo
-        combo.setCurrentIndex(combo.findData(ReviewJudgement.NEEDS_CHECK.value))
+        chips = self.panel.filter_buttons
+        chips[ReviewJudgement.NEEDS_CHECK.value].click()
         self.assertEqual(self.visible_indexes(), [0])
-        combo.setCurrentIndex(combo.findData("bookmarked"))
+        chips["bookmarked"].click()
         self.assertEqual(self.visible_indexes(), [2])
-        combo.setCurrentIndex(combo.findData(ReviewJudgement.UNREVIEWED.value))
+        chips[ReviewJudgement.UNREVIEWED.value].click()
         self.assertEqual(self.visible_indexes(), [1, 2])
-        self.assertIn("미검토 2", self.panel.summary_label.text())
-        self.assertIn("추가 확인 1", self.panel.summary_label.text())
+        self.assertEqual(chips[ReviewJudgement.UNREVIEWED.value].text(), "미검토 2")
+        self.assertEqual(chips[ReviewJudgement.NEEDS_CHECK.value].text(), "추가 확인 1")
+        self.assertEqual(chips["bookmarked"].text(), "북마크 1")
+        self.assertEqual(chips["all"].text(), "전체 3")
+
+    def test_filter_chips_wrap_when_the_panel_is_narrow(self) -> None:
+        chips = self.panel.filter_chips
+        row_width = sum(button.sizeHint().width() for button in self.panel.filter_buttons.values())
+        self.assertLess(chips.minimumSizeHint().width(), row_width)
+        one_line = chips.layout().heightForWidth(row_width + 100)
+        self.assertGreater(chips.layout().heightForWidth(row_width // 2), one_line)
 
     def test_filter_hiding_selection_clears_editor(self) -> None:
         self.select(0)
-        combo = self.panel.filter_combo
-        combo.setCurrentIndex(combo.findData(ReviewJudgement.RELEVANT.value))
+        self.panel.filter_buttons[ReviewJudgement.RELEVANT.value].click()
         self.assertEqual(self.panel.candidate_list.count(), 0)
         self.assertFalse(self.panel.record_group.isEnabled())
 
