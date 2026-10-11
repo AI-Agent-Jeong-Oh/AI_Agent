@@ -202,6 +202,8 @@ class MainWindow(QMainWindow):
         self._sampling_timestamps_override: tuple[float, ...] = ()
         self._sampling_strategy_override: SamplingStrategy | None = None
         self._applied_motion_proposals: tuple[MotionProposal, ...] = ()
+        # (metadata, intent) of the run that produced the range expansion proposal.
+        self._expansion_context: tuple[object, object] | None = None
         self._motion_scan_profile = MotionScanProfile.GENERAL_PEAK
         self._motion_scan_purpose: str | None = None
         self._clarification_id: str | None = None
@@ -417,8 +419,8 @@ class MainWindow(QMainWindow):
         case_layout = QVBoxLayout(case_page)
         case_layout.setContentsMargins(0, 0, 0, 0)
         self._case_panel = CaseContextPanel()
-        case_layout.addWidget(self._case_panel)
-        case_layout.addStretch(1)
+        # The card fills the step; its clue list takes the spare height and scrolls inside.
+        case_layout.addWidget(self._case_panel, 1)
 
         panel = QWidget()
         layout = QVBoxLayout(panel)
@@ -607,6 +609,7 @@ class MainWindow(QMainWindow):
         self._review_empty_label.setWordWrap(True)
         self._review_empty_label.setObjectName("placeholder")
         self._result_help_label = help_label
+        result_layout.addWidget(self._build_expansion_proposal())
         result_layout.addWidget(self._review_empty_label)
         result_layout.addWidget(self._review_panel, 1)
         result_layout.addStretch(1)
@@ -623,6 +626,36 @@ class MainWindow(QMainWindow):
         self._result_group = result_group
         return case_page, plan_step, review_page
 
+    def _build_expansion_proposal(self) -> QFrame:
+        """Shown after a run with no candidates over part of the video; never runs anything."""
+        frame = QFrame()
+        frame.setObjectName("expansionProposal")
+        frame.setStyleSheet(
+            f"QFrame#expansionProposal {{{theme.banner_style('local')} border-radius:6px;}}"
+        )
+        layout = QVBoxLayout(frame)
+        title = QLabel("범위 확대 제안")
+        title.setStyleSheet(f"color:{theme.PRIMARY_DARK};font-weight:700;")
+        self._expansion_label = QLabel()
+        self._expansion_label.setWordWrap(True)
+        self._expansion_apply_button = QPushButton("영상 전체로 범위 넓히기")
+        self._expansion_apply_button.setToolTip(
+            "범위만 바꿉니다. 계획을 다시 만들고 승인해야 실행됩니다."
+        )
+        theme.mark_primary(self._expansion_apply_button)
+        self._expansion_close_button = QPushButton("닫기")
+        buttons = QHBoxLayout()
+        buttons.addWidget(self._expansion_apply_button)
+        buttons.addWidget(self._expansion_close_button)
+        buttons.addStretch(1)
+        layout.addWidget(title)
+        layout.addWidget(self._expansion_label)
+        layout.addLayout(buttons)
+        frame.setAccessibleName("범위 확대 제안")
+        frame.setVisible(False)
+        self._expansion_frame = frame
+        return frame
+
     def _connect_signals(self) -> None:
         self._case_panel.changed.connect(self._case_inputs_changed)
         self._case_panel.save_requested.connect(self._save_case)
@@ -637,6 +670,8 @@ class MainWindow(QMainWindow):
         self._camera_tabs.tabBarClicked.connect(self._camera_tab_changed)
         self._case_overview.candidate_activated.connect(self._activate_overview_candidate)
         self._review_panel.records_changed.connect(self._review_records_changed)
+        self._expansion_apply_button.clicked.connect(self._apply_range_expansion)
+        self._expansion_close_button.clicked.connect(self._hide_range_expansion)
         self._play_button.clicked.connect(self._toggle_playback)
         self._timeline.sliderPressed.connect(self._slider_pressed)
         self._timeline.sliderReleased.connect(self._slider_released)
@@ -1246,6 +1281,7 @@ class MainWindow(QMainWindow):
         self._time_label.setText("00:00 / 길이 확인 중")
         self._play_button.setEnabled(False)
         self._review_panel.clear()
+        self._hide_range_expansion()
         self._refresh_review_empty_state()
         self._clear_motion_proposals()
         self._sampling_interval_override = None
@@ -1788,6 +1824,8 @@ class MainWindow(QMainWindow):
         except PlanningError as exc:
             self.statusBar().showMessage(str(exc), 5000)
             return
+        if self._expansion_context not in (None, (self._metadata, self._session.intent)):
+            self._hide_range_expansion()
         self._invalidate_plan_display()
         self._update_mode_banner()
         self._persist_settings()
@@ -2147,6 +2185,7 @@ class MainWindow(QMainWindow):
             self._set_result_banner(job.origin, job.model_id)
             self._display_segments(job)
             self._refresh_saved_results(select_job_id=job.job_id)
+            self._propose_range_expansion(job)
             self.statusBar().showMessage(
                 f"분석이 끝났습니다. [{self.STEP_TITLES[2]} →]에서 후보를 검토하세요.", 10000
             )
@@ -2213,6 +2252,7 @@ class MainWindow(QMainWindow):
         self._result_layout.setStretch(self._result_layout.count() - 1, 0 if has_content else 1)
 
     def _display_segments(self, job: AnalysisJob) -> None:
+        self._hide_range_expansion()
         session = None
         load_error = None
         if job.segments:
@@ -2231,6 +2271,70 @@ class MainWindow(QMainWindow):
         )
         self._refresh_review_empty_state()
         self._refresh_case_overview()
+
+    def _expansion_reason(self, job: AnalysisJob) -> str | None:
+        """Why the finished run could be widened, or None when widening would not help."""
+        if (
+            job.status is not JobStatus.COMPLETED
+            or job.segments
+            or job.origin is ResultOrigin.SAMPLE
+            or self._metadata is None
+            or job.video_id != self._video_id
+        ):
+            return None
+        duration = self._metadata.duration_seconds
+        start = job.range_start_sec or 0.0
+        end = job.range_end_sec if job.range_end_sec is not None else duration
+        narrowed = start > 0.05 or end < duration - 0.05
+
+        def clock(seconds: float) -> str:
+            return format_milliseconds(seconds_to_milliseconds(seconds))
+
+        if self._applied_motion_proposals:
+            found = (
+                f"선택한 움직임 후보 {len(self._applied_motion_proposals)}개 구간"
+                f"({clock(start)}–{clock(end)})에 프레임을 모아 분석했지만 후보를 찾지 못했습니다."
+            )
+        elif narrowed:
+            found = (
+                f"분석 범위 {clock(start)}–{clock(end)}(영상 {clock(duration)} 중 "
+                f"{clock(end - start)})에서 후보를 찾지 못했습니다."
+            )
+        else:
+            return None
+        return (
+            f"{found}\n영상 전체로 넓혀 다시 계획할 수 있습니다. 프레임 수 한도는 같으므로 "
+            "넓은 범위에서는 프레임 사이 간격이 넓어집니다."
+        )
+
+    def _propose_range_expansion(self, job: AnalysisJob) -> None:
+        reason = self._expansion_reason(job)
+        if reason is None:
+            return
+        self._session.propose_expansion(reason)
+        self._expansion_context = (self._metadata, self._session.intent)
+        self._expansion_label.setText(reason)
+        self._expansion_frame.setVisible(True)
+
+    def _hide_range_expansion(self) -> None:
+        self._expansion_context = None
+        self._expansion_frame.setVisible(False)
+
+    def _apply_range_expansion(self) -> None:
+        """Widen to the whole video; the new plan still needs its own approval."""
+        if self._background_work_running() or self._metadata is None:
+            return
+        self._hide_range_expansion()
+        for spin in (self._range_start, self._range_end):
+            spin.blockSignals(True)
+            spin.setValue(0)
+            spin.blockSignals(False)
+        self._range_changed()
+        self._update_post_run_buttons()
+        self._show_step(1)
+        self.statusBar().showMessage(
+            "분석 범위를 영상 전체로 바꿨습니다. 계획을 다시 만들고 승인해야 실행됩니다.", 10000
+        )
 
     def _update_post_run_buttons(self) -> None:
         self._motion_scan_button.setEnabled(

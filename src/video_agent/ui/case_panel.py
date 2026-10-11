@@ -9,14 +9,17 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
     QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -28,6 +31,7 @@ from video_agent.contracts import (
     ClueSource,
     InformationCertainty,
 )
+from video_agent.ui.clue_delegate import ClueItemDelegate
 
 
 _CERTAINTY_LABELS = {
@@ -41,6 +45,10 @@ _SOURCE_LABELS = {
     ClueSource.DOCUMENT: "문서",
     ClueSource.OTHER: "기타",
 }
+CERTAINTY_HELP = (
+    "확실성은 정보를 준 사람이나 자료가 얼마나 분명하게 말했는지입니다. "
+    "'확인'도 영상이나 수사로 사실이 검증됐다는 뜻은 아닙니다."
+)
 
 
 class CaseContextPanel(QGroupBox):
@@ -96,7 +104,8 @@ class CaseContextPanel(QGroupBox):
         occurrence_row.addWidget(self.occurrence_certainty)
         self.notes_edit = QPlainTextEdit()
         self.notes_edit.setPlaceholderText("담당자·관리 메모 등 · 모델에는 전송하지 않음")
-        self.notes_edit.setMaximumHeight(70)
+        # Fixed so the clue list, not the memo, gives way when the step is short.
+        self.notes_edit.setFixedHeight(70)
         form.addRow("사건명", self.title_edit)
         form.addRow("사건 유형", self.type_edit)
         form.addRow("발생 시각", occurrence_widget)
@@ -121,36 +130,95 @@ class CaseContextPanel(QGroupBox):
         video_form.addRow("카메라 시각 오차", clock_widget)
         layout.addLayout(video_form)
 
-        clue_label = QLabel(
-            "분석 단서: 데이터셋 폴더명·라벨 정답을 복사하지 말고, 사용자가 실제로 제공한 정보만 등록하세요."
+        divider = QFrame()
+        divider.setObjectName("sectionDivider")
+        layout.addWidget(divider)
+        title_row = QHBoxLayout()
+        clue_title = QLabel("분석 단서")
+        clue_title.setObjectName("subsectionTitle")
+        clue_aside = QLabel("체크한 단서만 분석 계획과 모델 입력에 포함")
+        clue_aside.setObjectName("subsectionAside")
+        title_row.addWidget(clue_title)
+        title_row.addSpacing(8)
+        title_row.addWidget(clue_aside, 0, Qt.AlignmentFlag.AlignBottom)
+        title_row.addStretch(1)
+        layout.addLayout(title_row)
+        clue_help = QLabel(
+            "데이터셋 폴더명·라벨 정답을 복사하지 말고, 사용자가 실제로 제공한 정보만 등록하세요."
         )
-        clue_label.setWordWrap(True)
-        layout.addWidget(clue_label)
-        clue_row = QHBoxLayout()
+        clue_help.setObjectName("subsectionHelp")
+        clue_help.setWordWrap(True)
+        layout.addWidget(clue_help)
+
+        editor = QWidget()
+        editor.setObjectName("clueEditor")
+        editor_layout = QVBoxLayout(editor)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
         self.clue_text = QLineEdit()
         self.clue_text.setPlaceholderText("예: 신고자는 사람이 문 앞 상자를 들어 이동했다고 설명함")
+        self.clue_text.setAccessibleName("단서 문장")
+        text_row = QHBoxLayout()
+        editor_layout.addLayout(text_row)
+        clue_row = QHBoxLayout()
+        source_label = QLabel("출처")
+        source_label.setObjectName("fieldLabel")
         self.clue_source = QComboBox()
+        self.clue_source.setAccessibleName("출처")
         for value, label in _SOURCE_LABELS.items():
             self.clue_source.addItem(label, value)
+        certainty_label = QLabel("확실성")
+        certainty_label.setObjectName("fieldLabel")
+        certainty_label.setToolTip(CERTAINTY_HELP)
         self.clue_certainty = QComboBox()
+        self.clue_certainty.setAccessibleName("확실성")
+        self.clue_certainty.setToolTip(CERTAINTY_HELP)
         self._add_certainty_items(self.clue_certainty)
         self.clue_use = QCheckBox("분석 사용")
         self.clue_use.setChecked(True)
+        self.cancel_clue_edit_button = QPushButton("선택 해제")
+        self.cancel_clue_edit_button.setVisible(False)
         self.add_clue_button = QPushButton("단서 추가")
-        clue_row.addWidget(self.clue_text, 1)
+        clue_row.addWidget(source_label)
         clue_row.addWidget(self.clue_source)
+        clue_row.addSpacing(8)
+        clue_row.addWidget(certainty_label)
         clue_row.addWidget(self.clue_certainty)
+        clue_row.addSpacing(8)
         clue_row.addWidget(self.clue_use)
-        clue_row.addWidget(self.add_clue_button)
-        layout.addLayout(clue_row)
+        clue_row.addStretch(1)
+        text_row.addWidget(self.clue_text, 1)
+        text_row.addWidget(self.cancel_clue_edit_button)
+        text_row.addWidget(self.add_clue_button)
+        editor_layout.addLayout(clue_row)
+        self.clue_edit_label = QLabel(
+            "선택한 단서를 고치는 중 · 분석 사용 여부는 목록의 체크박스로 바꿉니다"
+        )
+        self.clue_edit_label.setObjectName("subsectionHelp")
+        self.clue_edit_label.setWordWrap(True)
+        self.clue_edit_label.setVisible(False)
+        editor_layout.addWidget(self.clue_edit_label)
+        layout.addWidget(editor)
 
         self.clue_list = QListWidget()
         self.clue_list.setMinimumHeight(100)
-        self.clue_list.setToolTip("체크된 항목만 분석 계획과 모델 입력에 포함됩니다.")
-        layout.addWidget(self.clue_list)
+        # Take the space left in the step instead of Qt's default list height, so the
+        # larger clue rows scroll inside the list rather than the whole step.
+        self.clue_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        self.clue_list.setToolTip(
+            "체크된 항목만 분석 계획과 모델 입력에 포함됩니다. 단서를 고르면 위에서 고칠 수 있습니다."
+        )
+        self.clue_list.setAccessibleName("분석 단서 목록")
+        self.clue_list.setItemDelegate(
+            ClueItemDelegate(_SOURCE_LABELS, _CERTAINTY_LABELS, self.clue_list)
+        )
+        # Rows wrap to the list width, so their heights follow it.
+        self.clue_list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.clue_list.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
+        self.clue_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        layout.addWidget(self.clue_list, 1)
         clue_buttons = QHBoxLayout()
         self.remove_clue_button = QPushButton("선택 단서 삭제")
-        self.clue_count_label = QLabel("분석 사용 단서: 0개")
+        self.clue_count_label = QLabel("분석 사용 0 / 전체 0")
         clue_buttons.addWidget(self.remove_clue_button)
         clue_buttons.addStretch()
         clue_buttons.addWidget(self.clue_count_label)
@@ -175,8 +243,10 @@ class CaseContextPanel(QGroupBox):
         self.clock_certainty.currentIndexChanged.connect(self._emit_changed)
         self.add_clue_button.clicked.connect(self._add_clue)
         self.clue_text.returnPressed.connect(self._add_clue)
+        self.cancel_clue_edit_button.clicked.connect(self._cancel_clue_edit)
         self.remove_clue_button.clicked.connect(self._remove_selected_clue)
         self.clue_list.itemChanged.connect(self._clue_item_changed)
+        self.clue_list.currentRowChanged.connect(self._select_clue)
         self.save_button.clicked.connect(self.save_requested.emit)
         self.load_button.clicked.connect(self.load_requested.emit)
         self.new_button.clicked.connect(self.new_requested.emit)
@@ -186,8 +256,14 @@ class CaseContextPanel(QGroupBox):
             self.changed.emit()
 
     def _add_clue(self) -> None:
+        """Add a new clue, or save the selected one when a clue is being edited."""
         text = self.clue_text.text().strip()
-        if not text or self.clue_list.count() >= 20:
+        if not text:
+            return
+        if self._editing_clue_row() is not None:
+            self._save_clue_edit(text)
+            return
+        if self.clue_list.count() >= 20:
             return
         clue = AnalysisClue(
             clue_id=f"clue-{uuid4().hex[:12]}",
@@ -200,6 +276,56 @@ class CaseContextPanel(QGroupBox):
         self.clue_text.clear()
         self._update_clue_count()
         self.changed.emit()
+
+    def _editing_clue_row(self) -> int | None:
+        row = self.clue_list.currentRow()
+        return row if row >= 0 and self.clue_list.item(row).isSelected() else None
+
+    def _select_clue(self, row: int) -> None:
+        """Fill the input row from the chosen clue so its text, source and certainty can change."""
+        item = self.clue_list.item(row) if row >= 0 else None
+        clue = item.data(Qt.ItemDataRole.UserRole) if item is not None else None
+        editing = isinstance(clue, AnalysisClue)
+        if editing:
+            self.clue_text.setText(clue.text)
+            self._set_combo_value(self.clue_source, clue.source)
+            self._set_combo_value(self.clue_certainty, clue.certainty)
+        else:
+            self.clue_text.clear()
+        self.add_clue_button.setText("변경 저장" if editing else "단서 추가")
+        self.cancel_clue_edit_button.setVisible(editing)
+        self.clue_edit_label.setVisible(editing)
+        self.clue_use.setEnabled(not editing and self._editing_enabled)
+
+    def _save_clue_edit(self, text: str) -> None:
+        row = self.clue_list.currentRow()
+        item = self.clue_list.item(row)
+        clue = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(clue, AnalysisClue):
+            return
+        # Same clue ID; analysis use stays whatever the list check box says.
+        updated = replace(
+            clue,
+            text=text,
+            source=self.clue_source.currentData(),
+            certainty=self.clue_certainty.currentData(),
+            use_for_analysis=item.checkState() == Qt.CheckState.Checked,
+        )
+        self.clue_list.blockSignals(True)
+        try:
+            item.setData(Qt.ItemDataRole.UserRole, updated)
+            item.setText(self._clue_text(updated))
+        finally:
+            self.clue_list.blockSignals(False)
+        self.clue_list.doItemsLayout()
+        self._cancel_clue_edit()
+        self._update_clue_count()
+        self.changed.emit()
+
+    def _cancel_clue_edit(self) -> None:
+        self.clue_list.clearSelection()
+        self.clue_list.setCurrentRow(-1)
+        self._select_clue(-1)
 
     def _append_clue(self, clue: AnalysisClue) -> None:
         item = QListWidgetItem(self._clue_text(clue))
@@ -215,6 +341,7 @@ class CaseContextPanel(QGroupBox):
         if row < 0:
             return
         self.clue_list.takeItem(row)
+        self._cancel_clue_edit()
         self._update_clue_count()
         self.changed.emit()
 
@@ -237,15 +364,17 @@ class CaseContextPanel(QGroupBox):
 
     @staticmethod
     def _clue_text(clue: AnalysisClue) -> str:
-        state = "분석 사용" if clue.use_for_analysis else "관리만"
+        """Plain text for screen readers; the list draws the two-line form itself."""
+        unused = ", 분석에 사용 안 함" if not clue.use_for_analysis else ""
         return (
-            f"[{state}] {clue.text} · {_SOURCE_LABELS[clue.source]} · "
-            f"{_CERTAINTY_LABELS[clue.certainty]}"
+            f"{clue.text} — 출처 {_SOURCE_LABELS[clue.source]}, "
+            f"확실성 {_CERTAINTY_LABELS[clue.certainty]}{unused}"
         )
 
     def _update_clue_count(self) -> None:
-        count = sum(item.use_for_analysis for item in self.clues())
-        self.clue_count_label.setText(f"분석 사용 단서: {count}개")
+        clues = self.clues()
+        count = sum(item.use_for_analysis for item in clues)
+        self.clue_count_label.setText(f"분석 사용 {count} / 전체 {len(clues)}")
 
     def clues(self) -> tuple[AnalysisClue, ...]:
         values: list[AnalysisClue] = []
@@ -283,6 +412,7 @@ class CaseContextPanel(QGroupBox):
             )
             self.notes_edit.setPlainText(record.management_notes)
             self.clue_list.clear()
+            self._cancel_clue_edit()
             for clue in record.clues:
                 self._append_clue(clue)
             link = next(
@@ -369,8 +499,10 @@ class CaseContextPanel(QGroupBox):
             self.clue_certainty,
             self.clue_use,
             self.add_clue_button,
+            self.cancel_clue_edit_button,
             self.remove_clue_button,
             self.clue_list,
         ):
             widget.setEnabled(enabled)
+        self.clue_use.setEnabled(enabled and self._editing_clue_row() is None)
         self._update_camera_fields()

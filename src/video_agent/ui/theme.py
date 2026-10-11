@@ -34,6 +34,8 @@ NAVY = "#14284b"
 SUCCESS = "#1f6b3a"
 DANGER = "#bd2c0f"
 WARNING_TEXT = "#8a4b00"
+# Status dot for "추정", as on the demo page.
+WARNING_DOT = "#d97a00"
 
 _BANNERS = {
     "sample": "background:#fff0d7;color:#813f00;border:1px solid #e6a654;",
@@ -130,6 +132,11 @@ def build_stylesheet(scaled: Callable[[int], int], font_point_size: float) -> st
     QPushButton#stepButton:checked {{ color: {PRIMARY}; font-weight: 700; background: transparent; }}
 
     QLabel#fieldLabel {{ color: {TEXT_SUB}; }}
+    QLabel#subsectionTitle {{ font-size: {s(14)}px; font-weight: 600; color: #33363d; }}
+    QLabel#subsectionAside {{ font-size: {s(12)}px; color: {TEXT_MUTED}; }}
+    QLabel#subsectionHelp {{ color: {TEXT_MUTED}; }}
+    QFrame#sectionDivider {{ background: {LINE}; border: none; min-height: 1px; max-height: 1px; }}
+    QWidget#clueEditor QLineEdit, QWidget#clueEditor QComboBox {{ min-height: {s(26)}px; }}
     QTabBar#cameraTabs::tab {{ background: transparent; color: {TEXT_SUB}; border: none;
                                border-bottom: 2px solid transparent;
                                padding: {s(4)}px {s(10)}px; margin-right: {s(2)}px; }}

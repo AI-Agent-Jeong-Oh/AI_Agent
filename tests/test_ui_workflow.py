@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QApplication, QLineEdit, QListWidgetItem
 from video_agent.contracts import (
     AnalysisJob,
     AnalysisMode,
+    InformationCertainty,
     JobStatus,
     MotionProposal,
     MotionScanProfile,
@@ -20,6 +21,7 @@ from video_agent.contracts import (
     SamplingStrategy,
     Segment,
 )
+from video_agent.agent.planning import WorkflowState
 from video_agent.models.config import RuntimeInventory
 from video_agent.storage.json_store import AppSettings
 from video_agent.ui.main_window import MainWindow
@@ -129,6 +131,33 @@ class UiWorkflowTests(unittest.TestCase):
 
         self.assertFalse(self.window._run_button.isEnabled())
         self.assertIsNone(self.window._session.analysis_approval)
+
+    def test_editing_clue_certainty_keeps_it_in_plan_and_requires_reapproval(self) -> None:
+        panel = self.window._case_panel
+        panel.clue_text.setText("신고자는 문 앞 상자가 사라졌다고 설명함")
+        panel.clue_certainty.setCurrentIndex(
+            panel.clue_certainty.findData(InformationCertainty.CONFIRMED)
+        )
+        panel.add_clue_button.click()
+        self.window._purpose_edit.setPlainText(
+            "사람이 문 앞 상자를 들어 이동시키는 장면 후보 찾기"
+        )
+        self.window._make_plan()
+        self.window._approve_plan()
+        self.assertTrue(self.window._run_button.isEnabled())
+
+        panel.clue_list.setCurrentRow(0)
+        panel.clue_certainty.setCurrentIndex(
+            panel.clue_certainty.findData(InformationCertainty.ESTIMATED)
+        )
+        panel.add_clue_button.click()
+
+        self.assertFalse(self.window._run_button.isEnabled())
+        self.assertIsNone(self.window._session.analysis_approval)
+        self.window._make_plan()
+        (clue,) = self.window._session.plan.analysis_clues
+        self.assertIs(clue.certainty, InformationCertainty.ESTIMATED)
+        self.assertIn("문 앞 상자가 사라졌다고 설명함", self.window._plan_view.toPlainText())
 
     def test_analysis_panel_preserves_readable_motion_and_plan_areas(self) -> None:
         self.assertGreaterEqual(self.window._motion_list.minimumHeight(), 120)
@@ -706,6 +735,125 @@ class UiWorkflowTests(unittest.TestCase):
 
         self.assertEqual(self.window._motion_list.count(), 0)
         self.assertFalse(self.window._motion_apply_button.isEnabled())
+
+    def finish_run(
+        self,
+        start: float = 2.0,
+        end: float = 5.0,
+        *,
+        status: JobStatus = JobStatus.COMPLETED,
+        origin: ResultOrigin = ResultOrigin.TEST_DOUBLE,
+        segments: tuple[Segment, ...] = (),
+    ) -> None:
+        """Approve a plan for the range and deliver a crafted result for it."""
+        window = self.window
+        window._range_start.setValue(start)
+        window._range_end.setValue(end)
+        window._purpose_edit.setPlainText("출입문 앞에 사람이 30초 이상 머무르는 장면 후보 찾기")
+        window._make_plan()
+        window._approve_plan()
+        request = window._session.create_request(str(self.video), f"job-{start}-{end}")
+        sample = origin is ResultOrigin.SAMPLE
+        job = AnalysisJob(
+            job_id=request.job_id,
+            plan_id=request.plan_id,
+            status=status,
+            progress=None if status is JobStatus.PARTIAL else 100,
+            video_id="video-ui",
+            mode=AnalysisMode.SAMPLE if sample else AnalysisMode.LOCAL,
+            model_id=None if sample else "fake-vlm",
+            is_sample=sample,
+            origin=origin,
+            purpose=request.purpose,
+            range_start_sec=start,
+            range_end_sec=end,
+            requested_frame_count=12,
+            analyzed_frame_count=6 if status is JobStatus.PARTIAL else 12,
+            error="2번째 배치 시간 초과" if status is JobStatus.PARTIAL else None,
+            segments=segments,
+        )
+        window._on_analysis_result(job)
+
+    def expansion_shown(self) -> bool:
+        return not self.window._expansion_frame.isHidden()
+
+    def test_empty_result_over_part_of_video_proposes_expansion_without_running(self) -> None:
+        self.finish_run(2.0, 5.0)
+
+        self.assertTrue(self.expansion_shown())
+        text = self.window._expansion_label.text()
+        self.assertIn("분석 범위 00:02–00:05(영상 00:10 중 00:03)에서 후보를 찾지 못했습니다.", text)
+        self.assertIn("프레임 사이 간격이 넓어집니다", text)
+        self.assertEqual(self.window._session.state, WorkflowState.EXPANSION_PROPOSED)
+
+        self.window._expansion_apply_button.click()
+
+        self.assertFalse(self.expansion_shown())
+        self.assertEqual(self.window._range_start.value(), 0)
+        self.assertEqual(self.window._range_end.value(), 0)  # "영상 끝"
+        self.assertIsNone(self.window._session.plan)
+        self.assertIsNone(self.window._session.analysis_approval)
+        self.assertFalse(self.window._approve_button.isEnabled())
+        self.assertFalse(self.window._run_button.isEnabled())
+        self.assertIsNone(self.window._worker)
+        self.assertIsNone(self.window._session.active_job_id)
+        self.assertEqual(self.window._step_stack.currentIndex(), 1)
+        self.assertIn("다시 만들고 승인해야 실행됩니다", self.window._status_label.text())
+
+    def test_empty_result_from_motion_windows_proposes_expansion(self) -> None:
+        self.window._applied_motion_proposals = (
+            MotionProposal(
+                proposal_id="motion-1",
+                video_id="video-ui",
+                start_sec=2.0,
+                end_sec=8.0,
+                peak_timestamp_sec=5.0,
+                motion_score=4.2,
+                recommended_sampling_interval_sec=0.5,
+            ),
+        )
+        # Set after the range change, which clears applied proposals.
+        with patch.object(self.window, "_range_changed", self.window._inputs_changed):
+            self.finish_run(0.0, 10.0)
+
+        self.assertTrue(self.expansion_shown())
+        self.assertIn("선택한 움직임 후보 1개 구간", self.window._expansion_label.text())
+
+    def test_no_expansion_when_widening_would_not_help(self) -> None:
+        candidate = Segment(
+            video_id="video-ui",
+            start_sec=3.0,
+            end_sec=4.0,
+            summary="사람이 문 앞에 서 있음",
+            evidence=("3.5초 프레임에서 관찰됨",),
+            uncertainty="원본 확인 필요",
+            source_frame_ids=("video-ui:3500",),
+            source_timestamps_sec=(3.5,),
+        )
+        cases = {
+            "whole video": dict(start=0.0, end=10.0),
+            "candidates found": dict(segments=(candidate,)),
+            "partial": dict(status=JobStatus.PARTIAL),
+            "sample": dict(origin=ResultOrigin.SAMPLE),
+        }
+        for name, changes in cases.items():
+            with self.subTest(name):
+                self.window._session = type(self.window._session)()
+                with patch.object(self.window, "_show_error"):
+                    self.finish_run(**{"start": 2.0, "end": 5.0, **changes})
+                self.assertFalse(self.expansion_shown())
+
+    def test_expansion_closes_on_dismiss_or_input_change_only(self) -> None:
+        self.finish_run(2.0, 5.0)
+        self.window._inputs_changed()  # unrelated refresh with the same inputs
+        self.assertTrue(self.expansion_shown())
+        self.window._expansion_close_button.click()
+        self.assertFalse(self.expansion_shown())
+
+        self.finish_run(3.0, 6.0)
+        self.assertTrue(self.expansion_shown())
+        self.window._purpose_edit.setPlainText("주차 차량 주변의 쓰러짐 장면 후보 찾기")
+        self.assertFalse(self.expansion_shown())
 
 
 if __name__ == "__main__":
