@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFontInfo
 from PySide6.QtWidgets import QApplication, QLineEdit, QListWidgetItem
 
 from video_agent.contracts import (
@@ -159,6 +160,51 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertIs(clue.certainty, InformationCertainty.ESTIMATED)
         self.assertIn("문 앞 상자가 사라졌다고 설명함", self.window._plan_view.toPlainText())
 
+    def test_status_line_shows_only_mode_and_selected_model(self) -> None:
+        self.window._runtime_inventory = RuntimeInventory(
+            "/opt/homebrew/bin/ollama",
+            ("qwen3-vl:8b-instruct", "qwen3-vl:4b-instruct", "kimi-k3:cloud"),
+            None,
+            None,
+            ("qwen3-vl:8b-instruct", "qwen3-vl:4b-instruct", "kimi-k3:cloud"),
+        )
+        self.window._mode_combo.setCurrentIndex(self.window._mode_combo.findData(AnalysisMode.LOCAL))
+        self.window._model_edit.setText("qwen3-vl:8b-instruct")
+        banner = self.window._mode_banner
+        self.assertEqual(banner.text(), "로컬 AI 분석 · Qwen3-VL 8B")
+        self.assertNotIn("4b", banner.text())
+        self.assertNotIn("자동 외부 전환", banner.text())
+        self.assertIn("자동 전환하지 않습니다", banner.toolTip())
+
+        self.window._model_edit.setText("qwen3-vl:4b-instruct")
+        self.assertEqual(banner.text(), "로컬 AI 분석 · Qwen3-VL 4B")
+        self.window._model_edit.setText("kimi-k3:cloud")
+        self.assertEqual(banner.text(), "클라우드 AI 분석 · Kimi-K3")
+        self.assertIn("외부 서버", banner.toolTip())
+
+        self.window._mode_combo.setCurrentIndex(
+            self.window._mode_combo.findData(AnalysisMode.EXTERNAL)
+        )
+        self.window._model_edit.setText("gpt-vision-test")
+        self.assertEqual(banner.text(), "OpenAI API 분석 · gpt-vision-test")
+        self.assertIn("외부 전송 승인", banner.toolTip())
+        self.window._mode_combo.setCurrentIndex(self.window._mode_combo.findData(AnalysisMode.SAMPLE))
+        self.assertEqual(banner.text(), "샘플 결과 — 실제 AI 분석 아님")
+
+    def test_step_indicator_is_compact_and_names_each_state(self) -> None:
+        self.window.resize(1440, 900)
+        self.window.show()
+        self.window._show_step(1)
+        self.app.processEvents()
+        indicator = self.window._step_indicator
+        self.assertLessEqual(indicator.height(), 48)
+        self.assertEqual(
+            [button.accessibleDescription() for button in self.window._step_buttons],
+            ["지난 단계", "현재 단계", "다음 단계"],
+        )
+        centers = [button.geometry().center().x() for button in self.window._step_buttons]
+        self.assertLessEqual(centers[-1] - centers[0], 2 * 260)
+
     def test_analysis_panel_preserves_readable_motion_and_plan_areas(self) -> None:
         self.assertGreaterEqual(self.window._motion_list.minimumHeight(), 120)
         self.assertGreaterEqual(self.window._plan_view.minimumHeight(), 140)
@@ -166,16 +212,16 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertIs(self.window._step_scrolls[1].widget(), self.window._plan_group.parentWidget())
 
     def test_ui_zoom_scales_controls_and_is_bounded(self) -> None:
-        base_size = self.window.font().pointSizeF()
-        card_text_size = self.window._metadata_label.font().pointSizeF()
+        base_size = QFontInfo(self.window.font()).pixelSize()
+        card_text_size = QFontInfo(self.window._metadata_label.font()).pixelSize()
 
         self.window._set_ui_zoom(130)
         self.app.processEvents()
-        self.assertGreater(self.window._metadata_label.font().pointSizeF(), card_text_size)
+        self.assertGreater(QFontInfo(self.window._metadata_label.font()).pixelSize(), card_text_size)
 
         self.assertEqual(self.window._ui_zoom_percent, 130)
         self.assertEqual(self.window._zoom_reset_button.text(), "130%")
-        self.assertGreater(self.window.font().pointSizeF(), base_size)
+        self.assertGreater(QFontInfo(self.window.font()).pixelSize(), base_size)
         self.assertGreaterEqual(self.window._motion_list.minimumHeight(), 166)
 
         self.window._set_ui_zoom(999)
@@ -187,7 +233,7 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertFalse(self.window._zoom_out_button.isEnabled())
 
         self.window._set_ui_zoom(100)
-        self.assertEqual(self.window.font().pointSizeF(), base_size)
+        self.assertEqual(QFontInfo(self.window.font()).pixelSize(), base_size)
 
     def test_vague_duration_purpose_requires_a_time_threshold(self) -> None:
         self.window._purpose_edit.setPlainText("출입문 앞에 사람이 오래 머무르는 장면 후보 찾기")

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QStyleOptionViewItem
 
 from video_agent.contracts import (
@@ -123,7 +124,8 @@ class CaseClueTests(unittest.TestCase):
         self.panel.set_record(CaseRecord(case_id="case-1", revision=1, title="사건", clues=(stored,)))
         self.assertEqual(self.panel.clues(), (stored,))
         self.assertIn("저장된 단서", self.panel.clue_list.item(0).text())
-        self.assertIn("분석에 사용 안 함", self.panel.clue_list.item(0).text())
+        self.assertIn("출처: 사용자 진술, 확실성: 미확인", self.panel.clue_list.item(0).text())
+        self.assertEqual(self.panel.clue_list.item(0).checkState(), Qt.CheckState.Unchecked)
 
         self.panel.clue_list.setCurrentRow(0)
         self.assertEqual(self.panel.clue_source.currentData(), ClueSource.USER_STATEMENT)
@@ -149,6 +151,39 @@ class CaseClueTests(unittest.TestCase):
         long_height = delegate.sizeHint(option, clue_list.model().index(1, 0)).height()
         self.assertGreater(long_height, short_height)
         self.assertEqual(clue_list.horizontalScrollBar().maximum(), 0)
+
+    def test_only_the_check_box_beside_the_first_line_toggles_analysis_use(self) -> None:
+        self.add(LONG_CLUE)
+        self.panel.show()
+        self.app.processEvents()
+        clue_list = self.panel.clue_list
+        item = clue_list.item(0)
+        option = QStyleOptionViewItem()
+        clue_list.initViewItemOption(option)
+        option.rect = clue_list.visualItemRect(item)
+        delegate = clue_list.itemDelegate()
+        check_rect = delegate._layout(option, clue_list.model().index(0, 0), item.data(Qt.ItemDataRole.UserRole))[3]
+        # Beside the first line, not centred on the wrapped row.
+        self.assertLess(check_rect.center().y(), option.rect.center().y())
+
+        QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=check_rect.center())
+        self.assertFalse(self.panel.clues()[0].use_for_analysis)
+        text_point = option.rect.center() + QPoint(80, 0)
+        QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=text_point)
+        self.assertFalse(self.panel.clues()[0].use_for_analysis)
+        QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=check_rect.center())
+        self.assertTrue(self.panel.clues()[0].use_for_analysis)
+
+    def test_row_shows_labelled_source_and_certainty_without_use_words(self) -> None:
+        self.add("관리용 단서", ClueSource.REPORT, InformationCertainty.ESTIMATED, use=False)
+        clue_list = self.panel.clue_list
+        option = QStyleOptionViewItem()
+        clue_list.initViewItemOption(option)
+        clue = clue_list.item(0).data(Qt.ItemDataRole.UserRole)
+        text = clue_list.itemDelegate().document(option, clue, 400).toPlainText()
+        self.assertIn("출처: 신고·보고", text)
+        self.assertIn("확실성: ● 추정", text.replace("\xa0", " "))
+        self.assertNotIn("분석", text.split("\n", 1)[1])
 
     def test_no_bracketed_state_text_in_rows(self) -> None:
         self.add("단서", use=True)

@@ -7,6 +7,7 @@ horizontal scroll bar when the panel is narrow or the UI is zoomed.
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
+from PySide6.QtGui import QResizeEvent
 from PySide6.QtWidgets import QLayout, QLayoutItem, QWidget
 
 
@@ -72,3 +73,26 @@ class FlowLayout(QLayout):
             x += hint.width() + spacing
             line_height = max(line_height, hint.height())
         return y + line_height - rect.y() + margins.bottom()
+
+
+class FlowRow(QWidget):
+    """Widget holding a FlowLayout whose minimum height follows its wrapped height.
+
+    Qt sizes forms and scroll pages from minimum sizes, which ignore wrapping, so a row
+    that wrapped at a large zoom overlapped the rows below it.
+    """
+
+    def __init__(self, spacing: int = 6) -> None:
+        super().__init__()
+        self.flow = FlowLayout(self, spacing=spacing)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        hint = super().minimumSizeHint()
+        if self.width() > 0:
+            hint.setHeight(max(hint.height(), self.flow.heightForWidth(self.width())))
+        return hint
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        if event.oldSize().width() != event.size().width():
+            self.updateGeometry()

@@ -92,14 +92,14 @@ class ResultSummaryDialog(QDialog):
         self.warning_label = QLabel()
         self.warning_label.setWordWrap(True)
         self.warning_label.setStyleSheet(
-            theme.banner_style("running") + "padding:6px;border-radius:5px;"
+            theme.banner_style("warning") + "padding:6px;border-radius:5px;"
         )
         note = QLabel(
             "저장된 분석 결과와 검토 기록으로 만든 초안입니다. 문구를 고칠 수 있으며, "
             "고친 문구는 앱에 저장되지 않고 내보낸 파일에만 남습니다."
         )
         note.setWordWrap(True)
-        note.setStyleSheet(f"color:{theme.TEXT_MUTED};")
+        note.setStyleSheet(f"color:{theme.TEXT_SUB};")
         layout.addWidget(self.banner_label)
         layout.addWidget(self.warning_label)
         layout.addWidget(note)

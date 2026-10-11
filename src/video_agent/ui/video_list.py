@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from video_agent.contracts import InformationCertainty
@@ -91,6 +92,7 @@ class CaseVideoList(QGroupBox):
         footer.addWidget(self.relink_button)
         footer.addWidget(self.remove_button)
         layout.addLayout(footer)
+        self._layout = layout
 
         self.add_button.clicked.connect(self.add_requested.emit)
         self.list.currentItemChanged.connect(self._current_changed)
@@ -98,6 +100,10 @@ class CaseVideoList(QGroupBox):
         self.relink_button.clicked.connect(self._emit_relink)
         self.remove_button.clicked.connect(self._emit_remove)
         self._update_buttons()
+
+    def add_detail_widget(self, widget: QWidget) -> None:
+        """Show per-video fields (camera details) under the list, above the file actions."""
+        self._layout.insertWidget(self._layout.count() - 1, widget)
 
     def apply_scale(self, scaled) -> None:
         self.list.setMinimumHeight(scaled(64))

@@ -38,7 +38,7 @@ from video_agent.contracts import (
     Segment,
 )
 from video_agent.ui import theme
-from video_agent.ui.flow_layout import FlowLayout
+from video_agent.ui.flow_layout import FlowLayout, FlowRow
 from video_agent.video.files import format_milliseconds, seconds_to_milliseconds
 
 
@@ -208,12 +208,15 @@ class CandidateReviewPanel(QWidget):
         layout.addWidget(detail_label)
         layout.addWidget(self.detail_view, 1)
 
-        playback_row = QHBoxLayout()
-        playback_row.setSpacing(0)
+        # Wraps at large zoom; the window adds its playback help mark at the end.
+        self.playback_row = FlowRow(spacing=8)
         playback_label = QLabel("주변 구간 재생")
         playback_label.setObjectName("fieldLabel")
-        playback_row.addWidget(playback_label)
-        playback_row.addStretch(1)
+        self.playback_row.flow.addWidget(playback_label)
+        segments = QWidget()
+        segment_layout = QHBoxLayout(segments)
+        segment_layout.setContentsMargins(0, 0, 0, 0)
+        segment_layout.setSpacing(0)
         self.playback_buttons: list[QPushButton] = []
         for position, (label, padding) in enumerate(PLAYBACK_RANGES):
             button = QPushButton(label)
@@ -226,9 +229,10 @@ class CandidateReviewPanel(QWidget):
             button.clicked.connect(
                 lambda _checked=False, value=padding: self._request_playback(value)
             )
-            playback_row.addWidget(button)
+            segment_layout.addWidget(button)
             self.playback_buttons.append(button)
-        layout.addLayout(playback_row)
+        self.playback_row.flow.addWidget(segments)
+        layout.addWidget(self.playback_row)
 
         record_group = QFrame()
         record_group.setObjectName("reviewCard")
@@ -266,8 +270,9 @@ class CandidateReviewPanel(QWidget):
         record_layout.setContentsMargins(12, 8, 12, 8)
         card_layout.addWidget(body)
         self._record_layout = record_layout
-        judgement_row = QHBoxLayout()
-        judgement_row.setSpacing(6)
+        # Wraps to two lines at large zoom instead of widening the panel.
+        judgement_row = FlowRow(spacing=6)
+        judgement_row.setAccessibleName("판단")
         self.judgement_group = QButtonGroup(self)
         self.judgement_buttons: dict[ReviewJudgement, QRadioButton] = {}
         for judgement in ReviewJudgement:
@@ -278,7 +283,7 @@ class CandidateReviewPanel(QWidget):
             )
             self.judgement_group.addButton(button)
             self.judgement_buttons[judgement] = button
-            judgement_row.addWidget(button, 1)
+            judgement_row.flow.addWidget(button)
         self.memo_edit = _CompactTextView()
         self.memo_edit.setPlaceholderText("원본에서 확인한 내용·제외 사유 등")
         self.memo_edit.setAccessibleName("검토 메모")
@@ -320,6 +325,9 @@ class CandidateReviewPanel(QWidget):
             "검토를 마친 시각과 확인 시간을 기록합니다. 완료 후에도 수정할 수 있습니다."
         )
         self.summary_button = QPushButton("결과 요약")
+        # Dense review card: KRDS xsmall buttons keep the step on one screen.
+        for button in (self.save_button, self.revert_button, self.complete_button, self.summary_button):
+            theme.mark_compact(button)
         self.summary_button.setToolTip("저장된 검토 기록으로 결과 요약 초안을 엽니다")
         completion_row.addStretch(1)
         completion_row.addWidget(self.completion_label)
@@ -345,6 +353,12 @@ class CandidateReviewPanel(QWidget):
         self.detail_view.setMinimumHeight(scaled(72))
         self.memo_edit.setMinimumHeight(scaled(48))
         self.memo_edit.setMaximumHeight(scaled(110))
+        # Labels in the wrapping playback row line up with the 32px buttons beside them.
+        for index in range(self.playback_row.flow.count()):
+            widget = self.playback_row.flow.itemAt(index).widget()
+            if isinstance(widget, QLabel):
+                widget.setMinimumHeight(scaled(32))
+                widget.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
 
     # ----- job / message display -------------------------------------------------
 

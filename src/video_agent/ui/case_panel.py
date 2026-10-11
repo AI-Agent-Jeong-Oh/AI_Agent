@@ -31,7 +31,10 @@ from video_agent.contracts import (
     ClueSource,
     InformationCertainty,
 )
+from video_agent.ui import theme
 from video_agent.ui.clue_delegate import ClueItemDelegate
+from video_agent.ui.flow_layout import FlowRow
+from video_agent.ui.wrap_label import WrapLabel
 
 
 _CERTAINTY_LABELS = {
@@ -69,23 +72,31 @@ class CaseContextPanel(QGroupBox):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        help_label = QLabel(
+        help_label = WrapLabel(
             "사건명·유형·관리 메모는 저장용이며 모델에 보내지 않습니다. "
             "아래 단서 중 '분석 사용'으로 체크한 항목만 계획에 포함됩니다. "
             "사전 정보는 영상에서 확인된 사실이 아닙니다."
         )
-        help_label.setWordWrap(True)
         layout.addWidget(help_label)
 
         saved_row = QHBoxLayout()
         self.saved_cases = QComboBox()
-        self.load_button = QPushButton("선택 사건 불러오기")
+        self.load_button = QPushButton("불러오기")
+        self.load_button.setToolTip("선택한 저장 사건을 불러옵니다")
+        self.load_button.setAccessibleName("선택 사건 불러오기")
         self.new_button = QPushButton("새 사건")
         self.save_button = QPushButton("사건 저장")
         saved_row.addWidget(self.saved_cases, 1)
         saved_row.addWidget(self.load_button)
         saved_row.addWidget(self.new_button)
         saved_row.addWidget(self.save_button)
+        for button in (self.load_button, self.new_button, self.save_button):
+            theme.mark_compact(button)
+        self.saved_cases.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.saved_cases.setMinimumContentsLength(4)
+        self.saved_cases.setAccessibleName("저장된 사건")
         layout.addLayout(saved_row)
 
         form = QFormLayout()
@@ -104,31 +115,47 @@ class CaseContextPanel(QGroupBox):
         occurrence_row.addWidget(self.occurrence_certainty)
         self.notes_edit = QPlainTextEdit()
         self.notes_edit.setPlaceholderText("담당자·관리 메모 등 · 모델에는 전송하지 않음")
-        # Fixed so the clue list, not the memo, gives way when the step is short.
-        self.notes_edit.setFixedHeight(70)
+        # Two lines; fixed so the clue list, not the memo, gives way when the step is short.
+        self.notes_edit.setFixedHeight(64)
         form.addRow("사건명", self.title_edit)
         form.addRow("사건 유형", self.type_edit)
         form.addRow("발생 시각", occurrence_widget)
         form.addRow("관리 메모", self.notes_edit)
         layout.addLayout(form)
 
-        video_form = QFormLayout()
+        # Camera details belong to the open video, so the CCTV card shows this row under
+        # its list (see camera_fields); the panel still owns the values and signals.
         self.camera_location_edit = QLineEdit()
         self.camera_location_edit.setPlaceholderText("예: 공동현관 앞 CCTV")
-        clock_widget = QWidget()
-        clock_row = QHBoxLayout(clock_widget)
-        clock_row.setContentsMargins(0, 0, 0, 0)
+        self.camera_location_edit.setAccessibleName("카메라 위치")
+        self.camera_location_edit.setMinimumWidth(200)
         self.clock_offset = QDoubleSpinBox()
         self.clock_offset.setRange(-86400.0, 86400.0)
         self.clock_offset.setDecimals(1)
         self.clock_offset.setSuffix(" 초")
+        self.clock_offset.setAccessibleName("카메라 시각 오차")
         self.clock_certainty = QComboBox()
+        self.clock_certainty.setAccessibleName("카메라 시각 확실성")
         self._add_certainty_items(self.clock_certainty)
+        self.camera_fields = FlowRow(spacing=12)
+        self.camera_fields.setAccessibleName("선택한 영상의 카메라 정보")
+        location_group = QWidget()
+        location_row = QHBoxLayout(location_group)
+        location_row.setContentsMargins(0, 0, 0, 0)
+        location_label = QLabel("카메라 위치")
+        location_label.setObjectName("fieldLabel")
+        location_row.addWidget(location_label)
+        location_row.addWidget(self.camera_location_edit)
+        clock_group = QWidget()
+        clock_row = QHBoxLayout(clock_group)
+        clock_row.setContentsMargins(0, 0, 0, 0)
+        clock_label = QLabel("시각 오차")
+        clock_label.setObjectName("fieldLabel")
+        clock_row.addWidget(clock_label)
         clock_row.addWidget(self.clock_offset)
         clock_row.addWidget(self.clock_certainty)
-        video_form.addRow("카메라 위치", self.camera_location_edit)
-        video_form.addRow("카메라 시각 오차", clock_widget)
-        layout.addLayout(video_form)
+        self.camera_fields.flow.addWidget(location_group)
+        self.camera_fields.flow.addWidget(clock_group)
 
         divider = QFrame()
         divider.setObjectName("sectionDivider")
@@ -136,18 +163,19 @@ class CaseContextPanel(QGroupBox):
         title_row = QHBoxLayout()
         clue_title = QLabel("분석 단서")
         clue_title.setObjectName("subsectionTitle")
-        clue_aside = QLabel("체크한 단서만 분석 계획과 모델 입력에 포함")
+        clue_aside = WrapLabel("체크한 단서만 분석 계획과 모델 입력에 포함")
         clue_aside.setObjectName("subsectionAside")
         title_row.addWidget(clue_title)
         title_row.addSpacing(8)
-        title_row.addWidget(clue_aside, 0, Qt.AlignmentFlag.AlignBottom)
-        title_row.addStretch(1)
+        title_row.addWidget(clue_aside, 1, Qt.AlignmentFlag.AlignBottom)
+        self.clue_count_label = QLabel("분석 사용 0 / 전체 0")
+        self.clue_count_label.setObjectName("subsectionAside")
+        title_row.addWidget(self.clue_count_label, 0, Qt.AlignmentFlag.AlignBottom)
         layout.addLayout(title_row)
-        clue_help = QLabel(
+        clue_help = WrapLabel(
             "데이터셋 폴더명·라벨 정답을 복사하지 말고, 사용자가 실제로 제공한 정보만 등록하세요."
         )
         clue_help.setObjectName("subsectionHelp")
-        clue_help.setWordWrap(True)
         layout.addWidget(clue_help)
 
         editor = QWidget()
@@ -159,7 +187,7 @@ class CaseContextPanel(QGroupBox):
         self.clue_text.setAccessibleName("단서 문장")
         text_row = QHBoxLayout()
         editor_layout.addLayout(text_row)
-        clue_row = QHBoxLayout()
+        clue_row = FlowRow(spacing=16)
         source_label = QLabel("출처")
         source_label.setObjectName("fieldLabel")
         self.clue_source = QComboBox()
@@ -177,24 +205,29 @@ class CaseContextPanel(QGroupBox):
         self.clue_use.setChecked(True)
         self.cancel_clue_edit_button = QPushButton("선택 해제")
         self.cancel_clue_edit_button.setVisible(False)
+        # Like the demo page: deleting is offered while a clue is selected for editing.
+        self.remove_clue_button = QPushButton("삭제")
+        self.remove_clue_button.setAccessibleName("선택 단서 삭제")
+        self.remove_clue_button.setVisible(False)
         self.add_clue_button = QPushButton("단서 추가")
-        clue_row.addWidget(source_label)
-        clue_row.addWidget(self.clue_source)
-        clue_row.addSpacing(8)
-        clue_row.addWidget(certainty_label)
-        clue_row.addWidget(self.clue_certainty)
-        clue_row.addSpacing(8)
-        clue_row.addWidget(self.clue_use)
-        clue_row.addStretch(1)
+        # Label and choice stay together; the groups wrap at large text sizes.
+        for parts in ((source_label, self.clue_source), (certainty_label, self.clue_certainty)):
+            group = QWidget()
+            group_layout = QHBoxLayout(group)
+            group_layout.setContentsMargins(0, 0, 0, 0)
+            for part in parts:
+                group_layout.addWidget(part)
+            clue_row.flow.addWidget(group)
+        clue_row.flow.addWidget(self.clue_use)
         text_row.addWidget(self.clue_text, 1)
+        text_row.addWidget(self.remove_clue_button)
         text_row.addWidget(self.cancel_clue_edit_button)
         text_row.addWidget(self.add_clue_button)
-        editor_layout.addLayout(clue_row)
-        self.clue_edit_label = QLabel(
+        editor_layout.addWidget(clue_row)
+        self.clue_edit_label = WrapLabel(
             "선택한 단서를 고치는 중 · 분석 사용 여부는 목록의 체크박스로 바꿉니다"
         )
         self.clue_edit_label.setObjectName("subsectionHelp")
-        self.clue_edit_label.setWordWrap(True)
         self.clue_edit_label.setVisible(False)
         editor_layout.addWidget(self.clue_edit_label)
         layout.addWidget(editor)
@@ -216,13 +249,6 @@ class CaseContextPanel(QGroupBox):
         self.clue_list.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self.clue_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         layout.addWidget(self.clue_list, 1)
-        clue_buttons = QHBoxLayout()
-        self.remove_clue_button = QPushButton("선택 단서 삭제")
-        self.clue_count_label = QLabel("분석 사용 0 / 전체 0")
-        clue_buttons.addWidget(self.remove_clue_button)
-        clue_buttons.addStretch()
-        clue_buttons.addWidget(self.clue_count_label)
-        layout.addLayout(clue_buttons)
 
     @staticmethod
     def _add_certainty_items(combo: QComboBox) -> None:
@@ -294,6 +320,7 @@ class CaseContextPanel(QGroupBox):
             self.clue_text.clear()
         self.add_clue_button.setText("변경 저장" if editing else "단서 추가")
         self.cancel_clue_edit_button.setVisible(editing)
+        self.remove_clue_button.setVisible(editing)
         self.clue_edit_label.setVisible(editing)
         self.clue_use.setEnabled(not editing and self._editing_enabled)
 
@@ -364,11 +391,13 @@ class CaseContextPanel(QGroupBox):
 
     @staticmethod
     def _clue_text(clue: AnalysisClue) -> str:
-        """Plain text for screen readers; the list draws the two-line form itself."""
-        unused = ", 분석에 사용 안 함" if not clue.use_for_analysis else ""
+        """Plain text for screen readers; the list draws the two-line form itself.
+
+        Analysis use is the item's check state, which screen readers announce themselves.
+        """
         return (
-            f"{clue.text} — 출처 {_SOURCE_LABELS[clue.source]}, "
-            f"확실성 {_CERTAINTY_LABELS[clue.certainty]}{unused}"
+            f"{clue.text} — 출처: {_SOURCE_LABELS[clue.source]}, "
+            f"확실성: {_CERTAINTY_LABELS[clue.certainty]}"
         )
 
     def _update_clue_count(self) -> None:
