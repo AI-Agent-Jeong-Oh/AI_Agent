@@ -33,6 +33,7 @@ from video_agent.models.config import (
     ModelConfigurationError,
     ProviderConfig,
     RuntimeInventory,
+    find_ollama,
     _detect_ollama_vision_models,
 )
 from video_agent.models.provider import (
@@ -580,6 +581,22 @@ class ProviderAdapterTests(unittest.TestCase):
 
 
 class RuntimeInventoryTests(unittest.TestCase):
+    def test_ollama_is_found_in_homebrew_when_path_is_short(self) -> None:
+        # Apps opened from Finder do not get Homebrew in PATH.
+        with tempfile.TemporaryDirectory() as folder:
+            installed = Path(folder) / "ollama"
+            installed.write_text("")
+            with (
+                patch("video_agent.models.config.shutil.which", return_value=None),
+                patch("video_agent.models.config._OLLAMA_FALLBACKS", (Path(folder) / "none", installed)),
+            ):
+                self.assertEqual(find_ollama(), str(installed))
+            with (
+                patch("video_agent.models.config.shutil.which", return_value=None),
+                patch("video_agent.models.config._OLLAMA_FALLBACKS", (Path(folder) / "none",)),
+            ):
+                self.assertIsNone(find_ollama())
+
     def test_ollama_capability_response_confirms_only_vision_models(self) -> None:
         class Response:
             def __init__(self, body: bytes) -> None:

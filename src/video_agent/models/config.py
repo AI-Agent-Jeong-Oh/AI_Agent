@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
@@ -14,6 +15,18 @@ from video_agent.contracts import AnalysisMode
 
 class ModelConfigurationError(ValueError):
     pass
+
+
+# Apps opened from Finder get a short PATH without Homebrew, so look in its folders too
+# (the same fallback FFmpeg uses in video/probe.py).
+_OLLAMA_FALLBACKS = (Path("/opt/homebrew/bin/ollama"), Path("/usr/local/bin/ollama"))
+
+
+def find_ollama() -> str | None:
+    found = shutil.which("ollama")
+    if found:
+        return found
+    return next((str(path) for path in _OLLAMA_FALLBACKS if path.is_file()), None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +39,7 @@ class RuntimeInventory:
 
     @classmethod
     def detect(cls) -> "RuntimeInventory":
-        executable = shutil.which("ollama")
+        executable = find_ollama()
         model_id = os.environ.get("VIDEO_AGENT_LOCAL_MODEL") or None
         endpoint = os.environ.get("VIDEO_AGENT_LOCAL_ENDPOINT") or None
         installed_models: tuple[str, ...] = ()
