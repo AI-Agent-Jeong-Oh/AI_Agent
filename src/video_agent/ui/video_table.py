@@ -24,6 +24,17 @@ CLOCK_TEXT = {
     InformationCertainty.UNKNOWN: ("미확인", theme.GRAY_40),
 }
 _PADDING_X = 12
+
+
+def offset_text(offset_seconds: float) -> str:
+    return f"오차 {offset_seconds:+.1f}초" if offset_seconds else ""
+
+
+def clock_text(certainty: InformationCertainty, offset_seconds: float) -> str:
+    """Plain text of the clock column (for screen readers and tooltips)."""
+    label = CLOCK_TEXT[InformationCertainty(certainty)][0]
+    offset = offset_text(offset_seconds)
+    return f"{label} · {offset}" if offset else label
 _DOT = 8
 _GAP = 6
 
@@ -66,8 +77,10 @@ class VideoRowDelegate(QStyledItemDelegate):
             self._paint_file(painter, rect, opt.font, entry, bool(index.data(CURRENT_ROLE)))
         elif column == 1:
             text, color = CLOCK_TEXT[entry.clock_certainty]
-            self._paint_dot_lines(painter, rect, opt.font, color, text, "")
-        else:
+            self._paint_dot_lines(
+                painter, rect, opt.font, color, text, offset_text(entry.clock_offset_seconds)
+            )
+        elif column == 2:
             main, _, sub = entry.analysis_status.partition(" · ")
             self._paint_dot_lines(painter, rect, opt.font, status_color(main), main, sub)
         painter.restore()
@@ -158,8 +171,13 @@ class VideoRowDelegate(QStyledItemDelegate):
         metrics = QFontMetrics(option.font)
         small = QFontMetrics(_small(option.font))
         height = row_height(option.font)
+        if index.column() == 3:
+            return QSize(0, height)  # the row's action buttons size this column
         if index.column() == 1:
-            width = _DOT + _GAP + max(metrics.horizontalAdvance(text) for text, _ in CLOCK_TEXT.values())
+            width = _DOT + _GAP + max(
+                max(metrics.horizontalAdvance(text) for text, _ in CLOCK_TEXT.values()),
+                small.horizontalAdvance(offset_text(entry.clock_offset_seconds)),
+            )
         elif index.column() == 2:
             main, _, sub = entry.analysis_status.partition(" · ")
             width = _DOT + _GAP + max(metrics.horizontalAdvance(main), small.horizontalAdvance(sub))

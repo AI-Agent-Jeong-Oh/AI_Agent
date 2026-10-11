@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import time
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -314,7 +315,6 @@ class MainWindow(QMainWindow):
         self._apply_ui_zoom()
         self._restore_settings()
         self._case_panel.set_record(self._case_record)
-        self._case_panel.set_video_open(False)
         self._refresh_case_choices()
         self._set_idle_state()
         self._refresh_saved_results()
@@ -553,7 +553,6 @@ class MainWindow(QMainWindow):
         case_layout = QVBoxLayout(case_page)
         case_layout.setContentsMargins(0, 0, 0, 0)
         self._case_panel = CaseContextPanel()
-        self._video_list.add_detail_widget(self._case_panel.camera_fields)
         # The card fills the step; its clue list takes the spare height and scrolls inside.
         case_layout.addWidget(self._case_panel, 1)
 
@@ -567,9 +566,12 @@ class MainWindow(QMainWindow):
         # How to analyse, in plain words: fast or accurate on this computer, a
         # demonstration, or an external AI service (models stay behind the choices).
         self._analysis_choice = AnalysisChoice()
-        self._model_refresh_button = QPushButton("다시 확인")
+        # Icon only, so the choice beside it keeps its full name in narrow cards.
+        self._model_refresh_button = QPushButton()
+        self._model_refresh_button.setObjectName("rowAction")
+        theme.set_icon(self._model_refresh_button, "refresh-cw")
         self._model_refresh_button.setToolTip("이 컴퓨터에 설치된 AI 분석 프로그램을 다시 찾습니다")
-        theme.mark_compact(self._model_refresh_button)
+        self._model_refresh_button.setAccessibleName("분석 프로그램 다시 찾기")
         choice_row = QWidget()
         choice_row_layout = QHBoxLayout(choice_row)
         choice_row_layout.setContentsMargins(0, 0, 0, 0)
@@ -743,7 +745,7 @@ class MainWindow(QMainWindow):
 
         result_group = Card("중요 구간 후보")
         result_layout = QVBoxLayout(result_group.body)
-        result_layout.setContentsMargins(12, 12, 12, 12)
+        result_layout.setContentsMargins(12, 8, 12, 8)
         help_text = (
             "후보를 선택하면 맥락 확인을 위해 원본 영상이 확인용 범위 시작의 최대 1초 전으로 이동하고, "
             "표시된 근거 범위를 지나 계속 재생합니다. "
@@ -782,6 +784,7 @@ class MainWindow(QMainWindow):
         result_layout.addWidget(self._case_overview)
         result_layout.addLayout(saved_row)
         self._review_panel = CandidateReviewPanel(self._segment_text)
+        result_group.add_header_widget(self._review_panel.completion_bar)
         self._review_panel.playback_row.flow.addWidget(help_label)
         self._result_list = self._review_panel.candidate_list
         self._review_empty_label = QLabel(
@@ -847,6 +850,7 @@ class MainWindow(QMainWindow):
         self._video_list.video_activated.connect(self._activate_listed_video)
         self._video_list.relink_requested.connect(self._relink_video)
         self._video_list.remove_requested.connect(self._remove_video)
+        self._video_list.clock_changed.connect(self._set_video_clock)
         self._camera_tabs.currentChanged.connect(self._camera_tab_changed)
         # A click on the already selected tab still opens its result when none is shown.
         self._camera_tabs.tabBarClicked.connect(self._camera_tab_changed)
@@ -999,7 +1003,7 @@ class MainWindow(QMainWindow):
         self._motion_list.setMaximumHeight(scaled(320))
         self._plan_view.setMinimumHeight(scaled(145))
         self._plan_view.setMaximumHeight(scaled(220))
-        self._case_panel.clue_list.setMinimumHeight(scaled(100))
+        self._case_panel.clue_list.setMinimumHeight(scaled(72))
         self._case_panel.notes_edit.setFixedHeight(scaled(64))
         # Lines up with the 40px choices beside it in the wrapping row.
         self._case_panel.clue_use.setMinimumHeight(scaled(40))
@@ -1115,8 +1119,7 @@ class MainWindow(QMainWindow):
         self._case_saved = True
         self._reset_case_videos(record)
         self._refresh_video_statuses()
-        self._case_panel.set_record(record, self._video_id)
-        self._case_panel.set_video_open(self._video_id is not None)
+        self._case_panel.set_record(record)
         self._refresh_video_list()
         self._inputs_changed()
         self.statusBar().showMessage(
@@ -1136,8 +1139,7 @@ class MainWindow(QMainWindow):
         self._case_saved = False
         self._reset_case_videos(self._case_record)
         self._refresh_video_statuses()
-        self._case_panel.set_record(self._case_record, self._video_id)
-        self._case_panel.set_video_open(self._video_id is not None)
+        self._case_panel.set_record(self._case_record)
         self._refresh_video_list()
         self._inputs_changed()
         self.statusBar().showMessage("새 사건 입력을 시작합니다. 저장 전에도 계획에 단서를 사용할 수 있습니다.", 6000)
@@ -1256,6 +1258,20 @@ class MainWindow(QMainWindow):
         self._refresh_video_list()
         self._switch_to_video(path, video_id)
 
+    def _set_video_clock(
+        self, video_id: str, offset_seconds: float, certainty: InformationCertainty
+    ) -> None:
+        """Each video keeps its own camera clock difference (edited from its table row)."""
+        if self._background_work_running():
+            self._show_error("작업 중에는 시각 오차를 바꿀 수 없습니다.")
+            return
+        self._link_drafts[video_id] = replace(
+            self._link_for(video_id),
+            clock_offset_seconds=offset_seconds,
+            clock_certainty=certainty,
+        )
+        self._case_inputs_changed()
+
     def _remove_video(self, video_id: str) -> None:
         if self._background_work_running():
             self._show_error("작업 중에는 영상을 뺄 수 없습니다.")
@@ -1269,12 +1285,8 @@ class MainWindow(QMainWindow):
         self._inputs_changed()
         self.statusBar().showMessage("사건 목록에서 영상을 뺐습니다. 사건을 저장하면 연결이 끊깁니다.", 6000)
 
-    def _link_for(self, video_id: str, *, from_panel: bool = True) -> CaseVideoLink:
+    def _link_for(self, video_id: str) -> CaseVideoLink:
         """Camera details of a video: unsaved edits first, then the saved case."""
-        if from_panel and video_id == self._video_id:
-            current = self._case_panel.video_link(video_id)
-            if current is not None:
-                return current
         if video_id in self._link_drafts:
             return self._link_drafts[video_id]
         saved = next(
@@ -1347,6 +1359,7 @@ class MainWindow(QMainWindow):
                     camera_location=link.camera_location,
                     duration_seconds=self._video_durations.get(video_id),
                     clock_certainty=link.clock_certainty,
+                    clock_offset_seconds=link.clock_offset_seconds,
                     analysis_status=status,
                     analyzed=analyzed,
                 )
@@ -1531,14 +1544,10 @@ class MainWindow(QMainWindow):
 
     def _open_video(self, path: Path, video_id: str) -> None:
         self._player.stop()
-        if self._video_id is not None and self._video_id != video_id:
-            self._link_drafts[self._video_id] = self._case_panel.video_link(self._video_id)
         self._video_path = path
         self._video_id = video_id
         self._review_video_id = video_id
         self._case_videos[video_id] = path
-        self._case_panel.show_link(self._link_for(video_id, from_panel=False))
-        self._case_panel.set_video_open(True)
         self._metadata = None
         self._duration_ms = 0
         self._metadata_label.setText("영상 정보 확인 중…")
@@ -2274,7 +2283,7 @@ class MainWindow(QMainWindow):
             if model_id:
                 self._show_error(
                     "선택한 분석 방식을 이 컴퓨터에서 쓸 수 없습니다. "
-                    "[다시 확인]을 누르거나 다른 분석 방식을 고르세요."
+                    "분석 방식 옆 새로고침 단추를 누르거나 다른 분석 방식을 고르세요."
                 )
             else:
                 self._show_error(
@@ -2695,6 +2704,7 @@ class MainWindow(QMainWindow):
         has_content = has_job or self._result_list.count() > 0
         self._review_empty_label.setVisible(not has_job)
         self._review_panel.setVisible(has_content)
+        self._review_panel.completion_bar.setVisible(has_job)
         # The trailing stretch keeps the empty state at the top; with a result the
         # review panel takes the spare height instead.
         self._result_layout.setStretch(self._result_layout.count() - 1, 0 if has_content else 1)

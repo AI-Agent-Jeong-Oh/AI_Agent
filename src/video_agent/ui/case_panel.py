@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
 from video_agent.contracts import (
     AnalysisClue,
     CaseRecord,
-    CaseVideoLink,
     ClueSource,
     FocusSituation,
     InformationCertainty,
@@ -73,7 +72,6 @@ class CaseContextPanel(Card):
 
     def __init__(self) -> None:
         super().__init__("사건·사전 정보")
-        self._video_open = False
         self._editing_enabled = True
         self._loading = False
         self._build_ui()
@@ -82,7 +80,7 @@ class CaseContextPanel(Card):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self.body)
-        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setContentsMargins(12, 8, 12, 8)
         # Explanation behind a mark next to the title; loading (with "new case") is one
         # menu beside saving, at the right of the header.
         self.add_header_widget(
@@ -145,30 +143,6 @@ class CaseContextPanel(Card):
         self._form = form
         layout.addLayout(form)
         self._update_admin_rows()
-
-        # Camera details belong to the open video, so the CCTV card shows this row under
-        # its list (see camera_fields); the panel still owns the values and signals.
-        # Camera location is no longer asked for; one saved in an older case is kept.
-        self._camera_location = ""
-        self.clock_offset = QDoubleSpinBox()
-        self.clock_offset.setRange(-86400.0, 86400.0)
-        self.clock_offset.setDecimals(1)
-        self.clock_offset.setSuffix(" 초")
-        self.clock_offset.setAccessibleName("카메라 시각 오차")
-        self.clock_certainty = QComboBox()
-        self.clock_certainty.setAccessibleName("카메라 시각 확실성")
-        self._add_certainty_items(self.clock_certainty)
-        self.camera_fields = FlowRow(spacing=12)
-        self.camera_fields.setAccessibleName("선택한 영상의 카메라 정보")
-        clock_group = QWidget()
-        clock_row = QHBoxLayout(clock_group)
-        clock_row.setContentsMargins(0, 0, 0, 0)
-        clock_label = QLabel("시각 오차")
-        clock_label.setObjectName("fieldLabel")
-        clock_row.addWidget(clock_label)
-        clock_row.addWidget(self.clock_offset)
-        clock_row.addWidget(self.clock_certainty)
-        self.camera_fields.flow.addWidget(clock_group)
 
         focus_divider = QFrame()
         focus_divider.setObjectName("sectionDivider")
@@ -287,8 +261,6 @@ class CaseContextPanel(Card):
             edit.textChanged.connect(self._emit_changed)
         self.notes_edit.textChanged.connect(self._emit_changed)
         self.occurrence_certainty.currentIndexChanged.connect(self._occurrence_certainty_changed)
-        self.clock_offset.valueChanged.connect(self._emit_changed)
-        self.clock_certainty.currentIndexChanged.connect(self._emit_changed)
         self.add_clue_button.clicked.connect(self._add_clue)
         self.clue_text.returnPressed.connect(self._add_clue)
         self.cancel_clue_edit_button.clicked.connect(self._cancel_clue_edit)
@@ -504,17 +476,7 @@ class CaseContextPanel(Card):
                 )
         return tuple(values)
 
-    def video_link(self, video_id: str | None) -> CaseVideoLink | None:
-        if not video_id:
-            return None
-        return CaseVideoLink(
-            video_id=video_id,
-            camera_location=self._camera_location,
-            clock_offset_seconds=self.clock_offset.value(),
-            clock_certainty=self.clock_certainty.currentData(),
-        )
-
-    def set_record(self, record: CaseRecord, video_id: str | None = None) -> None:
+    def set_record(self, record: CaseRecord) -> None:
         self._loading = True
         try:
             self.title_edit.setText(record.title)
@@ -533,37 +495,9 @@ class CaseContextPanel(Card):
             self._cancel_clue_edit()
             for clue in record.clues:
                 self._append_clue(clue)
-            link = next(
-                (item for item in record.video_links if item.video_id == video_id),
-                record.video_links[0] if record.video_links and video_id is None else None,
-            )
-            self._set_video_link(link)
             self._update_clue_count()
         finally:
             self._loading = False
-
-    def show_video_link(self, record: CaseRecord, video_id: str | None) -> None:
-        link = next(
-            (item for item in record.video_links if item.video_id == video_id),
-            None,
-        )
-        self.show_link(link)
-
-    def show_link(self, link: CaseVideoLink | None) -> None:
-        """Show one video's camera details without reporting an edit."""
-        self._loading = True
-        try:
-            self._set_video_link(link)
-        finally:
-            self._loading = False
-
-    def _set_video_link(self, link: CaseVideoLink | None) -> None:
-        self._camera_location = link.camera_location if link else ""
-        self.clock_offset.setValue(link.clock_offset_seconds if link else 0.0)
-        self._set_combo_value(
-            self.clock_certainty,
-            link.clock_certainty if link else InformationCertainty.UNKNOWN,
-        )
 
     @staticmethod
     def _set_combo_value(combo: QComboBox, value: object) -> None:
@@ -582,18 +516,6 @@ class CaseContextPanel(Card):
 
     def selected_case_id(self) -> str | None:
         return self._selected_case_id
-
-    def set_video_open(self, video_open: bool) -> None:
-        """Camera details belong to one video; without an open video they stay empty."""
-        self._video_open = video_open
-        if not video_open:
-            self.show_link(None)
-        self._update_camera_fields()
-
-    def _update_camera_fields(self) -> None:
-        enabled = self._video_open and self._editing_enabled
-        for widget in (self.clock_offset, self.clock_certainty):
-            widget.setEnabled(enabled)
 
     def set_editing_enabled(self, enabled: bool) -> None:
         self._editing_enabled = enabled
@@ -618,4 +540,3 @@ class CaseContextPanel(Card):
             widget.setEnabled(enabled)
         self.clue_use.setEnabled(enabled and self._editing_clue_row() is None)
         self.focus.set_editing_enabled(enabled)
-        self._update_camera_fields()

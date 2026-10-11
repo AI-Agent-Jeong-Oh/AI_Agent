@@ -158,6 +158,8 @@ class CandidateReviewPanel(QWidget):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        # 8-point spacing keeps the review step on one screen at a MacBook window height.
+        layout.setSpacing(8)
 
         self.origin_label = QLabel("결과 없음")
         self.origin_label.setObjectName("reviewOrigin")
@@ -204,12 +206,10 @@ class CandidateReviewPanel(QWidget):
         self.candidate_list.setAccessibleName("중요 구간 후보 목록")
         layout.addWidget(self.candidate_list, 1)
 
-        detail_label = QLabel("구간 상세 (AI 분석 결과)")
         self.detail_view = _CompactRichView()
         self.detail_view.setReadOnly(True)
         self.detail_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.detail_view.setAccessibleName("선택 구간 상세")
-        layout.addWidget(detail_label)
         layout.addWidget(self.detail_view, 1)
 
         # Wraps at large zoom; the window adds its playback help mark at the end.
@@ -323,12 +323,18 @@ class CandidateReviewPanel(QWidget):
         self.record_group = record_group
         layout.addWidget(record_group)
 
-        completion_row = QHBoxLayout()
+        # Finish and summary sit in the card's title line (the window places this bar).
+        self.completion_bar = QWidget()
+        completion_row = QHBoxLayout(self.completion_bar)
+        completion_row.setContentsMargins(0, 0, 0, 0)
         self.completion_label = QLabel("")
         self.completion_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
         self.completion_label.setAccessibleName("분석 완료 상태")
+        self.completion_label.setObjectName("subsectionHelp")
+        # Wraps instead of widening the title line at large zoom.
+        self.completion_label.setWordWrap(True)
         self.complete_button = QPushButton("분석 완료")
         self.complete_button.setToolTip(
             "검토를 마친 시각과 확인 시간을 기록합니다. 완료 후에도 수정할 수 있습니다."
@@ -342,7 +348,6 @@ class CandidateReviewPanel(QWidget):
         completion_row.addWidget(self.completion_label)
         completion_row.addWidget(self.summary_button)
         completion_row.addWidget(self.complete_button)
-        layout.addLayout(completion_row)
 
     def _connect_signals(self) -> None:
         self.filter_group.buttonClicked.connect(lambda _button: self._rebuild_list())
@@ -819,7 +824,7 @@ class CandidateReviewPanel(QWidget):
                 widget.setEnabled(enabled)
             if index is None:
                 self.detail_view.setPlainText(
-                    "후보를 고르면 상세 내용이 표시됩니다."
+                    "후보를 고르면 AI 분석 결과가 표시됩니다."
                     if self._segments()
                     else ""
                 )
@@ -834,7 +839,9 @@ class CandidateReviewPanel(QWidget):
                     if line
                 ]
                 self.detail_view.setHtml(
-                    f"<p><b>후보 #{index + 1}</b></p>" + theme.label_value_table(rows)
+                    f"<p><b>후보 #{index + 1}</b> "
+                    f'<span style="color:{theme.TEXT_SUB};">AI 분석 결과 (수사관 확인 전)</span></p>'
+                    + theme.label_value_table(rows)
                 )
                 record = self.record_for(index)
             self.judgement_group.setExclusive(False)

@@ -36,11 +36,18 @@ class Card(QGroupBox):
         outer.addWidget(header)
         outer.addWidget(divider)
         outer.addWidget(self.body, 1)
+        self._header = header
+        self._divider = divider
 
     def setTitle(self, title: str) -> None:  # noqa: N802 - Qt API
         super().setTitle(title)
         if hasattr(self, "title_label"):
             self.title_label.setText(title)
+
+    def hide_header(self) -> None:
+        """For a card whose content speaks for itself (the title stays for screen readers)."""
+        self._header.setVisible(False)
+        self._divider.setVisible(False)
 
     def set_aside(self, text: str) -> None:
         self.aside_label.setText(text)

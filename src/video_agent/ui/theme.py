@@ -399,7 +399,7 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QFrame#sectionDivider {{ background: {LINE}; border: none; min-height: 1px; max-height: 1px; }}
     QTabBar#cameraTabs::tab {{ background: transparent; color: {TEXT_SUB}; border: none;
                                border-bottom: 2px solid transparent;
-                               padding: {s(8)}px {s(12)}px; margin-right: {s(4)}px; }}
+                               padding: {s(6)}px {s(12)}px; margin-right: {s(4)}px; }}
     QTabBar#cameraTabs::tab:selected {{ color: {PRIMARY}; border-bottom-color: {PRIMARY_FILL};
                                         font-weight: 700; }}
     QTabBar#cameraTabs::tab:hover:!selected {{ color: {TEXT}; }}
@@ -424,6 +424,10 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QTableWidget#videoList QHeaderView::section {{ background: {SURFACE}; color: {TEXT_SUB};
         font-weight: 400; border: none; border-bottom: 1px solid {LINE};
         padding: {s(6)}px {s(12)}px; }}
+    QPushButton#rowAction {{ border: none; background: transparent; min-height: 0;
+        padding: {s(6)}px; border-radius: {s(4)}px; }}
+    QPushButton#rowAction:hover {{ background: {GRAY_10}; }}
+    QPushButton#rowAction:disabled {{ background: transparent; }}
     QFrame#cardDivider {{ background: {LINE}; border: none; min-height: 1px; max-height: 1px; }}
     QWidget#videoPlaceholder {{ background: {VIDEO_BACKGROUND}; }}
     QLabel#videoPlaceholderText {{ color: {GRAY_20}; }}

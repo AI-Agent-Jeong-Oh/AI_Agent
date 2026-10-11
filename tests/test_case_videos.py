@@ -13,9 +13,16 @@ from dataclasses import replace
 from unittest.mock import MagicMock
 
 from video_agent.analysis.vision import build_prompt
-from video_agent.contracts import CaseVideoLink, JobStatus, ResultOrigin, ReviewJudgement
+from video_agent.contracts import (
+    CaseVideoLink,
+    InformationCertainty,
+    JobStatus,
+    ResultOrigin,
+    ReviewJudgement,
+)
 from video_agent.models.config import RuntimeInventory
 from video_agent.ui.main_window import MainWindow
+from video_agent.ui.video_list import VIDEO_ID_ROLE
 from video_agent.video.files import build_video_id
 
 from test_model_analysis import frame
@@ -106,7 +113,7 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertEqual(names, ["cam_a.mp4", "cam_b.mp4"])
         self.assertEqual(self.window._video_id, build_video_id(self.cam_a))
         self.assertEqual(
-            self.window._video_list.count_label.text(), "영상 2건"
+            self.window._video_list.summary_text(), "영상 2건"
         )
 
     def test_selecting_another_video_opens_it(self) -> None:
@@ -135,16 +142,25 @@ class CaseVideoListTests(unittest.TestCase):
 
         self.assertEqual(self.window._video_id, build_video_id(self.cam_a))
 
-    def test_camera_details_follow_each_video(self) -> None:
+    def test_each_video_row_edits_its_own_clock_difference(self) -> None:
         self.add(self.cam_a, self.cam_b)
-        panel = self.window._case_panel
-        panel.clock_offset.setValue(3.0)
-        self.select(build_video_id(self.cam_b))
-        self.assertEqual(panel.clock_offset.value(), 0.0)
-        panel.clock_offset.setValue(-2.0)
-        self.select(build_video_id(self.cam_a))
+        card = self.window._video_list
+        a, b = build_video_id(self.cam_a), build_video_id(self.cam_b)
+        # The pencil on a row opens the editor for that video, even if it is not open.
+        card._edit_clock(next(e for e in card.entries if e.video_id == b), card)
+        card._clock_editor.offset.setValue(-2.0)
+        card._clock_editor.certainty.setCurrentIndex(
+            card._clock_editor.certainty.findData(InformationCertainty.ESTIMATED)
+        )
+        card._clock_editor._apply()
+        self.window._set_video_clock(a, 3.0, InformationCertainty.CONFIRMED)
 
-        self.assertEqual(panel.clock_offset.value(), 3.0)
+        entries = {entry.video_id: entry for entry in card.entries}
+        self.assertEqual(entries[a].clock_offset_seconds, 3.0)
+        self.assertEqual(entries[b].clock_offset_seconds, -2.0)
+        self.assertEqual(entries[b].clock_certainty, InformationCertainty.ESTIMATED)
+        row = next(r for r in range(card.list.rowCount()) if card.list.item(r, 0).data(VIDEO_ID_ROLE) == b)
+        self.assertEqual(card.list.item(row, 1).text(), "추정 · 오차 -2.0초")
         offsets = {
             link.video_id: link.clock_offset_seconds
             for link in self.window._case_from_panel(1).video_links
@@ -157,13 +173,16 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertFalse(hasattr(self.window._case_panel, "camera_location_edit"))
         self.add(self.cam_a)
         video_id = build_video_id(self.cam_a)
-        panel = self.window._case_panel
-        panel.show_link(CaseVideoLink(video_id=video_id, camera_location="문앞 CCTV"))
-        self.assertEqual(panel.video_link(video_id).camera_location, "문앞 CCTV")
+        self.window._case_record = replace(
+            self.window._case_record,
+            video_links=(CaseVideoLink(video_id=video_id, camera_location="문앞 CCTV"),),
+        )
+        self.window._set_video_clock(video_id, 1.0, InformationCertainty.CONFIRMED)
+        self.assertEqual(self.window._link_for(video_id).camera_location, "문앞 CCTV")
 
     def test_saved_case_links_all_videos_and_relinks_the_same_file_only(self) -> None:
         self.add(self.cam_a, self.cam_b)
-        self.window._case_panel.clock_offset.setValue(3.0)
+        self.window._set_video_clock(build_video_id(self.cam_a), 3.0, InformationCertainty.CONFIRMED)
         self.window._save_case()
         saved = self.window._case_record
         self.assertEqual(
@@ -175,11 +194,11 @@ class CaseVideoListTests(unittest.TestCase):
         reopened._case_panel.set_saved_cases((saved,), saved.case_id)
         reopened._load_case()
         self.assertEqual([entry.file_name for entry in self.entries(reopened)], [None, None])
-        # Camera details stay empty and locked until one of the case videos is open.
-        self.assertEqual(reopened._case_panel.clock_offset.value(), 0.0)
-        self.assertFalse(reopened._case_panel.clock_offset.isEnabled())
+        # Each row shows its saved clock difference even before the file is linked again.
+        offsets = {entry.video_id: entry.clock_offset_seconds for entry in self.entries(reopened)}
+        self.assertEqual(offsets[build_video_id(self.cam_a)], 3.0)
         self.assertEqual(
-            reopened._video_list.count_label.text(), "영상 2건 · 파일 연결 필요 2건"
+            reopened._video_list.summary_text(), "영상 2건 · 파일 연결 필요 2건"
         )
 
         other = self.video("other.mp4")
@@ -197,7 +216,7 @@ class CaseVideoListTests(unittest.TestCase):
             reopened._relink_video(build_video_id(self.cam_a))
         self.assertEqual(reopened._case_videos[build_video_id(self.cam_a)], self.cam_a)
         self.assertEqual(reopened._video_id, build_video_id(self.cam_a))
-        self.assertEqual(reopened._case_panel.clock_offset.value(), 3.0)
+        self.assertEqual(reopened._link_for(build_video_id(self.cam_a)).clock_offset_seconds, 3.0)
 
     def test_removing_a_video_drops_its_link_but_not_the_open_one(self) -> None:
         self.add(self.cam_a, self.cam_b)
@@ -228,7 +247,7 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertEqual(self.status_of(self.cam_a), "분석 전")
         self.assertEqual(self.status_of(self.cam_b), "분석 완료(테스트 응답) · 후보 3")
         self.assertEqual(
-            self.window._video_list.count_label.text(), "영상 2건 · 분석 1건"
+            self.window._video_list.summary_text(), "영상 2건 · 분석 1건"
         )
 
     def test_partial_and_sample_results_are_named(self) -> None:
@@ -455,9 +474,10 @@ class CaseVideoListTests(unittest.TestCase):
         card = self.window._video_list
         self.window._show_step(1)
 
-        for hidden in (card.add_button, card.relink_button, card.remove_button,
-                       self.window._case_panel.camera_fields):
-            self.assertTrue(hidden.isHidden())
+        self.assertTrue(card.add_button.isHidden())
+        # Clock column and the row buttons (edit, link, remove) belong to step ① only.
+        self.assertTrue(card.list.isColumnHidden(1))
+        self.assertTrue(card.list.isColumnHidden(3))
         self.select(build_video_id(self.cam_b))
         self.assertEqual(self.window._video_id, build_video_id(self.cam_b))
 
@@ -465,7 +485,7 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertTrue(card.add_button.isHidden())
         self.window._show_step(0)
         self.assertFalse(card.add_button.isHidden())
-        self.assertFalse(self.window._case_panel.camera_fields.isHidden())
+        self.assertFalse(card.list.isColumnHidden(3))
 
     def test_unlinked_video_is_not_relinked_from_later_steps(self) -> None:
         self.add(self.cam_a, self.cam_b)

@@ -115,7 +115,7 @@ class SituationTile(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         row = QHBoxLayout(self)
-        row.setContentsMargins(12, 8, 12, 8)
+        row.setContentsMargins(12, 6, 12, 6)
         row.setSpacing(8)
         self.check = QCheckBox(SITUATION_LABELS[situation])
         examples = ", ".join(SITUATION_PATTERNS[situation])
@@ -175,11 +175,12 @@ class FocusSection(QWidget):
         title_row.addStretch(1)
         title_row.addWidget(self.count_label)
         layout.addLayout(title_row)
+        self._title_row = title_row
 
         # Two equal columns of tiles, as on the demo page.
         tiles = QGridLayout()
         tiles.setHorizontalSpacing(8)
-        tiles.setVerticalSpacing(8)
+        tiles.setVerticalSpacing(6)
         self.tiles: dict[FocusSituation, SituationTile] = {}
         for index, situation in enumerate(FocusSituation):
             tile = SituationTile(situation)
@@ -202,9 +203,12 @@ class FocusSection(QWidget):
         self.hint_edit.setMaxLength(MAX_FOCUS_HINT_LENGTH)
         self.hint_edit.setMinimumWidth(200)
         self.hint_edit.setVisible(False)
-        self.hint_row.flow.addWidget(self.add_hint_button)
+        # "직접 입력" sits in the title line; the hint line shows only when it has content.
+        self._title_row.addSpacing(8)
+        self._title_row.addWidget(self.add_hint_button)
         self.hint_row.flow.addWidget(self.hint_edit)
         layout.addWidget(self.hint_row)
+        self.hint_row.setVisible(False)
         self._hint_chips: list[QPushButton] = []
 
         self.add_hint_button.clicked.connect(self._start_hint)
@@ -274,7 +278,7 @@ class FocusSection(QWidget):
         self.count_label.setText(f"선택 {count}개" if count else "선택 없음")
 
     def _start_hint(self) -> None:
-        self.add_hint_button.setVisible(False)
+        self.hint_row.setVisible(True)
         self.hint_edit.setVisible(True)
         self.hint_edit.setFocus()
 
@@ -293,7 +297,7 @@ class FocusSection(QWidget):
         if self.hint_edit.text().strip():
             return
         self.hint_edit.setVisible(False)
-        self.add_hint_button.setVisible(True)
+        self.hint_row.setVisible(bool(self._hints))
         self.add_hint_button.setEnabled(len(self._hints) < MAX_FOCUS_HINTS)
 
     def _remove_hint(self, text: str) -> None:
@@ -319,4 +323,5 @@ class FocusSection(QWidget):
             chip.clicked.connect(lambda _checked=False, value=text: self._remove_hint(value))
             self.hint_row.flow.insertWidget(index, chip)
             self._hint_chips.append(chip)
+        self.hint_row.setVisible(bool(self._hints) or self.hint_edit.isVisible())
         self.add_hint_button.setEnabled(len(self._hints) < MAX_FOCUS_HINTS)
