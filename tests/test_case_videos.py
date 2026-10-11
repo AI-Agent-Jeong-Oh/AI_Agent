@@ -183,6 +183,7 @@ class CaseVideoListTests(unittest.TestCase):
     def test_saved_case_links_all_videos_and_relinks_the_same_file_only(self) -> None:
         self.add(self.cam_a, self.cam_b)
         self.window._set_video_clock(build_video_id(self.cam_a), 3.0, InformationCertainty.CONFIRMED)
+        self.window._case_panel.title_edit.setText("문 앞 택배 이동")
         self.window._save_case()
         saved = self.window._case_record
         self.assertEqual(
@@ -225,6 +226,7 @@ class CaseVideoListTests(unittest.TestCase):
 
         self.window._remove_video(build_video_id(self.cam_b))
         self.assertEqual([entry.file_name for entry in self.entries()], ["cam_a.mp4"])
+        self.window._case_panel.title_edit.setText("문 앞 택배 이동")
         self.window._save_case()
         self.assertEqual(
             [link.video_id for link in self.window._case_record.video_links],
@@ -376,6 +378,7 @@ class CaseVideoListTests(unittest.TestCase):
         self.store(self.cam_a, "job-a")
         self.store(self.cam_b, "job-b")
         self.add(self.cam_a, self.cam_b)
+        self.window._case_panel.title_edit.setText("문 앞 택배 이동")
         self.window._save_case()
         saved = self.window._case_record
 
@@ -489,6 +492,7 @@ class CaseVideoListTests(unittest.TestCase):
 
     def test_unlinked_video_is_not_relinked_from_later_steps(self) -> None:
         self.add(self.cam_a, self.cam_b)
+        self.window._case_panel.title_edit.setText("문 앞 택배 이동")
         self.window._save_case()
         saved = self.window._case_record
         reopened = self.new_window()

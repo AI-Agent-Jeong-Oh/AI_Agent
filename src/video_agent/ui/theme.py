@@ -70,6 +70,9 @@ PRIMARY_20 = "#b1cefb"
 PRIMARY_50 = "#256ef4"
 PRIMARY_60 = "#0b50d0"
 PRIMARY_70 = "#083891"
+SECONDARY_5 = "#eef2f7"
+SECONDARY_10 = "#d6e0eb"
+SECONDARY_70 = "#063a74"
 SECONDARY_80 = "#052b57"
 
 # Roles used by the screens.
@@ -79,6 +82,7 @@ PRIMARY_DARK = PRIMARY_70
 PRIMARY_SOFT = PRIMARY_5  # KRDS action-primary-selected
 PRIMARY_DISABLED = PRIMARY_20
 TEXT = GRAY_90  # text-basic
+TEXT_BOLDER = "#131416"  # gray-95, text-bolder: table header
 TEXT_SUB = GRAY_70  # text-subtle
 TEXT_MUTED = GRAY_50  # lowest text step: 4.5:1 on white only, never on gray or tinted rows
 TEXT_FAINT = GRAY_40  # text-disabled only
@@ -90,6 +94,11 @@ SURFACE = GRAY_0
 SURFACE_ALT = GRAY_5
 VIDEO_BACKGROUND = "#1b2026"
 NAVY = SECONDARY_80  # police navy, KRDS secondary-80
+# Boxes are square (radius xsmall 2px) with a 2px navy line on top, as on government
+# boards and tables; table headers follow the KRDS data table (secondary-5, bold).
+BOX_ACCENT = SECONDARY_70
+TABLE_HEAD = SECONDARY_5
+TABLE_HEAD_LINE = SECONDARY_10
 
 SUCCESS = "#267337"  # success-60
 DANGER = "#bd2c0f"  # danger-60
@@ -354,15 +363,17 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
                             min-height: {s(16)}px; max-height: {s(16)}px; }}
     QWidget#stepBar {{ background: {SURFACE}; border-bottom: 1px solid {BORDER}; }}
     QLabel#placeholder {{ color: {TEXT_SUB}; border: 1px dashed {GRAY_30};
-                          border-radius: {s(8)}px; padding: {s(16)}px; background: {SURFACE}; }}
-    QFrame#runBar {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: {s(8)}px; }}
+                          border-radius: {s(2)}px; padding: {s(16)}px; background: {SURFACE}; }}
+    QFrame#runBar {{ background: {SURFACE}; border: 1px solid {BORDER};
+                     border-top: 2px solid {BOX_ACCENT}; border-radius: {s(2)}px; }}
     QLabel#emptyState {{ color: {TEXT_SUB}; padding: {s(8)}px 0; }}
     QLabel#modeBanner {{ background: transparent; border: none; padding: 0;
                          font-size: {s(LABEL_PX)}px; font-weight: 700; }}
     QLabel#modeDot {{ background: transparent; font-size: {s(10)}px; }}
 
     QGroupBox {{ font-size: {s(HEADING_PX)}px; font-weight: 700; color: {TEXT};
-                 background: {SURFACE}; border: 1px solid {BORDER}; border-radius: {s(8)}px;
+                 background: {SURFACE}; border: 1px solid {BORDER};
+                 border-top: 2px solid {BOX_ACCENT}; border-radius: {s(2)}px;
                  margin-top: 0; padding: {s(40)}px {s(4)}px {s(4)}px {s(4)}px; }}
     QGroupBox::title {{ subcontrol-origin: border; subcontrol-position: top left;
                         left: {s(16)}px; top: {s(12)}px; padding: 0; color: {TEXT}; }}
@@ -411,18 +422,18 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QWidget#cardHeader {{ background: transparent; }}
     QLabel#cardTitle {{ font-size: {s(HEADING_PX)}px; font-weight: 700; color: {TEXT}; }}
     QLabel#cardAside {{ font-size: {s(LABEL_PX)}px; color: {TEXT_SUB}; }}
-    QHeaderView::section {{ background: {GRAY_5}; color: {TEXT_SUB}; border: none;
-        border-bottom: 1px solid {BORDER}; padding: {s(6)}px {s(8)}px;
+    QHeaderView::section {{ background: {TABLE_HEAD}; color: {TEXT_BOLDER}; border: none;
+        border-bottom: 1px solid {TABLE_HEAD_LINE}; padding: {s(6)}px {s(8)}px;
         font-size: {s(LABEL_PX)}px; font-weight: 700; }}
-    QTableWidget {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: {s(6)}px;
+    QTableWidget {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: {s(2)}px;
         selection-background-color: {PRIMARY_SOFT}; selection-color: {TEXT};
         gridline-color: {LINE}; }}
     QTableWidget::item {{ padding: 0 {s(8)}px; border-bottom: 1px solid {LINE}; }}
     QTableWidget#videoList {{ border: none; border-top: 1px solid {LINE}; border-radius: 0;
         background: {SURFACE}; selection-background-color: {PRIMARY_SOFT}; }}
     QTableWidget#videoList::item {{ border-bottom: 1px solid {LINE}; padding: 0; }}
-    QTableWidget#videoList QHeaderView::section {{ background: {SURFACE}; color: {TEXT_SUB};
-        font-weight: 400; border: none; border-bottom: 1px solid {LINE};
+    QTableWidget#videoList QHeaderView::section {{ background: {TABLE_HEAD}; color: {TEXT_BOLDER};
+        font-weight: 700; border: none; border-bottom: 1px solid {TABLE_HEAD_LINE};
         padding: {s(6)}px {s(12)}px; }}
     QPushButton#rowAction {{ border: none; background: transparent; min-height: 0;
         padding: {s(6)}px; border-radius: {s(4)}px; }}
@@ -444,9 +455,9 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
                                    border-bottom-right-radius: {s(6)}px; }}
 
     QFrame#reviewCard {{ background: {SURFACE}; border: 1px solid {NAVY};
-                         border-radius: {s(8)}px; }}
-    QWidget#reviewCardHeader {{ background: {NAVY}; border-top-left-radius: {s(7)}px;
-                                border-top-right-radius: {s(7)}px; }}
+                         border-radius: {s(2)}px; }}
+    QWidget#reviewCardHeader {{ background: {NAVY}; border-top-left-radius: {s(1)}px;
+                                border-top-right-radius: {s(1)}px; }}
     QLabel#reviewCardTitle {{ font-size: {s(SUBHEADING_PX)}px; color: {GRAY_0}; font-weight: 700; }}
     QLabel#reviewCardNote {{ font-size: {s(LABEL_PX)}px; color: {GRAY_20}; }}
     QPushButton#bookmarkButton {{ background: transparent; color: {GRAY_0};
@@ -496,8 +507,8 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled,
     QAbstractSpinBox:disabled {{ background: {GRAY_5}; color: {TEXT_FAINT};
                                                   border-color: {GRAY_30}; }}
-    QComboBox[density="compact"] {{ padding: {compact_pad}px {s(12)}px; min-height: {compact_min}px;
-                                    font-size: {s(LABEL_PX)}px; }}
+    QComboBox[density="compact"], QLineEdit[density="compact"] {{ padding: {compact_pad}px {s(12)}px;
+        min-height: {compact_min}px; font-size: {s(LABEL_PX)}px; }}
     QComboBox::drop-down {{ border: none; width: {s(28)}px; subcontrol-origin: padding;
                             subcontrol-position: center right; }}
     QComboBox::down-arrow {{ image: url("{down}"); width: {s(12)}px; height: {s(12)}px; }}
@@ -545,12 +556,17 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
         selection-background-color: {PRIMARY_FILL}; selection-color: {GRAY_0}; }}
     QCalendarWidget QAbstractItemView:disabled {{ color: {GRAY_40}; }}
 
-    QListWidget {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: {s(6)}px;
+    QListWidget {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: {s(2)}px;
                    padding: {s(1)}px; outline: 0; }}
     QListWidget::item {{ padding: {s(8)}px {s(12)}px; border-bottom: 1px solid {LINE}; }}
     QListWidget::item:selected {{ background: {PRIMARY_SOFT}; color: {TEXT};
                                   border-left: {s(4)}px solid {PRIMARY_FILL}; }}
     QListWidget::item:hover:!selected {{ background: {GRAY_5}; }}
+    QListWidget#clueList {{ border: none; border-radius: 0; padding: 0; }}
+    QListWidget#clueList::item {{ padding: 0; border-bottom: 1px solid {LINE}; }}
+    QListWidget#clueList::item:selected {{ background: {PRIMARY_SOFT}; color: {TEXT};
+                                           border-left: none; }}
+    QLabel#fieldError {{ color: {DANGER}; font-size: {s(LABEL_PX)}px; }}
 
     QProgressBar {{ background: {GRAY_10}; border: none; border-radius: {s(4)}px;
                     min-height: {s(8)}px; max-height: {s(8)}px; text-align: center;

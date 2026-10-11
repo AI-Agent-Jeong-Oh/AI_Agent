@@ -174,16 +174,72 @@ class CaseClueTests(unittest.TestCase):
         QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=check_rect.center())
         self.assertTrue(self.panel.clues()[0].use_for_analysis)
 
-    def test_row_shows_labelled_source_and_certainty_without_use_words(self) -> None:
+    def test_row_is_a_table_line_with_source_and_certainty_columns(self) -> None:
         self.add("관리용 단서", ClueSource.REPORT, InformationCertainty.ESTIMATED, use=False)
+        self.panel.show()
+        self.app.processEvents()
         clue_list = self.panel.clue_list
         option = QStyleOptionViewItem()
         clue_list.initViewItemOption(option)
+        option.rect = clue_list.visualItemRect(clue_list.item(0))
         clue = clue_list.item(0).data(Qt.ItemDataRole.UserRole)
-        text = clue_list.itemDelegate().document(option, clue, 400).toPlainText()
-        self.assertIn("출처: 신고·보고", text)
-        self.assertIn("확실성: ● 추정", text.replace("\xa0", " "))
-        self.assertNotIn("분석", text.split("\n", 1)[1])
+        delegate = clue_list.itemDelegate()
+        # The sentence cell holds only the clue; source and certainty have their own columns.
+        self.assertEqual(delegate.document(option, clue, 400).toPlainText(), "관리용 단서")
+        cells = delegate.columns(option.rect, option.font)
+        self.assertLess(cells.check.right(), cells.text.left())
+        self.assertLess(cells.text.right(), cells.source.left())
+        self.assertLess(cells.source.right(), cells.certainty.left() + 1)
+        self.assertLess(cells.certainty.right(), cells.edit.left())
+        self.assertLess(cells.edit.right(), cells.remove.left())
+        self.assertFalse(self.panel.clue_header.isHidden())
+
+    def test_row_marks_edit_and_delete(self) -> None:
+        self.add("첫 단서")
+        self.add("둘째 단서")
+        self.panel.show()
+        self.app.processEvents()
+        clue_list = self.panel.clue_list
+        option = QStyleOptionViewItem()
+        clue_list.initViewItemOption(option)
+        option.rect = clue_list.visualItemRect(clue_list.item(1))
+        cells = clue_list.itemDelegate().columns(option.rect, option.font)
+        y = option.rect.top() + option.rect.height() // 2
+        QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(cells.edit.center().x(), y))
+        self.assertEqual(self.panel.clue_text.text(), "둘째 단서")
+        self.assertEqual(self.panel.add_clue_button.text(), "변경 저장")
+        self.assertIn("단서 수정 중", self.panel.clue_aside.text())
+        QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(cells.remove.center().x(), y))
+        self.assertEqual([clue.text for clue in self.panel.clues()], ["첫 단서"])
+
+    def test_source_and_certainty_come_before_the_sentence(self) -> None:
+        panel = self.panel
+        self.assertEqual(panel.clue_source.currentIndex(), -1)
+        self.assertEqual(panel.clue_certainty.currentIndex(), -1)
+        self.assertFalse(panel.clue_text.isEnabled())
+        self.assertFalse(panel.add_clue_button.isEnabled())
+        panel.clue_text.setText("고르지 않은 단서")
+        panel.add_clue_button.click()
+        self.assertEqual(panel.clues(), ())
+        panel.clue_source.setCurrentIndex(panel.clue_source.findData(ClueSource.REPORT))
+        self.assertFalse(panel.clue_text.isEnabled())
+        panel.clue_certainty.setCurrentIndex(
+            panel.clue_certainty.findData(InformationCertainty.ESTIMATED)
+        )
+        self.assertTrue(panel.clue_text.isEnabled())
+        panel.add_clue_button.click()
+        self.assertEqual(len(panel.clues()), 1)
+        # The next clue gets its own choice.
+        self.assertEqual(panel.clue_source.currentIndex(), -1)
+        self.assertFalse(panel.clue_text.isEnabled())
+
+    def test_empty_case_name_is_asked_for(self) -> None:
+        self.panel.show()
+        self.assertFalse(self.panel.require_title())
+        self.assertFalse(self.panel.title_error.isHidden())
+        self.panel.title_edit.setText("문 앞 택배 분실")
+        self.assertTrue(self.panel.title_error.isHidden())
+        self.assertTrue(self.panel.require_title())
 
     def test_no_bracketed_state_text_in_rows(self) -> None:
         self.add("단서", use=True)

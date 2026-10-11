@@ -1,5 +1,7 @@
 """Case types and the situation groups to check first, from the team demo page.
 
+"절도" and the extra patterns follow the AI-Hub CCTV videos the team downloaded.
+
 A case type only suggests which groups to check first and a starting purpose. Checked
 groups set the order of review; the model is still asked to report other situations, and
 no group is a finding about an offence.
@@ -9,7 +11,7 @@ from __future__ import annotations
 
 from video_agent.contracts import FocusSituation
 
-CASE_TYPES = ("실종", "폭행", "아동학대")
+CASE_TYPES = ("실종", "폭행", "아동학대", "절도")
 
 SITUATION_LABELS: dict[FocusSituation, str] = {
     FocusSituation.INTERACTION: "인물 간 상호작용",
@@ -28,6 +30,7 @@ SITUATION_PATTERNS: dict[FocusSituation, tuple[str, ...]] = {
         "넘어짐·주저앉음",
         "몸을 숙이거나 움츠림",
         "팔·상체의 빠른 움직임",
+        "발차기·다리의 빠른 움직임",
         "얼굴·머리를 가림",
         "뒤로 물러남",
     ),
@@ -36,6 +39,8 @@ SITUATION_PATTERNS: dict[FocusSituation, tuple[str, ...]] = {
     FocusSituation.ENVIRONMENT: (
         "출입문 여닫힘·통과",
         "물건 이동·쓰러짐",
+        "물건을 들고 감",
+        "손에 든 물건(칼·방망이·공구 등)",
         "차량 출입",
         "조명·화면 변화",
     ),
@@ -44,13 +49,20 @@ SITUATION_PATTERNS: dict[FocusSituation, tuple[str, ...]] = {
 RECOMMENDED: dict[str, tuple[FocusSituation, ...]] = {
     "실종": (FocusSituation.MOVEMENT, FocusSituation.STAY),
     "폭행": (FocusSituation.INTERACTION, FocusSituation.POSTURE),
-    "아동학대": (FocusSituation.INTERACTION, FocusSituation.COMPANY, FocusSituation.STAY),
+    "아동학대": (
+        FocusSituation.INTERACTION,
+        FocusSituation.POSTURE,
+        FocusSituation.COMPANY,
+        FocusSituation.STAY,
+    ),
+    "절도": (FocusSituation.ENVIRONMENT, FocusSituation.STAY, FocusSituation.MOVEMENT),
 }
 
 DEFAULT_PURPOSES: dict[str, str] = {
     "실종": "실종 대상자의 마지막 확인 위치와 이동 경로 파악",
     "폭행": "폭행 의심 행위가 발생한 시점과 전후 상황 확인",
     "아동학대": "학대 의심 행위가 발생한 구간을 특정하고 반복 여부 확인",
+    "절도": "물건이 옮겨지거나 없어진 시점과 전후 인물의 접근·이탈 확인",
 }
 
 

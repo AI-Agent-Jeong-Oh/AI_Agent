@@ -41,7 +41,7 @@ FOCUS_HELP = (
 
 
 class CaseTypeChooser(QWidget):
-    """[실종] [폭행] [아동학대] [기타] choice; "기타" opens a short text field."""
+    """[실종] [폭행] [아동학대] [절도] [기타] choice; "기타" opens a short text field."""
 
     changed = Signal(str)
 
@@ -62,7 +62,7 @@ class CaseTypeChooser(QWidget):
             self.buttons[label] = button
             row.addWidget(button)
         self.other_edit = QLineEdit()
-        self.other_edit.setPlaceholderText("예: 절도")
+        self.other_edit.setPlaceholderText("예: 주거침입")
         self.other_edit.setAccessibleName("기타 사건 유형")
         self.other_edit.setMaxLength(200)
         self.other_edit.setVisible(False)
@@ -202,11 +202,14 @@ class FocusSection(QWidget):
         self.hint_edit.setAccessibleName("추가 탐색 힌트")
         self.hint_edit.setMaxLength(MAX_FOCUS_HINT_LENGTH)
         self.hint_edit.setMinimumWidth(200)
+        # Same 32px height as the hint tags beside it.
+        theme.mark_compact(self.hint_edit)
         self.hint_edit.setVisible(False)
-        # "직접 입력" sits in the title line; the hint line shows only when it has content.
+        # "직접 입력" sits in the title line and the field opens in its place, so typing
+        # moves nothing; the hint line below shows only when it has tags.
         self._title_row.addSpacing(8)
+        self._title_row.addWidget(self.hint_edit)
         self._title_row.addWidget(self.add_hint_button)
-        self.hint_row.flow.addWidget(self.hint_edit)
         layout.addWidget(self.hint_row)
         self.hint_row.setVisible(False)
         self._hint_chips: list[QPushButton] = []
@@ -278,7 +281,7 @@ class FocusSection(QWidget):
         self.count_label.setText(f"선택 {count}개" if count else "선택 없음")
 
     def _start_hint(self) -> None:
-        self.hint_row.setVisible(True)
+        self.add_hint_button.setVisible(False)
         self.hint_edit.setVisible(True)
         self.hint_edit.setFocus()
 
@@ -296,6 +299,11 @@ class FocusSection(QWidget):
     def _finish_hint(self) -> None:
         if self.hint_edit.text().strip():
             return
+        # Hand focus back to the button first, so it does not jump to the clue table.
+        refocus = self.hint_edit.hasFocus()
+        self.add_hint_button.setVisible(True)
+        if refocus:
+            self.add_hint_button.setFocus()
         self.hint_edit.setVisible(False)
         self.hint_row.setVisible(bool(self._hints))
         self.add_hint_button.setEnabled(len(self._hints) < MAX_FOCUS_HINTS)
@@ -323,5 +331,5 @@ class FocusSection(QWidget):
             chip.clicked.connect(lambda _checked=False, value=text: self._remove_hint(value))
             self.hint_row.flow.insertWidget(index, chip)
             self._hint_chips.append(chip)
-        self.hint_row.setVisible(bool(self._hints) or self.hint_edit.isVisible())
+        self.hint_row.setVisible(bool(self._hints))
         self.add_hint_button.setEnabled(len(self._hints) < MAX_FOCUS_HINTS)

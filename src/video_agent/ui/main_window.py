@@ -315,6 +315,8 @@ class MainWindow(QMainWindow):
         self._apply_ui_zoom()
         self._restore_settings()
         self._case_panel.set_record(self._case_record)
+        # A new case starts with an empty name field; the header says "새 사건" meanwhile.
+        self._case_panel.title_edit.clear()
         self._refresh_case_choices()
         self._set_idle_state()
         self._refresh_saved_results()
@@ -1003,7 +1005,8 @@ class MainWindow(QMainWindow):
         self._motion_list.setMaximumHeight(scaled(320))
         self._plan_view.setMinimumHeight(scaled(145))
         self._plan_view.setMaximumHeight(scaled(220))
-        self._case_panel.clue_list.setMinimumHeight(scaled(72))
+        # One table row stays visible; more rows scroll inside the list.
+        self._case_panel.clue_list.setMinimumHeight(scaled(46))
         self._case_panel.notes_edit.setFixedHeight(scaled(64))
         # Lines up with the 40px choices beside it in the wrapping row.
         self._case_panel.clue_use.setMinimumHeight(scaled(40))
@@ -1020,8 +1023,9 @@ class MainWindow(QMainWindow):
 
     def _restore_settings(self) -> None:
         mode = self._settings.mode
-        if not self._settings_store.path.exists() and self._local_vision_models():
-            # First run: analyse on this computer by default.
+        if self._local_vision_models():
+            # Every start is "정확한 분석" (the largest model on this computer); a choice
+            # made while the app is open lasts until it closes.
             mode = AnalysisMode.LOCAL
         self._external_model_edit.blockSignals(True)
         self._external_model_edit.setText(
@@ -1082,6 +1086,10 @@ class MainWindow(QMainWindow):
         if self._background_work_running():
             self._show_error("작업 중에는 사건 정보를 저장할 수 없습니다.")
             return
+        if not self._case_panel.require_title():
+            self._show_step(0)
+            self.statusBar().showMessage("사건명을 입력한 뒤 저장해 주세요.", 6000)
+            return
         try:
             candidate = self._case_from_panel(self._case_record.revision)
             if self._case_saved and self._case_content(candidate) != self._case_content(
@@ -1140,6 +1148,7 @@ class MainWindow(QMainWindow):
         self._reset_case_videos(self._case_record)
         self._refresh_video_statuses()
         self._case_panel.set_record(self._case_record)
+        self._case_panel.title_edit.clear()
         self._refresh_video_list()
         self._inputs_changed()
         self.statusBar().showMessage("새 사건 입력을 시작합니다. 저장 전에도 계획에 단서를 사용할 수 있습니다.", 6000)
@@ -2162,18 +2171,12 @@ class MainWindow(QMainWindow):
             return configured
         saved = (self._settings.local_model_id or "").strip()
         confirmed = self._local_vision_models()
-        if saved in confirmed and "instruct" in saved.lower():
-            return saved
+        # The largest model ("정확한 분석"), preferring instruct models: thinking tags
+        # have returned no final answer for structured results.
         instruct_models = tuple(item for item in confirmed if "instruct" in item.lower())
-        if instruct_models:
-            return min(instruct_models, key=str.lower)
-        if saved in confirmed:
-            return saved
-        if confirmed:
-            return min(
-                confirmed,
-                key=str.lower,
-            )
+        candidates = instruct_models or confirmed
+        if candidates:
+            return max(candidates, key=lambda item: (self._parameter_billions(item) or 0, item.lower()))
         return saved
 
     def _current_intent(self) -> AnalysisIntent:

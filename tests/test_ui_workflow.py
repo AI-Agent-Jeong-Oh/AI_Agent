@@ -20,6 +20,7 @@ from video_agent.agent.situations import RECOMMENDED
 from video_agent.contracts import (
     AnalysisJob,
     AnalysisMode,
+    ClueSource,
     FocusSituation,
     InformationCertainty,
     JobStatus,
@@ -33,7 +34,7 @@ from video_agent.contracts import (
 )
 from video_agent.agent.planning import WorkflowState
 from video_agent.models.config import RuntimeInventory
-from video_agent.storage.json_store import AppSettings
+from video_agent.storage.json_store import AppSettings, SettingsStore
 from video_agent.ui.main_window import MainWindow
 from video_agent.video.probe import VideoMetadata
 
@@ -142,6 +143,18 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertFalse(window._run_button.isEnabled())
         self.assertIsNone(window._session.analysis_approval)
 
+    def test_new_case_name_starts_empty_and_is_needed_to_save(self) -> None:
+        window = self.window
+        panel = window._case_panel
+        self.assertEqual(panel.title_edit.text(), "")
+        self.assertEqual(window._case_title_label.text(), "새 사건")
+        window._save_case()
+        self.assertFalse(window._case_saved)
+        self.assertFalse(panel.title_error.isHidden())
+        panel.title_edit.setText("문 앞 택배 분실")
+        window._save_case()
+        self.assertTrue(window._case_saved)
+
     def test_case_focus_is_saved_and_restored(self) -> None:
         window = self.window
         panel = window._case_panel
@@ -149,6 +162,7 @@ class UiWorkflowTests(unittest.TestCase):
         panel.focus._start_hint()
         panel.focus.hint_edit.setText("노란색 상의 아동")
         panel.focus._add_hint()
+        panel.title_edit.setText("아동 확인")
         window._save_case()
         stored = window._case_store.load(window._case_record.case_id)
         self.assertEqual(stored.case_type, "아동학대")
@@ -166,6 +180,10 @@ class UiWorkflowTests(unittest.TestCase):
         panel = self.window._case_panel
         panel.title_edit.setText("문 앞 택배 이동 확인")
         panel.case_type.set_value("관리용 사건 분류")
+        panel.clue_source.setCurrentIndex(panel.clue_source.findData(ClueSource.USER_STATEMENT))
+        panel.clue_certainty.setCurrentIndex(
+            panel.clue_certainty.findData(InformationCertainty.CONFIRMED)
+        )
         panel.clue_text.setText("신고자는 사람이 문 앞 상자를 들었다고 설명함")
         panel.add_clue_button.click()
         self.window._save_case()
@@ -191,10 +209,11 @@ class UiWorkflowTests(unittest.TestCase):
 
     def test_editing_clue_certainty_keeps_it_in_plan_and_requires_reapproval(self) -> None:
         panel = self.window._case_panel
-        panel.clue_text.setText("신고자는 문 앞 상자가 사라졌다고 설명함")
+        panel.clue_source.setCurrentIndex(panel.clue_source.findData(ClueSource.USER_STATEMENT))
         panel.clue_certainty.setCurrentIndex(
             panel.clue_certainty.findData(InformationCertainty.CONFIRMED)
         )
+        panel.clue_text.setText("신고자는 문 앞 상자가 사라졌다고 설명함")
         panel.add_clue_button.click()
         self.window._purpose_edit.setPlainText(
             "사람이 문 앞 상자를 들어 이동시키는 장면 후보 찾기"
@@ -723,11 +742,13 @@ class UiWorkflowTests(unittest.TestCase):
             labels,
             ["빠른 분석", "정확한 분석", "시연용 (실제 분석 아님)", "외부 AI 분석 (영상 일부를 외부로 보냄)"],
         )
-        self.assertEqual(window._model_id(), "qwen3-vl:4b-instruct")
-
-        choice.setCurrentIndex(1)
+        # "정확한 분석" (the largest model) is the default.
         self.assertEqual(window._model_id(), "qwen3-vl:8b-instruct")
         self.assertEqual(window._mode_banner.text(), "정확한 분석 · 이 컴퓨터에서 처리")
+
+        choice.setCurrentIndex(0)
+        self.assertEqual(window._model_id(), "qwen3-vl:4b-instruct")
+        self.assertEqual(window._mode_banner.text(), "빠른 분석 · 이 컴퓨터에서 처리")
 
     def test_local_mode_refuses_a_cloud_model_and_can_reread_models(self) -> None:
         window = self.window
@@ -758,10 +779,28 @@ class UiWorkflowTests(unittest.TestCase):
             first = MainWindow()
         self.runtime.start()
         self.assertIs(first._current_mode(), AnalysisMode.LOCAL)
-        self.assertEqual(first._analysis_choice.currentText(), "빠른 분석")
+        self.assertEqual(first._analysis_choice.currentText(), "정확한 분석")
         first.close()
         # Without an installed program the first run stays on the demonstration.
         self.assertIs(self.window._current_mode(), AnalysisMode.SAMPLE)
+
+    def test_every_start_uses_accurate_analysis_whatever_was_saved(self) -> None:
+        self.runtime.stop()
+        data = Path(self.temporary.name) / "saved-demo"
+        SettingsStore(data / "settings.json").save(
+            AppSettings(mode=AnalysisMode.SAMPLE, local_model_id="qwen3-vl:4b-instruct")
+        )
+        with patch(
+            "video_agent.ui.main_window.RuntimeInventory.detect",
+            return_value=self.local_inventory(),
+        ), patch.dict(os.environ, {"VIDEO_AGENT_DATA_DIR": str(data)}):
+            reopened = MainWindow()
+        self.runtime.start()
+        self.assertEqual(reopened._settings_store.path, data / "settings.json")
+        self.assertIs(reopened._current_mode(), AnalysisMode.LOCAL)
+        self.assertEqual(reopened._analysis_choice.currentText(), "정확한 분석")
+        self.assertEqual(reopened._model_id(), "qwen3-vl:8b-instruct")
+        reopened.close()
 
     def test_switching_modes_preserves_each_explicit_model_setting(self) -> None:
         self.window._select_mode(AnalysisMode.LOCAL)

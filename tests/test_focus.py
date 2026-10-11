@@ -12,7 +12,7 @@ from video_agent.agent.situations import (
     focus_guidance,
 )
 from video_agent.contracts import CaseRecord, FocusSituation
-from video_agent.ui.focus_panel import FocusSection
+from video_agent.ui.focus_panel import OTHER_TYPE, CaseTypeChooser, FocusSection
 from video_agent.video.probe import VideoMetadata
 
 
@@ -120,6 +120,28 @@ class FocusSectionTests(unittest.TestCase):
         self.assertEqual(section.hint_edit.maxLength(), 30)
         section._remove_hint("가방을 든 사람")
         self.assertEqual(section.hints(), ("자전거",))
+
+    def test_theft_is_a_case_type_with_its_own_checks(self) -> None:
+        section = self.section
+        section.set_case_type("절도")
+        self.assertEqual(
+            section.focus(),
+            (FocusSituation.MOVEMENT, FocusSituation.STAY, FocusSituation.ENVIRONMENT),
+        )
+        self.assertIn("물건이 옮겨지거나 없어진 시점", DEFAULT_PURPOSES["절도"])
+        self.assertIn(FocusSituation.POSTURE, RECOMMENDED["아동학대"])
+
+    def test_saved_theft_type_opens_on_its_own_button(self) -> None:
+        chooser = CaseTypeChooser()
+        chooser.set_value("절도")
+        self.assertTrue(chooser.buttons["절도"].isChecked())
+        self.assertFalse(chooser.buttons[OTHER_TYPE].isChecked())
+        self.assertTrue(chooser.other_edit.isHidden())
+        self.assertEqual(chooser.value(), "절도")
+        chooser.set_value("주거침입")
+        self.assertTrue(chooser.buttons[OTHER_TYPE].isChecked())
+        self.assertEqual(chooser.value(), "주거침입")
+        chooser.close()
 
     def test_loaded_case_keeps_its_saved_choice(self) -> None:
         self.section.set_values("실종", (FocusSituation.ENVIRONMENT,), ("차량",))

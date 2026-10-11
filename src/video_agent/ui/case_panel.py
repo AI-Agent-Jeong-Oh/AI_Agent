@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListView,
-    QListWidget,
     QListWidgetItem,
     QMenu,
     QPlainTextEdit,
@@ -34,7 +33,7 @@ from video_agent.contracts import (
 )
 from video_agent.ui import theme
 from video_agent.ui.card import Card
-from video_agent.ui.clue_delegate import ClueItemDelegate
+from video_agent.ui.clue_delegate import ClueHeader, ClueItemDelegate, ClueList
 from video_agent.ui.datetime_field import DateTimeField
 from video_agent.ui.disclosure import DisclosureButton
 from video_agent.ui.flow_layout import FlowRow
@@ -54,6 +53,7 @@ SOURCE_LABELS = {
     ClueSource.DOCUMENT: "문서",
     ClueSource.OTHER: "기타",
 }
+CLUE_ASIDE = "체크한 단서만 분석에 사용"
 CERTAINTY_HELP = (
     "확실성은 정보를 준 사람이나 자료가 얼마나 분명하게 말했는지입니다. "
     "'확인'도 영상이나 수사로 사실이 검증됐다는 뜻은 아닙니다."
@@ -107,7 +107,18 @@ class CaseContextPanel(Card):
         form = QFormLayout()
         theme.polish_form(form)
         self.title_edit = QLineEdit()
-        self.title_edit.setPlaceholderText("예: 문 앞 택배 이동 확인")
+        self.title_edit.setPlaceholderText("예: ○○동 문 앞 택배 분실")
+        self.title_edit.setAccessibleName("사건명")
+        # Shown under the name only when a save finds it empty.
+        self.title_error = QLabel("사건명을 입력해 주세요")
+        self.title_error.setObjectName("fieldError")
+        self.title_error.setVisible(False)
+        title_widget = QWidget()
+        title_column = QVBoxLayout(title_widget)
+        title_column.setContentsMargins(0, 0, 0, 0)
+        title_column.setSpacing(4)
+        title_column.addWidget(self.title_edit)
+        title_column.addWidget(self.title_error)
         # Chosen type marks the situation groups to check first (FocusSection below).
         self.case_type = CaseTypeChooser()
         occurrence_widget = QWidget()
@@ -136,7 +147,7 @@ class CaseContextPanel(Card):
         # folded; it opens by itself when a loaded case has one.
         self.admin_toggle = DisclosureButton("관리 메모")
         form.addRow("사건 유형", self.case_type)
-        form.addRow("사건명", self.title_edit)
+        form.addRow("사건명", title_widget)
         form.addRow("발생 시각", occurrence_widget)
         form.addRow(self.admin_toggle)
         form.addRow("관리 메모", self.notes_edit)
@@ -156,8 +167,10 @@ class CaseContextPanel(Card):
         title_row = QHBoxLayout()
         clue_title = QLabel("분석 단서")
         clue_title.setObjectName("subsectionTitle")
-        clue_aside = WrapLabel("체크한 단서만 분석에 사용")
+        clue_aside = WrapLabel(CLUE_ASIDE)
         clue_aside.setObjectName("subsectionAside")
+        # While a clue is being edited this says so, instead of a line that pushes the list.
+        self.clue_aside = clue_aside
         title_row.addWidget(clue_title)
         title_row.addSpacing(8)
         title_row.addWidget(clue_aside, 1, Qt.AlignmentFlag.AlignBottom)
@@ -178,16 +191,13 @@ class CaseContextPanel(Card):
         editor.setObjectName("clueEditor")
         editor_layout = QVBoxLayout(editor)
         editor_layout.setContentsMargins(0, 0, 0, 0)
-        self.clue_text = QLineEdit()
-        self.clue_text.setPlaceholderText("예: 신고자는 사람이 문 앞 상자를 들어 이동했다고 설명함")
-        self.clue_text.setAccessibleName("단서 문장")
-        text_row = QHBoxLayout()
-        editor_layout.addLayout(text_row)
+        # Source and certainty are chosen first; the sentence field opens after both.
         clue_row = FlowRow(spacing=16)
         source_label = QLabel("출처")
         source_label.setObjectName("fieldLabel")
         self.clue_source = QComboBox()
         self.clue_source.setAccessibleName("출처")
+        self.clue_source.setPlaceholderText("선택")
         for value, label in SOURCE_LABELS.items():
             self.clue_source.addItem(label, value)
         certainty_label = QLabel("확실성")
@@ -196,18 +206,11 @@ class CaseContextPanel(Card):
         self.clue_certainty = QComboBox()
         self.clue_certainty.setAccessibleName("확실성")
         self.clue_certainty.setToolTip(CERTAINTY_HELP)
+        self.clue_certainty.setPlaceholderText("선택")
         self._add_certainty_items(self.clue_certainty)
+        self._clear_clue_choices()
         self.clue_use = QCheckBox("분석 사용")
         self.clue_use.setChecked(True)
-        self.cancel_clue_edit_button = QPushButton("선택 해제")
-        self.cancel_clue_edit_button.setVisible(False)
-        # Like the demo page: deleting is offered while a clue is selected for editing.
-        self.remove_clue_button = QPushButton("삭제")
-        self.remove_clue_button.setAccessibleName("선택 단서 삭제")
-        self.remove_clue_button.setVisible(False)
-        self.add_clue_button = QPushButton("단서 추가")
-        theme.set_icon(self.add_clue_button, "plus")
-        theme.set_icon(self.remove_clue_button, "trash-2")
         # Label and choice stay together; the groups wrap at large text sizes.
         for parts in ((source_label, self.clue_source), (certainty_label, self.clue_certainty)):
             group = QWidget()
@@ -217,20 +220,29 @@ class CaseContextPanel(Card):
                 group_layout.addWidget(part)
             clue_row.flow.addWidget(group)
         clue_row.flow.addWidget(self.clue_use)
+        editor_layout.addWidget(clue_row)
+
+        self.clue_text = QLineEdit()
+        self.clue_text.setAccessibleName("단서 문장")
+        self.cancel_clue_edit_button = QPushButton("선택 해제")
+        self.cancel_clue_edit_button.setVisible(False)
+        # Like the demo page: deleting is offered while a clue is selected for editing.
+        self.remove_clue_button = QPushButton("삭제")
+        self.remove_clue_button.setAccessibleName("선택 단서 삭제")
+        self.remove_clue_button.setVisible(False)
+        self.add_clue_button = QPushButton("단서 추가")
+        theme.set_icon(self.add_clue_button, "plus")
+        theme.set_icon(self.remove_clue_button, "trash-2")
+        text_row = QHBoxLayout()
         text_row.addWidget(self.clue_text, 1)
         text_row.addWidget(self.remove_clue_button)
         text_row.addWidget(self.cancel_clue_edit_button)
         text_row.addWidget(self.add_clue_button)
-        editor_layout.addWidget(clue_row)
-        self.clue_edit_label = WrapLabel(
-            "단서 수정 중"
-        )
-        self.clue_edit_label.setObjectName("subsectionHelp")
-        self.clue_edit_label.setVisible(False)
-        editor_layout.addWidget(self.clue_edit_label)
+        editor_layout.addLayout(text_row)
         layout.addWidget(editor)
 
-        self.clue_list = QListWidget()
+        # A table like the CCTV video list: grey header, one line per clue.
+        self.clue_list = ClueList()
         self.clue_list.setMinimumHeight(100)
         # Take the space left in the step instead of Qt's default list height, so the
         # larger clue rows scroll inside the list rather than the whole step.
@@ -239,14 +251,20 @@ class CaseContextPanel(Card):
             "체크된 항목만 분석 계획과 모델 입력에 포함됩니다. 단서를 고르면 위에서 고칠 수 있습니다."
         )
         self.clue_list.setAccessibleName("분석 단서 목록")
-        self.clue_list.setItemDelegate(
-            ClueItemDelegate(SOURCE_LABELS, CERTAINTY_LABELS, self.clue_list)
-        )
+        self._clue_delegate = ClueItemDelegate(SOURCE_LABELS, CERTAINTY_LABELS, self.clue_list)
+        self.clue_list.setItemDelegate(self._clue_delegate)
+        self.clue_list.setFrameShape(QFrame.Shape.NoFrame)
         # Rows wrap to the list width, so their heights follow it.
         self.clue_list.setResizeMode(QListView.ResizeMode.Adjust)
         self.clue_list.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self.clue_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        layout.addWidget(self.clue_list, 1)
+        self.clue_header = ClueHeader(self.clue_list, self._clue_delegate)
+        table = QVBoxLayout()
+        table.setSpacing(0)
+        table.addWidget(self.clue_header)
+        table.addWidget(self.clue_list, 1)
+        layout.addLayout(table, 1)
+        self._update_clue_inputs()
 
     @staticmethod
     def _add_certainty_items(combo: QComboBox) -> None:
@@ -267,6 +285,11 @@ class CaseContextPanel(Card):
         self.remove_clue_button.clicked.connect(self._remove_selected_clue)
         self.clue_list.itemChanged.connect(self._clue_item_changed)
         self.clue_list.currentRowChanged.connect(self._select_clue)
+        self._clue_delegate.edit_requested.connect(self.clue_list.setCurrentRow)
+        self._clue_delegate.remove_requested.connect(self._remove_clue_row)
+        self.clue_source.currentIndexChanged.connect(lambda _index: self._update_clue_inputs())
+        self.clue_certainty.currentIndexChanged.connect(lambda _index: self._update_clue_inputs())
+        self.title_edit.textChanged.connect(lambda _text: self.title_error.setVisible(False))
         self.save_button.clicked.connect(self.save_requested.emit)
         self.load_button.clicked.connect(self._show_case_menu)
         self.admin_toggle.toggled.connect(lambda _checked: self._update_admin_rows())
@@ -341,7 +364,7 @@ class CaseContextPanel(Card):
     def _add_clue(self) -> None:
         """Add a new clue, or save the selected one when a clue is being edited."""
         text = self.clue_text.text().strip()
-        if not text:
+        if not text or not self._clue_choices_made():
             return
         if self._editing_clue_row() is not None:
             self._save_clue_edit(text)
@@ -357,6 +380,8 @@ class CaseContextPanel(Card):
         )
         self._append_clue(clue)
         self.clue_text.clear()
+        # Each clue gets its own source and certainty choice.
+        self._clear_clue_choices()
         self._update_clue_count()
         self.changed.emit()
 
@@ -375,11 +400,39 @@ class CaseContextPanel(Card):
             self._set_combo_value(self.clue_certainty, clue.certainty)
         else:
             self.clue_text.clear()
+            self._clear_clue_choices()
         self.add_clue_button.setText("변경 저장" if editing else "단서 추가")
         self.cancel_clue_edit_button.setVisible(editing)
         self.remove_clue_button.setVisible(editing)
-        self.clue_edit_label.setVisible(editing)
+        self.clue_aside.setText("단서 수정 중 · 표에서 고른 줄을 위에서 고칩니다" if editing else CLUE_ASIDE)
         self.clue_use.setEnabled(not editing and self._editing_enabled)
+        self._update_clue_inputs()
+
+    def _clear_clue_choices(self) -> None:
+        for combo in (self.clue_source, self.clue_certainty):
+            combo.setCurrentIndex(-1)
+
+    def _clue_choices_made(self) -> bool:
+        return self.clue_source.currentIndex() >= 0 and self.clue_certainty.currentIndex() >= 0
+
+    def _update_clue_inputs(self) -> None:
+        """The sentence field and add button open once source and certainty are chosen."""
+        ready = self._clue_choices_made() and self._editing_enabled
+        self.clue_text.setEnabled(ready)
+        self.add_clue_button.setEnabled(ready)
+        self.clue_text.setPlaceholderText(
+            "예: 신고자는 사람이 문 앞 상자를 들어 이동했다고 설명함"
+            if ready
+            else "출처와 확실성을 먼저 선택하세요"
+        )
+
+    def require_title(self) -> bool:
+        """Before saving: the case name is needed; say so under the field when it is empty."""
+        if self.title_edit.text().strip():
+            return True
+        self.title_error.setVisible(True)
+        self.title_edit.setFocus()
+        return False
 
     def _save_clue_edit(self, text: str) -> None:
         row = self.clue_list.currentRow()
@@ -421,8 +474,10 @@ class CaseContextPanel(Card):
         self.clue_list.addItem(item)
 
     def _remove_selected_clue(self) -> None:
-        row = self.clue_list.currentRow()
-        if row < 0:
+        self._remove_clue_row(self.clue_list.currentRow())
+
+    def _remove_clue_row(self, row: int) -> None:
+        if row < 0 or row >= self.clue_list.count() or not self._editing_enabled:
             return
         self.clue_list.takeItem(row)
         self._cancel_clue_edit()
@@ -539,4 +594,5 @@ class CaseContextPanel(Card):
         ):
             widget.setEnabled(enabled)
         self.clue_use.setEnabled(enabled and self._editing_clue_row() is None)
+        self._update_clue_inputs()
         self.focus.set_editing_enabled(enabled)
