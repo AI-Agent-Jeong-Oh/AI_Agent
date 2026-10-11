@@ -243,9 +243,9 @@ class CandidateReviewPanelTests(unittest.TestCase):
 
     def test_origin_label_distinguishes_sample_and_real_model(self) -> None:
         self.panel.set_job(job(ResultOrigin.SAMPLE))
-        self.assertIn("샘플 결과 (실제 AI 분석 아님)", self.panel.origin_label.text())
+        self.assertIn("시연용 결과 (실제 AI 분석 아님)", self.panel.origin_label.text())
         self.panel.set_job(job(ResultOrigin.REAL_MODEL))
-        self.assertIn("실제 모델 결과 · vision-model", self.panel.origin_label.text())
+        self.assertIn("AI 분석 결과 (수사관 확인 전)", self.panel.origin_label.text())
 
     def test_new_job_resets_records(self) -> None:
         self.select(0)
@@ -699,7 +699,7 @@ class MainWindowReviewIntegrationTests(unittest.TestCase):
             restarted._video_id = "video-review"
             restarted._refresh_saved_results()
             self.assertEqual(restarted._saved_results_combo.count(), 1)
-            self.assertIn("샘플 · 완료 · 후보 3개", restarted._saved_results_combo.currentText())
+            self.assertIn("시연용 · 완료 · 후보 3개", restarted._saved_results_combo.currentText())
             self.assertTrue(restarted._open_result_button.isEnabled())
 
             restarted._open_saved_result()
@@ -708,7 +708,7 @@ class MainWindowReviewIntegrationTests(unittest.TestCase):
             panel.candidate_list.setCurrentRow(0)
             self.assertEqual(panel.memo_edit.toPlainText(), "재시작 후에도 남아야 함")
             self.assertTrue(panel.judgement_buttons[ReviewJudgement.NEEDS_CHECK].isChecked())
-            self.assertEqual(restarted._mode_banner.text(), "샘플 결과 (실제 AI 분석 아님)")
+            self.assertEqual(restarted._mode_banner.text(), "시연용 결과 (실제 AI 분석 아님)")
         finally:
             restarted.close()
 

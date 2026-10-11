@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from video_agent.knowledge.common_rules import CommonRules
+from video_agent.agent.situations import SITUATION_LABELS
 from video_agent.contracts import (
     AnalysisClue,
     AnalysisJob,
@@ -223,14 +224,15 @@ def build_case_summary(
 
 
 def origin_notice(job: AnalysisJob) -> str:
+    # Same words as the app's status line; the model ID stays for the record.
     if job.origin is ResultOrigin.SAMPLE:
-        return "샘플 결과 — 실제 AI 분석 아님. 후보는 영상 내용을 보지 않고 만든 예시입니다."
+        return "시연용 결과 (실제 AI 분석 아님). 후보는 영상 내용을 보지 않고 만든 예시입니다."
     if job.origin is ResultOrigin.TEST_DOUBLE:
-        return "테스트용 가짜 모델 응답 — 실제 모델 검증 아님."
+        return "테스트 응답 (실제 AI 분석 아님)."
     if job.origin is ResultOrigin.REAL_MODEL:
         return (
-            f"실제 모델 응답 — {job.model_id}. "
-            "후보 요약은 모델 출력이며, 판단과 메모는 수사관이 남긴 기록입니다."
+            f"AI 분석 결과 (사용 모델 {job.model_id}). "
+            "후보 요약은 AI 출력이며, 판단과 메모는 수사관이 남긴 기록입니다."
         )
     return "결과 출처 확인 안 됨."
 
@@ -247,7 +249,7 @@ def render_html(summary: ResultSummary, bodies: Mapping[str, str] | None = None)
         "<!doctype html>",
         '<html lang="ko"><head><meta charset="utf-8">',
         '<meta name="viewport" content="width=device-width, initial-scale=1">',
-        f"<title>검토 결과 요약 — {html.escape(summary.file_stem)}</title>",
+        f"<title>검토 결과 요약 · {html.escape(summary.file_stem)}</title>",
         f"<style>{_HTML_STYLE}</style></head><body><main>",
         "<h1>검토 결과 요약</h1>",
         f'<p class="banner {banner_class}">{html.escape(summary.origin_notice)}</p>',
@@ -344,12 +346,27 @@ def _case_text(job: AnalysisJob, case: CaseRecord | None) -> str:
 
 
 def _case_lines(case: CaseRecord) -> list[str]:
-    occurrence = case.occurrence_time_text or "미입력"
-    return [
+    certainty = _CERTAINTY_LABELS[case.occurrence_time_certainty]
+    occurrence = (
+        f"{case.occurrence_time_text} ({certainty})" if case.occurrence_time_text else certainty
+    )
+    focus = (
+        ", ".join(SITUATION_LABELS[item] for item in case.focus_situations)
+        + " (확인 순서에만 반영, 범죄 여부를 판단한 것이 아님)"
+        if case.focus_situations
+        else "선택 없음 (모든 상황을 같은 우선순위로 확인)"
+    )
+    lines = [
         f"사건명: {case.title}",
         f"사건 유형: {case.case_type or '미입력'}",
-        f"발생 시각: {occurrence} ({_CERTAINTY_LABELS[case.occurrence_time_certainty]})",
+        f"발생 시각: {occurrence}",
+        f"우선 확인할 상황: {focus}",
     ]
+    if case.focus_hints:
+        lines.append(
+            f"추가 탐색 힌트: {', '.join(case.focus_hints)} (사용자 입력이며 영상으로 확인한 사실이 아님)"
+        )
+    return lines
 
 
 _CLUE_HEADING = "분석에 사용한 사전 정보 (사용자 제공 정보이며 영상으로 확인한 사실이 아님):"
@@ -370,11 +387,11 @@ def _clue_lines(clues: Sequence[AnalysisClue], *, heading: bool = True) -> list[
 
 def _scope_text(job: AnalysisJob, video_file_name: str | None) -> str:
     if job.mode is AnalysisMode.SAMPLE:
-        method = "샘플 (실제 AI 분석 아님)"
+        method = "시연용 (실제 AI 분석 아님)"
     elif job.mode is AnalysisMode.LOCAL:
-        method = f"로컬 VLM · {job.model_id}"
+        method = f"이 컴퓨터에서 AI 분석 (사용 모델 {job.model_id})"
     else:
-        method = f"외부 API · {job.model_id}"
+        method = f"외부 AI 분석 (사용 모델 {job.model_id})"
     if job.range_start_sec is not None and job.range_end_sec is not None:
         scope = f"{_time(job.range_start_sec)}–{_time(job.range_end_sec)} (원본 시작 기준)"
     else:
@@ -388,7 +405,7 @@ def _scope_text(job: AnalysisJob, video_file_name: str | None) -> str:
         f"분석 범위: {scope}",
         f"분석 프레임: {job.analyzed_frame_count}/{job.requested_frame_count}",
         f"결과 상태: {status}",
-        f"모델 후보 수: {len(job.segments)}개",
+        f"AI 후보 수: {len(job.segments)}개",
     ]
     return "\n".join(lines)
 
@@ -494,7 +511,7 @@ def _open_items_text(
 
 
 _SAMPLING_NOTE = (
-    "모델 후보는 분석한 프레임에서 고른 것이므로, 후보가 없는 구간에 해당 장면이 "
+    "AI 후보는 분석한 프레임에서 고른 것이므로, 후보가 없는 구간에 해당 장면이 "
     "없다는 뜻은 아닙니다."
 )
 
@@ -509,11 +526,11 @@ _TIMELINE_NOTE = (
 
 def _origin_short(job: AnalysisJob) -> str:
     if job.origin is ResultOrigin.SAMPLE:
-        return "샘플 결과(실제 AI 분석 아님)"
+        return "시연용 결과(실제 AI 분석 아님)"
     if job.origin is ResultOrigin.TEST_DOUBLE:
-        return "테스트용 가짜 응답(실제 모델 검증 아님)"
+        return "테스트 응답(실제 AI 분석 아님)"
     if job.origin is ResultOrigin.REAL_MODEL:
-        return f"실제 모델 응답({job.model_id})"
+        return f"AI 분석 결과(사용 모델 {job.model_id})"
     return "출처 확인 안 됨"
 
 
@@ -521,11 +538,11 @@ def _case_origin_notice(analyzed: Sequence[CameraSummaryInput]) -> str:
     jobs = [camera.job for camera in analyzed]
     if len({(job.origin, job.model_id) for job in jobs}) == 1:
         return origin_notice(jobs[0])
-    text = "카메라마다 결과 출처가 다릅니다 — " + " · ".join(
+    text = "카메라마다 결과 출처가 다릅니다. " + " · ".join(
         f"{camera.camera}: {_origin_short(camera.job)}" for camera in analyzed
     )
     if any(job.origin is ResultOrigin.SAMPLE for job in jobs):
-        text += ". 샘플 결과의 후보는 영상 내용을 보지 않고 만든 예시입니다."
+        text += ". 시연용 결과의 후보는 영상 내용을 보지 않고 만든 예시입니다."
     return text
 
 

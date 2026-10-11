@@ -13,7 +13,7 @@ from dataclasses import replace
 from unittest.mock import MagicMock
 
 from video_agent.analysis.vision import build_prompt
-from video_agent.contracts import JobStatus, ResultOrigin, ReviewJudgement
+from video_agent.contracts import CaseVideoLink, JobStatus, ResultOrigin, ReviewJudgement
 from video_agent.models.config import RuntimeInventory
 from video_agent.ui.main_window import MainWindow
 from video_agent.video.files import build_video_id
@@ -137,19 +137,33 @@ class CaseVideoListTests(unittest.TestCase):
 
     def test_camera_details_follow_each_video(self) -> None:
         self.add(self.cam_a, self.cam_b)
-        self.window._case_panel.camera_location_edit.setText("문앞 CCTV")
+        panel = self.window._case_panel
+        panel.clock_offset.setValue(3.0)
         self.select(build_video_id(self.cam_b))
-        self.assertEqual(self.window._case_panel.camera_location_edit.text(), "")
-        self.window._case_panel.camera_location_edit.setText("복도 CCTV")
+        self.assertEqual(panel.clock_offset.value(), 0.0)
+        panel.clock_offset.setValue(-2.0)
         self.select(build_video_id(self.cam_a))
 
-        self.assertEqual(self.window._case_panel.camera_location_edit.text(), "문앞 CCTV")
-        locations = {entry.file_name: entry.camera_location for entry in self.entries()}
-        self.assertEqual(locations, {"cam_a.mp4": "문앞 CCTV", "cam_b.mp4": "복도 CCTV"})
+        self.assertEqual(panel.clock_offset.value(), 3.0)
+        offsets = {
+            link.video_id: link.clock_offset_seconds
+            for link in self.window._case_from_panel(1).video_links
+        }
+        self.assertEqual(
+            offsets, {build_video_id(self.cam_a): 3.0, build_video_id(self.cam_b): -2.0}
+        )
+
+    def test_camera_location_is_not_asked_but_an_old_one_is_kept(self) -> None:
+        self.assertFalse(hasattr(self.window._case_panel, "camera_location_edit"))
+        self.add(self.cam_a)
+        video_id = build_video_id(self.cam_a)
+        panel = self.window._case_panel
+        panel.show_link(CaseVideoLink(video_id=video_id, camera_location="문앞 CCTV"))
+        self.assertEqual(panel.video_link(video_id).camera_location, "문앞 CCTV")
 
     def test_saved_case_links_all_videos_and_relinks_the_same_file_only(self) -> None:
         self.add(self.cam_a, self.cam_b)
-        self.window._case_panel.camera_location_edit.setText("문앞 CCTV")
+        self.window._case_panel.clock_offset.setValue(3.0)
         self.window._save_case()
         saved = self.window._case_record
         self.assertEqual(
@@ -162,8 +176,8 @@ class CaseVideoListTests(unittest.TestCase):
         reopened._load_case()
         self.assertEqual([entry.file_name for entry in self.entries(reopened)], [None, None])
         # Camera details stay empty and locked until one of the case videos is open.
-        self.assertEqual(reopened._case_panel.camera_location_edit.text(), "")
-        self.assertFalse(reopened._case_panel.camera_location_edit.isEnabled())
+        self.assertEqual(reopened._case_panel.clock_offset.value(), 0.0)
+        self.assertFalse(reopened._case_panel.clock_offset.isEnabled())
         self.assertEqual(
             reopened._video_list.count_label.text(), "영상 2건 · 파일 연결 필요 2건"
         )
@@ -183,7 +197,7 @@ class CaseVideoListTests(unittest.TestCase):
             reopened._relink_video(build_video_id(self.cam_a))
         self.assertEqual(reopened._case_videos[build_video_id(self.cam_a)], self.cam_a)
         self.assertEqual(reopened._video_id, build_video_id(self.cam_a))
-        self.assertEqual(reopened._case_panel.camera_location_edit.text(), "문앞 CCTV")
+        self.assertEqual(reopened._case_panel.clock_offset.value(), 3.0)
 
     def test_removing_a_video_drops_its_link_but_not_the_open_one(self) -> None:
         self.add(self.cam_a, self.cam_b)

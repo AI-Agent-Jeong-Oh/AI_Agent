@@ -121,6 +121,8 @@ class CandidateReviewPanel(QWidget):
 
     playback_range_requested = Signal(float, float)
     records_changed = Signal()
+    # The selected candidate changed (or none is selected any more).
+    selection_changed = Signal()
     summary_requested = Signal()
 
     def __init__(
@@ -477,18 +479,19 @@ class CandidateReviewPanel(QWidget):
 
     def _set_origin(self, job: AnalysisJob) -> None:
         if job.origin is ResultOrigin.SAMPLE:
-            text = "샘플 결과 (실제 AI 분석 아님)"
+            text = "시연용 결과 (실제 AI 분석 아님)"
             style = theme.banner_style("sample")
         elif job.origin is ResultOrigin.TEST_DOUBLE:
             text = "테스트 응답 (실제 모델 검증 아님)"
             style = theme.banner_style("test_double")
         elif job.origin is ResultOrigin.REAL_MODEL:
-            text = f"실제 모델 결과 · {job.model_id} (수사관 확인 전)"
+            text = "AI 분석 결과 (수사관 확인 전)"
             style = theme.banner_style("real_model")
         else:
             text = "출처 확인 안 됨"
             style = theme.banner_style("neutral")
         self.origin_label.setText(text)
+        self.origin_label.setToolTip(f"모델: {job.model_id}" if job.model_id else "")
         self.origin_label.setStyleSheet(style + "padding:6px;border-radius:5px;font-weight:700;")
 
     # ----- records -------------------------------------------------------------
@@ -753,6 +756,7 @@ class CandidateReviewPanel(QWidget):
         self._current_index = index if valid else None
         self._sync_timing()
         self._show_editor_for(self._current_index)
+        self.selection_changed.emit()
 
     def _refresh_status(self) -> None:
         segments = self._segments()
@@ -778,6 +782,10 @@ class CandidateReviewPanel(QWidget):
             else ""
         )
         self._record_layout.setRowVisible(self.unsaved_label, bool(unsaved))
+
+    @property
+    def current_index(self) -> int | None:
+        return self._current_index
 
     def select_segment(self, index: int) -> bool:
         """Select one candidate, showing every candidate first if a filter hides it."""

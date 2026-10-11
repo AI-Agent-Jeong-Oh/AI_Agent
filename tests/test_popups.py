@@ -6,6 +6,7 @@ from PySide6.QtCore import QDate, QDateTime, QPoint, QTime, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLabel
 
+from video_agent.contracts import CaseRecord, InformationCertainty
 from video_agent.ui.case_panel import CaseContextPanel
 from video_agent.ui.datetime_field import DateTimeField, parse_date_time
 from video_agent.ui.popover import InfoPopover, info_mark
@@ -68,6 +69,29 @@ class PopupTests(unittest.TestCase):
     def test_case_occurrence_time_has_the_calendar_field(self) -> None:
         panel = CaseContextPanel()
         self.assertIsInstance(panel.occurrence_edit, DateTimeField)
+        panel.close()
+
+    def test_unknown_occurrence_time_needs_no_date(self) -> None:
+        panel = CaseContextPanel()
+        certainty = panel.occurrence_certainty
+        self.assertEqual(certainty.currentData(), InformationCertainty.UNKNOWN)
+        self.assertTrue(panel.occurrence_edit.isHidden())
+        certainty.setCurrentIndex(certainty.findData(InformationCertainty.ESTIMATED))
+        self.assertFalse(panel.occurrence_edit.isHidden())
+        panel.occurrence_edit.setText("2026-10-10 20:00")
+        certainty.setCurrentIndex(certainty.findData(InformationCertainty.UNKNOWN))
+        self.assertTrue(panel.occurrence_edit.isHidden())
+        self.assertEqual(panel.occurrence_edit.text(), "")
+        # An older case with a date marked unknown still shows that date.
+        panel.set_record(
+            CaseRecord(
+                case_id="case-old",
+                revision=1,
+                title="이전 사건",
+                occurrence_time_text="2026-10-01 09:00",
+            )
+        )
+        self.assertFalse(panel.occurrence_edit.isHidden())
         panel.close()
 
 

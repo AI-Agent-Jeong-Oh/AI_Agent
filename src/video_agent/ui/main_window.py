@@ -23,6 +23,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QAbstractSpinBox,
     QButtonGroup,
     QCheckBox,
@@ -46,7 +47,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSlider,
     QSplitter,
     QStackedWidget,
     QStyle,
@@ -56,6 +56,7 @@ from PySide6.QtWidgets import (
 )
 
 from video_agent.agent.planning import AgentSession, AnalysisIntent, PlanningError, WorkflowState
+from video_agent.agent.situations import DEFAULT_PURPOSES, SITUATION_LABELS
 from video_agent.analysis.evidence import (
     duration_requirement,
     fine_detail_requirement,
@@ -92,11 +93,11 @@ from video_agent.storage.json_store import (
     StoredResult,
 )
 from video_agent.storage.paths import AppPaths, CacheManager
+from video_agent.ui.analysis_choice import SAMPLE_LABEL, AnalysisChoice
 from video_agent.ui.card import Card
 from video_agent.ui.case_panel import CERTAINTY_LABELS, SOURCE_LABELS, CaseContextPanel
-from video_agent.ui.disclosure import DisclosureButton
-from video_agent.ui.flow_steps import FlowSteps
 from video_agent.ui.motion_table import MotionHeader, MotionItemDelegate
+from video_agent.ui.timeline import TimelineMark, TimelineSlider
 from video_agent.ui.popover import info_mark
 from video_agent.ui import theme
 from video_agent.ui.video_list import CaseVideoList, VideoEntry
@@ -368,7 +369,8 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._build_video_panel())
         splitter.addWidget(self._build_step_area(self._build_analysis_panel()))
-        splitter.setSizes([660, 540])
+        # The right column (case details, plan, review) gets as much room as the video.
+        splitter.setSizes([600, 600])
         content_layout.addWidget(splitter, 1)
         root_layout.addWidget(content, 1)
 
@@ -532,7 +534,8 @@ class MainWindow(QMainWindow):
         theme.set_icon(self._forward_button, "fast-forward")
         for button in (self._back_button, self._play_button, self._forward_button):
             theme.mark_compact(button)
-        self._timeline = QSlider(Qt.Orientation.Horizontal)
+        # Also marks the analysed candidate segments once a result for this video is shown.
+        self._timeline = TimelineSlider()
         self._timeline.setRange(0, 0)
         self._timeline.setAccessibleName("재생 위치")
         self._time_label = QLabel("00:00 / 00:00")
@@ -561,29 +564,33 @@ class MainWindow(QMainWindow):
         purpose_group = Card("분석 설정")
         purpose_layout = QFormLayout(purpose_group.body)
         purpose_layout.setContentsMargins(12, 12, 12, 12)
-        self._mode_combo = QComboBox()
-        self._mode_combo.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        self._mode_combo.setMinimumContentsLength(8)
-        self._mode_combo.addItem("샘플 (실제 분석 아님)", AnalysisMode.SAMPLE)
-        self._mode_combo.addItem("로컬 AI (이 컴퓨터)", AnalysisMode.LOCAL)
-        self._mode_combo.addItem("외부 AI (OpenAI)", AnalysisMode.EXTERNAL)
-        self._model_edit = QLineEdit()
-        self._model_edit.setPlaceholderText("예: qwen3-vl:8b-instruct")
+        # How to analyse, in plain words: fast or accurate on this computer, a
+        # demonstration, or an external AI service (models stay behind the choices).
+        self._analysis_choice = AnalysisChoice()
+        self._model_refresh_button = QPushButton("다시 확인")
+        self._model_refresh_button.setToolTip("이 컴퓨터에 설치된 AI 분석 프로그램을 다시 찾습니다")
+        theme.mark_compact(self._model_refresh_button)
+        choice_row = QWidget()
+        choice_row_layout = QHBoxLayout(choice_row)
+        choice_row_layout.setContentsMargins(0, 0, 0, 0)
+        choice_row_layout.addWidget(self._analysis_choice, 1)
+        choice_row_layout.addWidget(self._model_refresh_button)
+        self._external_model_edit = QLineEdit()
+        self._external_model_edit.setPlaceholderText("예: gpt-4.1-mini")
+        self._external_model_edit.setAccessibleName("외부 AI 이름")
         self._external_api_key_edit = QLineEdit()
         self._external_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self._external_api_key_edit.setClearButtonEnabled(True)
-        self._external_api_key_edit.setPlaceholderText("API 키 (저장하지 않음)")
+        self._external_api_key_edit.setPlaceholderText("외부 서비스 인증키 (저장하지 않음)")
         self._external_api_key_edit.setToolTip(
             "키는 설정·결과·로그에 저장하지 않습니다. OPENAI_API_KEY 환경 변수도 사용할 수 있습니다."
         )
         # Two lines so the narrower settings card beside the video list keeps its width.
         self._external_vision_confirm = QCheckBox(
-            "입력한 외부 모델이 이미지 입력을\n지원함을 확인했습니다"
+            "이 외부 AI가 사진을 읽을 수 있음을\n확인했습니다"
         )
         self._external_vision_confirm.setAccessibleName(
-            "입력한 외부 모델이 이미지 입력을 지원함을 확인했습니다"
+            "이 외부 AI가 사진을 읽을 수 있음을 확인했습니다"
         )
         self._external_vision_confirm.setToolTip(
             "텍스트 전용 모델을 영상 분석 모델처럼 사용하지 않기 위한 명시적 확인입니다."
@@ -610,16 +617,15 @@ class MainWindow(QMainWindow):
         self._purpose_edit.setAccessibleName("분석 목적")
         self._range_start.setAccessibleName("분석 구간 시작")
         self._range_end.setAccessibleName("분석 구간 종료")
-        # Mode and model rarely change, so they sit folded under the purpose and range;
-        # the status line above always names the current mode.
-        self._advanced_toggle = DisclosureButton("분석 방식과 모델")
+        # One always-visible row (no folding), so the card keeps its height and the video
+        # below does not shrink; the external rows appear only for the external choice.
         purpose_layout.addRow("분석 목적", self._purpose_edit)
         purpose_layout.addRow("분석 구간", range_row)
-        purpose_layout.addRow(self._advanced_toggle)
-        purpose_layout.addRow("모드", self._mode_combo)
-        purpose_layout.addRow("모델", self._model_edit)
-        purpose_layout.addRow("OpenAI 키", self._external_api_key_edit)
-        purpose_layout.addRow("영상 입력", self._external_vision_confirm)
+        purpose_layout.addRow("분석 방식", choice_row)
+        purpose_layout.addRow("외부 AI", self._external_model_edit)
+        purpose_layout.addRow("인증키", self._external_api_key_edit)
+        purpose_layout.addRow("사진 입력", self._external_vision_confirm)
+        self._last_mode: AnalysisMode | None = None
         self._purpose_form_layout = purpose_layout
         # Labels move above their fields only when a row would not fit (large text).
         self._purpose_form_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
@@ -732,9 +738,6 @@ class MainWindow(QMainWindow):
         plan_step = QWidget()
         plan_step_layout = QVBoxLayout(plan_step)
         plan_step_layout.setContentsMargins(0, 0, 0, 0)
-        # Where the user is in step ②: done steps get a check, the next one an arrow.
-        self._flow_steps = FlowSteps(("후보 찾기(선택)", "계획 만들기", "승인", "실행"))
-        plan_step_layout.addWidget(self._flow_steps)
         plan_step_layout.addWidget(self._plan_scroll, 1)
         plan_step_layout.addWidget(run_bar)
 
@@ -838,6 +841,7 @@ class MainWindow(QMainWindow):
         self._case_panel.changed.connect(self._case_inputs_changed)
         self._case_panel.save_requested.connect(self._save_case)
         self._case_panel.load_requested.connect(self._load_case)
+        self._case_panel.case_type_chosen.connect(self._suggest_purpose)
         self._case_panel.new_requested.connect(self._new_case)
         self._choose_button.clicked.connect(self._choose_video)
         self._video_list.video_activated.connect(self._activate_listed_video)
@@ -854,10 +858,13 @@ class MainWindow(QMainWindow):
         self._back_button.clicked.connect(lambda: self._skip_playback(-10))
         self._forward_button.clicked.connect(lambda: self._skip_playback(10))
         self._timeline.sliderPressed.connect(self._slider_pressed)
+        self._timeline.mark_clicked.connect(self._timeline_mark_clicked)
+        self._review_panel.selection_changed.connect(self._refresh_timeline_marks)
         self._timeline.sliderReleased.connect(self._slider_released)
         self._purpose_edit.textChanged.connect(self._purpose_changed)
-        self._mode_combo.currentIndexChanged.connect(self._mode_changed)
-        self._model_edit.textChanged.connect(self._model_changed)
+        self._analysis_choice.choice_changed.connect(self._analysis_choice_changed)
+        self._external_model_edit.textChanged.connect(self._model_changed)
+        self._model_refresh_button.clicked.connect(self._refresh_local_models)
         self._external_api_key_edit.textChanged.connect(self._external_credential_changed)
         self._external_vision_confirm.checkStateChanged.connect(
             self._external_credential_changed
@@ -867,7 +874,6 @@ class MainWindow(QMainWindow):
         self._motion_scan_button.clicked.connect(self._start_motion_scan)
         self._motion_list.itemClicked.connect(self._preview_motion_proposal)
         self._motion_list.itemChanged.connect(self._motion_check_changed)
-        self._advanced_toggle.toggled.connect(lambda _checked: self._update_external_controls())
         self._make_plan_button.clicked.connect(self._make_plan)
         self._approve_button.clicked.connect(self._approve_plan)
         self._transfer_button.clicked.connect(self._approve_transfer)
@@ -1009,19 +1015,20 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(theme.build_stylesheet(scaled))
 
     def _restore_settings(self) -> None:
-        index = self._mode_combo.findData(self._settings.mode)
-        self._mode_combo.blockSignals(True)
-        self._model_edit.blockSignals(True)
-        self._mode_combo.setCurrentIndex(max(0, index))
-        if self._settings.mode is AnalysisMode.LOCAL:
-            self._model_edit.setText(self._preferred_local_model())
-        elif self._settings.mode is AnalysisMode.EXTERNAL:
-            self._model_edit.setText(self._settings.external_model_id or "")
-        self._model_edit.setEnabled(self._settings.mode is not AnalysisMode.SAMPLE)
-        self._model_edit.blockSignals(False)
-        self._mode_combo.blockSignals(False)
-        if self._model_needs_attention():
-            self._advanced_toggle.setChecked(True)
+        mode = self._settings.mode
+        if not self._settings_store.path.exists() and self._local_vision_models():
+            # First run: analyse on this computer by default.
+            mode = AnalysisMode.LOCAL
+        self._external_model_edit.blockSignals(True)
+        self._external_model_edit.setText(
+            os.environ.get("VIDEO_AGENT_EXTERNAL_MODEL") or self._settings.external_model_id or ""
+        )
+        self._external_model_edit.blockSignals(False)
+        self._analysis_choice.blockSignals(True)
+        self._refresh_analysis_choices()
+        self._analysis_choice.select(mode, self._preferred_local_model())
+        self._analysis_choice.blockSignals(False)
+        self._last_mode = self._current_mode()
         self._update_external_controls()
         self._update_mode_banner()
         if self._settings_error:
@@ -1039,12 +1046,14 @@ class MainWindow(QMainWindow):
             case_id=self._case_record.case_id,
             revision=revision,
             title=self._case_panel.title_edit.text().strip() or "새 사건",
-            case_type=self._case_panel.type_edit.text().strip(),
+            case_type=self._case_panel.case_type_text(),
             occurrence_time_text=self._case_panel.occurrence_edit.text().strip(),
             occurrence_time_certainty=self._case_panel.occurrence_certainty.currentData(),
             management_notes=self._case_panel.notes_edit.toPlainText().strip(),
             clues=self._current_case_clues(),
             video_links=tuple(sorted(links, key=lambda item: item.video_id)),
+            focus_situations=self._case_panel.focus_situations(),
+            focus_hints=self._case_panel.focus_hints(),
         )
 
     @staticmethod
@@ -1052,6 +1061,12 @@ class MainWindow(QMainWindow):
         data = record.to_dict()
         data.pop("revision", None)
         return data
+
+    def _suggest_purpose(self, case_type: str) -> None:
+        """Start an empty purpose from the case type (the user can rewrite it)."""
+        suggestion = DEFAULT_PURPOSES.get(case_type)
+        if suggestion and not self._purpose_edit.toPlainText().strip():
+            self._purpose_edit.setPlainText(suggestion)
 
     def _case_inputs_changed(self) -> None:
         self._refresh_video_list()
@@ -1268,9 +1283,9 @@ class MainWindow(QMainWindow):
         return saved or CaseVideoLink(video_id=video_id)
 
     _ORIGIN_SHORT = {
-        ResultOrigin.SAMPLE: "샘플",
+        ResultOrigin.SAMPLE: "시연용",
         ResultOrigin.TEST_DOUBLE: "테스트 응답",
-        ResultOrigin.REAL_MODEL: "실제 모델",
+        ResultOrigin.REAL_MODEL: "AI 분석",
     }
 
     def _refresh_video_statuses(self) -> None:
@@ -1343,6 +1358,7 @@ class MainWindow(QMainWindow):
         self._refresh_video_placeholder()
         self._refresh_attention()
         self._refresh_case_header()
+        self._refresh_timeline_marks()
 
     def _review_target(self) -> str | None:
         return self._review_video_id or self._video_id
@@ -1423,6 +1439,48 @@ class MainWindow(QMainWindow):
         if job is not None:
             self._overview_sessions[job.job_id] = self._review_panel.review_session
         self._refresh_case_overview()
+        self._refresh_timeline_marks()
+
+    _MARK_COLORS = {
+        ReviewJudgement.UNREVIEWED: theme.PRIMARY_FILL,
+        ReviewJudgement.RELEVANT: theme.SUCCESS,
+        ReviewJudgement.NEEDS_CHECK: theme.WARNING_DOT,
+        ReviewJudgement.EXCLUDED: theme.GRAY_40,
+    }
+
+    def _refresh_timeline_marks(self) -> None:
+        """Mark the shown result's candidates on the playback bar of the same video."""
+        job = self._review_panel.job
+        if job is None or job.video_id != self._video_id or self._duration_ms <= 0:
+            self._timeline.set_marks(())
+            return
+        selected = self._review_panel.current_index
+        marks = []
+        for index, segment in enumerate(job.segments):
+            judgement = self._review_panel.saved_record_for(index).judgement
+            start = seconds_to_milliseconds(segment.start_sec)
+            end = seconds_to_milliseconds(segment.end_sec)
+            marks.append(
+                TimelineMark(
+                    start_ms=min(start, self._duration_ms),
+                    end_ms=min(end, self._duration_ms),
+                    color=self._MARK_COLORS[judgement],
+                    label=(
+                        f"후보 #{index + 1} · {format_milliseconds(start)}–{format_milliseconds(end)}"
+                        f" · {JUDGEMENT_LABELS[judgement]}"
+                    ),
+                    selected=index == selected,
+                )
+            )
+        self._timeline.set_marks(tuple(marks))
+
+    def _timeline_mark_clicked(self, index: int) -> None:
+        """A band on the playback bar selects that candidate and plays from it."""
+        if not self._review_panel.select_segment(index):
+            return
+        item = self._result_list.currentItem()
+        if item is not None:
+            self._seek_to_segment(item)
 
     def _camera_tab_changed(self, index: int) -> None:
         video_id = self._camera_tabs.tabData(index)
@@ -1687,7 +1745,6 @@ class MainWindow(QMainWindow):
         self._analysis_started_at = None
         self._motion_worker = None
         self._set_analysis_running(False)
-        self._model_edit.setEnabled(self._current_mode() is not AnalysisMode.SAMPLE)
         self._cancel_button.setEnabled(False)
         self._update_post_run_buttons()
 
@@ -1857,6 +1914,7 @@ class MainWindow(QMainWindow):
     def _on_duration_changed(self, duration_ms: int) -> None:
         self._duration_ms = max(0, duration_ms)
         self._timeline.setRange(0, self._duration_ms)
+        self._refresh_timeline_marks()
         self._set_player_controls_enabled(self._duration_ms > 0)
         self._time_label.setText(f"00:00 / {format_milliseconds(self._duration_ms)}")
 
@@ -1932,24 +1990,11 @@ class MainWindow(QMainWindow):
         detail = error_string or "지원되지 않거나 손상된 영상일 수 있습니다."
         self._show_error(f"영상을 재생할 수 없습니다: {detail}")
 
-    def _mode_changed(self) -> None:
+    def _analysis_choice_changed(self) -> None:
         mode = self._current_mode()
-        self._model_edit.blockSignals(True)
-        if mode is AnalysisMode.SAMPLE:
-            self._model_edit.clear()
-        elif mode is AnalysisMode.LOCAL:
-            self._model_edit.setText(self._preferred_local_model())
-        else:
-            self._model_edit.setText(
-                os.environ.get("VIDEO_AGENT_EXTERNAL_MODEL")
-                or self._settings.external_model_id
-                or ""
-            )
-        self._model_edit.setEnabled(mode is not AnalysisMode.SAMPLE)
-        self._model_edit.blockSignals(False)
-        self._external_vision_confirm.setChecked(False)
-        if self._model_needs_attention():
-            self._advanced_toggle.setChecked(True)
+        if mode is not self._last_mode:
+            self._external_vision_confirm.setChecked(False)
+            self._last_mode = mode
         self._update_external_controls()
         self._apply_ui_zoom()
         self._update_mode_banner()
@@ -1957,9 +2002,31 @@ class MainWindow(QMainWindow):
         self._persist_settings()
 
     def _current_mode(self) -> AnalysisMode:
-        return AnalysisMode(self._mode_combo.currentData())
+        return self._analysis_choice.mode()
 
-    def _model_changed(self) -> None:
+    def _model_id(self) -> str:
+        """The model behind the current choice (typed name for the external AI)."""
+        mode = self._current_mode()
+        if mode is AnalysisMode.EXTERNAL:
+            return self._external_model_edit.text().strip()
+        return self._analysis_choice.model_id() if mode is AnalysisMode.LOCAL else ""
+
+    def _select_mode(self, mode: AnalysisMode) -> None:
+        """Choose a mode the way a user would (local: this computer's usual model)."""
+        self._analysis_choice.blockSignals(True)
+        self._refresh_analysis_choices()
+        self._analysis_choice.blockSignals(False)
+        self._analysis_choice.select(
+            mode, self._preferred_local_model() if mode is AnalysisMode.LOCAL else ""
+        )
+
+    def _set_model_id(self, model_id: str) -> None:
+        if self._current_mode() is AnalysisMode.EXTERNAL:
+            self._external_model_edit.setText(model_id)
+        else:
+            self._analysis_choice.select(AnalysisMode.LOCAL, model_id)
+
+    def _model_changed(self, *_args: object) -> None:
         if self._current_mode() is AnalysisMode.EXTERNAL:
             self._external_vision_confirm.setChecked(False)
         self._inputs_changed()
@@ -1968,25 +2035,23 @@ class MainWindow(QMainWindow):
         self._update_mode_banner()
         self._update_post_run_buttons()
 
-    def _model_needs_attention(self) -> bool:
-        """External mode needs a key and a check; local mode needs an installed vision model."""
-        mode = self._current_mode()
-        if mode is AnalysisMode.EXTERNAL:
-            return True
-        model_id = self._model_edit.text().strip() or None
-        return mode is AnalysisMode.LOCAL and not self._runtime_inventory.confirms_vision(model_id)
-
     def _update_external_controls(self) -> None:
         external = self._current_mode() is AnalysisMode.EXTERNAL
-        advanced = self._advanced_toggle.isChecked()
-        self._purpose_form_layout.setRowVisible(self._mode_combo, advanced)
-        self._purpose_form_layout.setRowVisible(self._model_edit, advanced)
-        self._purpose_form_layout.setRowVisible(self._external_api_key_edit, advanced and external)
-        self._purpose_form_layout.setRowVisible(self._external_vision_confirm, advanced and external)
+        form = self._purpose_form_layout
+        for widget in (
+            self._external_model_edit,
+            self._external_api_key_edit,
+            self._external_vision_confirm,
+        ):
+            form.setRowVisible(widget, external)
         self._refresh_next_action()
         editable = external and not self._background_work_running()
-        self._external_api_key_edit.setEnabled(editable)
-        self._external_vision_confirm.setEnabled(editable)
+        for widget in (
+            self._external_model_edit,
+            self._external_api_key_edit,
+            self._external_vision_confirm,
+        ):
+            widget.setEnabled(editable)
 
     def _external_api_key_value(self) -> str | None:
         entered = self._external_api_key_edit.text().strip()
@@ -2017,12 +2082,77 @@ class MainWindow(QMainWindow):
             in {"1", "true", "yes", "on"}
         )
 
+    def _local_vision_models(self) -> tuple[str, ...]:
+        """Image-capable models that run on this computer (cloud models left out)."""
+        return tuple(
+            item
+            for item in self._runtime_inventory.vision_ollama_models
+            if not self._model_display_name(item)[1]
+        )
+
+    @staticmethod
+    def _parameter_billions(model_id: str) -> float | None:
+        tag = model_id.partition(":")[2]
+        size = re.search(r"(?<![\w.])(\d+(?:\.\d+)?)b(?![a-z])", tag)
+        return float(size.group(1)) if size else None
+
+    def _local_choice_labels(self) -> dict[str, str]:
+        """Plain names for the installed models: 빠른 / 보통 / 정확한 분석 by size."""
+        models = self._local_vision_models()
+        sizes = {item: self._parameter_billions(item) for item in models}
+        known = sorted({size for size in sizes.values() if size is not None})
+        names = {}
+        for item in models:
+            size = sizes[item]
+            if len(known) < 2 or size is None:
+                names[item] = "AI 분석"
+            elif size == known[0]:
+                names[item] = "빠른 분석"
+            elif size == known[-1]:
+                names[item] = "정확한 분석"
+            else:
+                names[item] = "보통 분석"
+        # Two models of the same size keep apart by a number.
+        seen: dict[str, int] = {}
+        for item in models:
+            label = names[item]
+            seen[label] = seen.get(label, 0) + 1
+            if seen[label] > 1:
+                names[item] = f"{label} {seen[label]}"
+        return names
+
+    def _refresh_analysis_choices(self) -> None:
+        labels = self._local_choice_labels()
+        order = sorted(labels, key=lambda item: (self._parameter_billions(item) or 0, item))
+        self._analysis_choice.set_local_models(
+            [(item, labels[item]) for item in order],
+            "AI 분석 (설치된 프로그램 없음)",
+        )
+
+    def _refresh_local_models(self) -> None:
+        """Look for installed programs again (after one is installed while the app is open)."""
+        if self._background_work_running():
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._runtime_inventory = RuntimeInventory.detect()
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._analysis_choice.blockSignals(True)
+        self._refresh_analysis_choices()
+        if self._current_mode() is AnalysisMode.LOCAL:
+            self._analysis_choice.select(AnalysisMode.LOCAL, self._preferred_local_model())
+        self._analysis_choice.blockSignals(False)
+        self._analysis_choice_changed()
+        count = len(self._local_vision_models())
+        self.statusBar().showMessage(f"이 컴퓨터에서 쓸 수 있는 AI 분석 {count}가지", 5000)
+
     def _preferred_local_model(self) -> str:
         configured = (os.environ.get("VIDEO_AGENT_LOCAL_MODEL") or "").strip()
         if configured:
             return configured
         saved = (self._settings.local_model_id or "").strip()
-        confirmed = self._runtime_inventory.vision_ollama_models
+        confirmed = self._local_vision_models()
         if saved in confirmed and "instruct" in saved.lower():
             return saved
         instruct_models = tuple(item for item in confirmed if "instruct" in item.lower())
@@ -2059,7 +2189,7 @@ class MainWindow(QMainWindow):
         return AnalysisIntent(
             purpose=self._purpose_edit.toPlainText().strip(),
             mode=mode,
-            model_id=self._model_edit.text().strip() or None,
+            model_id=self._model_id() or None,
             range_start_sec=self._range_start.value(),
             range_end_sec=self._range_end.value() or None,
             sampling_interval_sec=self._sampling_interval_override,
@@ -2070,6 +2200,8 @@ class MainWindow(QMainWindow):
             case_id=self._case_record.case_id,
             case_revision=self._case_record.revision,
             analysis_clues=self._current_case_clues(for_analysis=True),
+            focus_situations=self._case_panel.focus_situations(),
+            focus_hints=self._case_panel.focus_hints(),
         )
 
     def _purpose_changed(self) -> None:
@@ -2131,22 +2263,28 @@ class MainWindow(QMainWindow):
             self._show_error("분석 목적을 입력해 주세요.")
             return
         mode = self._current_mode()
-        model_id = self._model_edit.text().strip() or None
-        if self._model_needs_attention():
-            self._advanced_toggle.setChecked(True)
+        model_id = self._model_id() or None
+        if mode is AnalysisMode.LOCAL and model_id and self._model_display_name(model_id)[1]:
+            self._show_error(
+                "선택한 분석 프로그램은 외부 서버에서 실행되어 이 컴퓨터 안에서 분석할 수 없습니다. "
+                "분석 방식을 다시 고르세요."
+            )
+            return
         if mode is AnalysisMode.LOCAL and not self._runtime_inventory.confirms_vision(model_id):
             if model_id:
                 self._show_error(
-                    f"설치된 Ollama가 '{model_id}'의 영상 입력 기능을 확인하지 못했습니다. "
-                    "상단에 표시된 비전 모델을 사용해 주세요."
+                    "선택한 분석 방식을 이 컴퓨터에서 쓸 수 없습니다. "
+                    "[다시 확인]을 누르거나 다른 분석 방식을 고르세요."
                 )
             else:
-                self._show_error("설치되어 영상 입력 기능이 확인된 로컬 모델이 없습니다.")
+                self._show_error(
+                    "이 컴퓨터에 AI 분석 프로그램이 없습니다. 담당자에게 설치를 요청하세요."
+                )
             return
         if mode is AnalysisMode.EXTERNAL and not self._external_vision_confirmed():
             self._show_error(
-                "입력한 외부 모델이 이미지 입력을 지원하는지 확인한 뒤 "
-                "'영상 입력' 항목을 체크해 주세요."
+                "이 외부 AI가 사진을 읽을 수 있는지 확인한 뒤 "
+                "'사진 입력' 항목을 체크해 주세요."
             )
             return
         if not self._sync_motion_selection():
@@ -2184,7 +2322,7 @@ class MainWindow(QMainWindow):
             return
 
         if plan.mode is AnalysisMode.SAMPLE:
-            sampling = "프레임을 뽑지 않음 (샘플 결과)"
+            sampling = "프레임을 뽑지 않음 (시연용 결과)"
         elif self._sampling_timestamps_override:
             fine_detail = fine_detail_requirement(plan.purpose)
             proposal_ranges = "\n".join(
@@ -2233,17 +2371,26 @@ class MainWindow(QMainWindow):
             )
         case_title = self._case_panel.title_edit.text().strip() or self._case_record.title
         mode_text = {
-            AnalysisMode.SAMPLE: "샘플 (실제 분석 아님)",
-            AnalysisMode.LOCAL: "로컬 AI",
-            AnalysisMode.EXTERNAL: "외부 AI (OpenAI)",
+            AnalysisMode.SAMPLE: SAMPLE_LABEL,
+            AnalysisMode.LOCAL: f"{self._choice_label(plan.model_id)} (이 컴퓨터에서 처리)",
+            AnalysisMode.EXTERNAL: f"외부 AI 분석 · {plan.model_id}",
         }[plan.mode]
         video_name = self._video_path.name if self._video_path is not None else plan.video_id
         start = format_milliseconds(seconds_to_milliseconds(plan.range_start_sec))
         end = format_milliseconds(seconds_to_milliseconds(plan.range_end_sec))
         limits = plan.limits
+        focus = self._case_panel.focus_situations()
+        hints = self._case_panel.focus_hints()
         rows = [
             ("사건", f"{case_title} (사건 정보 v{plan.case_revision})" if plan.case_revision else case_title),
-            ("분석 방식", f"{mode_text} · {plan.model_id}" if plan.model_id else mode_text),
+            (
+                "우선 확인 상황",
+                ", ".join(SITUATION_LABELS[item] for item in focus)
+                + "\n선택하지 않은 상황도 분석합니다."
+                if focus
+                else "선택 없음 (모든 상황을 같은 우선순위로 확인)",
+            ),
+            ("분석 방식", mode_text),
             ("대상 영상", f"{video_name} · {start}–{end}"),
             ("표본", sampling),
             (
@@ -2253,6 +2400,7 @@ class MainWindow(QMainWindow):
                 f"자동 재분석 {limits.max_reanalysis_attempts}회",
             ),
             ("범위 확대", "필요하면 자동 실행하지 않고 제안만 합니다"),
+            *([("추가 탐색 힌트", ", ".join(hints))] if hints else []),
             (
                 "사전 정보",
                 "\n".join(
@@ -2276,7 +2424,7 @@ class MainWindow(QMainWindow):
                     ("전송 대상", f"{manifest.provider_id} · {manifest.endpoint_origin}"),
                     (
                         "전송 내용",
-                        f"분석 목적 텍스트 + JPEG 프레임 {len(manifest.frame_timestamps_sec)}개 ({times})",
+                        f"분석 목적·관찰 기준 텍스트 + JPEG 프레임 {len(manifest.frame_timestamps_sec)}개 ({times})",
                     ),
                     (
                         "전송 사전 정보",
@@ -2391,8 +2539,9 @@ class MainWindow(QMainWindow):
         self._motion_list.setEnabled(not running)
         for widget in (
             self._purpose_edit,
-            self._mode_combo,
-            self._model_edit,
+            self._analysis_choice,
+            self._model_refresh_button,
+            self._external_model_edit,
             self._external_api_key_edit,
             self._external_vision_confirm,
             self._range_start,
@@ -2471,9 +2620,9 @@ class MainWindow(QMainWindow):
         if job.status is JobStatus.COMPLETED:
             self._progress_bar.setValue(100)
             origin_text = {
-                ResultOrigin.SAMPLE: "샘플 결과 (실제 AI 분석 아님)",
+                ResultOrigin.SAMPLE: "시연용 결과 (실제 AI 분석 아님)",
                 ResultOrigin.TEST_DOUBLE: "테스트 응답 (실제 모델 아님)",
-                ResultOrigin.REAL_MODEL: f"실제 모델 {job.model_id}",
+                ResultOrigin.REAL_MODEL: "AI 분석",
             }[job.origin]
             elapsed = f" · {job.elapsed_seconds:.1f}초" if job.elapsed_seconds is not None else ""
             outcome = f"후보 {len(job.segments)}개" if job.segments else "후보 없음"
@@ -2500,7 +2649,7 @@ class MainWindow(QMainWindow):
         else:
             self._progress_bar.setValue(0)
             self._progress_label.setText("오류로 종료됨")
-            self._set_terminal_banner("모델 응답 실패", job.model_id, failed=True)
+            self._set_terminal_banner("AI 분석 실패", job.model_id, failed=True)
             self._review_panel.show_message(
                 f"분석 실패: {job.model_id or '모델 없음'}, "
                 f"{job.error or '알 수 없는 분석 오류'}"
@@ -2512,7 +2661,6 @@ class MainWindow(QMainWindow):
         self._elapsed_timer.stop()
         self._analysis_started_at = None
         self._set_analysis_running(False)
-        self._model_edit.setEnabled(self._current_mode() is not AnalysisMode.SAMPLE)
         self._cancel_button.setEnabled(False)
         self._worker = None
         self._update_post_run_buttons()
@@ -2571,6 +2719,7 @@ class MainWindow(QMainWindow):
         )
         self._refresh_review_empty_state()
         self._refresh_case_overview()
+        self._refresh_timeline_marks()
 
     def _expansion_reason(self, job: AnalysisJob) -> str | None:
         """Why the finished run could be widened, or None when widening would not help."""
@@ -2702,25 +2851,9 @@ class MainWindow(QMainWindow):
                 next_button = self._motion_scan_button
             else:
                 next_button = self._make_plan_button
+        # The single blue button (plan, approve, run in turn) shows what to do next.
         for button in self._next_action_buttons:
             theme.set_primary(button, button is next_button)
-
-        current = {
-            self._motion_scan_button: 0,
-            self._make_plan_button: 1,
-            self._approve_button: 2,
-            self._transfer_button: 2,
-            self._run_button: 3,
-        }.get(next_button)
-        if state in (WorkflowState.RUNNING, WorkflowState.VALIDATING):
-            current = 3
-        done = (
-            scanned or planned,
-            planned,
-            approved and state is not WorkflowState.ANALYSIS_APPROVED or finished,
-            finished,
-        )
-        self._flow_steps.set_state(done, current)
         self._refresh_step_emphasis()
 
     def _refresh_step_emphasis(self) -> None:
@@ -2748,18 +2881,20 @@ class MainWindow(QMainWindow):
 
     def _set_result_banner(self, origin: ResultOrigin, model_id: str | None) -> None:
         if origin is ResultOrigin.SAMPLE:
-            self._show_status("sample", "샘플 결과 (실제 AI 분석 아님)")
+            self._show_status("sample", "시연용 결과 (실제 AI 분석 아님)")
         elif origin is ResultOrigin.TEST_DOUBLE:
             self._show_status("test_double", "테스트 응답 (실제 모델 검증 아님)")
         else:
-            self._show_status("real_model", f"실제 모델 결과 · {model_id}")
+            self._show_status("real_model", f"AI 분석 결과 · {self._choice_label(model_id)}", model_id or "")
 
     def _set_running_banner(self, mode: AnalysisMode, model_id: str | None) -> None:
         if mode is AnalysisMode.SAMPLE:
-            text = "샘플 분석 실행 중 (실제 AI 분석 아님)"
+            text = "시연용 분석 실행 중 (실제 AI 분석 아님)"
+        elif mode is AnalysisMode.EXTERNAL:
+            text = "외부 AI 분석 실행 중"
         else:
-            text = f"분석 실행 중 · {model_id or '모델 미지정'}"
-        self._show_status("running", text)
+            text = f"분석 실행 중 · {self._choice_label(model_id)}"
+        self._show_status("running", text, model_id or "")
 
     def _set_terminal_banner(
         self,
@@ -2768,7 +2903,7 @@ class MainWindow(QMainWindow):
         *,
         failed: bool,
     ) -> None:
-        self._show_status("failed" if failed else "neutral", f"{label} · {model_id or '모델 없음'}")
+        self._show_status("failed" if failed else "neutral", label, model_id or "")
 
     @staticmethod
     def _model_display_name(model_id: str) -> tuple[str, bool]:
@@ -2790,14 +2925,18 @@ class MainWindow(QMainWindow):
             label = f"{label} {size.group(1)}B"
         return label or model_id, cloud
 
+    def _choice_label(self, model_id: str | None) -> str:
+        """Plain name of a local model's choice ("빠른 분석"), or "AI 분석" if unknown."""
+        return self._local_choice_labels().get(model_id or "", "AI 분석")
+
     def _update_mode_banner(self) -> None:
         mode = self._current_mode()
         if mode is AnalysisMode.SAMPLE:
             self._set_result_banner(ResultOrigin.SAMPLE, None)
             return
-        model_id = self._model_edit.text().strip()
+        model_id = self._model_id()
         if mode is AnalysisMode.LOCAL:
-            # Details that used to fill the line stay available as a tooltip.
+            # Technical details (program and model names) stay in the tooltip for staff.
             if self._runtime_inventory.ollama_executable is None:
                 runtime = "설치된 Ollama 런타임 없음"
             elif not self._runtime_inventory.installed_ollama_models:
@@ -2811,29 +2950,28 @@ class MainWindow(QMainWindow):
                 )
             detail = f"{runtime}\n로컬 연결이 실패해도 외부 API나 샘플로 자동 전환하지 않습니다."
             if not model_id:
-                self._show_status("local", "로컬 AI 분석 · 모델 선택 필요", detail)
+                self._show_status("local", "AI 분석 프로그램 없음", detail)
                 return
-            label, cloud = self._model_display_name(model_id)
-            if cloud:
+            if self._model_display_name(model_id)[1]:
                 self._show_status(
                     "warning",
-                    f"클라우드 AI 분석 · {label}",
+                    "외부 서버에서 실행되는 프로그램 · 이 컴퓨터 분석에 쓸 수 없음",
                     f"{model_id}: Ollama를 거쳐 외부 서버에서 실행되는 모델입니다.\n{detail}",
                 )
             else:
-                self._show_status("local", f"로컬 AI 분석 · {label}", f"{model_id}\n{detail}")
+                self._show_status(
+                    "local",
+                    f"{self._analysis_choice.currentText()} · 이 컴퓨터에서 처리",
+                    f"{model_id}\n{detail}",
+                )
         else:
             key_status = (
-                "API 키 준비됨(저장 안 함)"
+                "인증키 준비됨(저장 안 함)"
                 if self._external_api_key_value() is not None
-                else "API 키 필요"
+                else "인증키 필요"
             )
-            detail = f"{key_status}\n분석 승인과 외부 전송 승인을 따로 받습니다."
-            self._show_status(
-                "warning",
-                f"OpenAI API 분석 · {model_id or '모델 선택 필요'}",
-                detail,
-            )
+            detail = f"{model_id or '외부 AI 이름 필요'}\n{key_status}\n분석 승인과 외부 전송 승인을 따로 받습니다."
+            self._show_status("warning", "외부 AI 분석 · 영상 일부를 외부로 보냄", detail)
 
     @classmethod
     def _segment_text(cls, segment: Segment, purpose: str | None = None) -> str:
@@ -2996,16 +3134,15 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"읽지 못한 결과 파일 {unreadable}개는 목록에서 제외했습니다.", 8000)
         self._update_saved_results_controls()
 
-    @staticmethod
-    def _saved_result_text(stored: StoredResult) -> str:
+    def _saved_result_text(self, stored: StoredResult) -> str:
         job = stored.job
         saved_at = datetime.fromtimestamp(stored.saved_at).strftime("%m-%d %H:%M")
         if job.mode is AnalysisMode.SAMPLE:
-            mode = "샘플"
+            mode = "시연용"
         elif job.mode is AnalysisMode.LOCAL:
-            mode = f"로컬 {job.model_id or '모델 미기록'}"
+            mode = self._choice_label(job.model_id)
         else:
-            mode = f"외부 {job.model_id or '모델 미기록'}"
+            mode = "외부 AI 분석"
         if job.origin is ResultOrigin.TEST_DOUBLE:
             mode += " (테스트 응답)"
         status = "일부 완료" if job.status is JobStatus.PARTIAL else "완료"
@@ -3149,7 +3286,7 @@ class MainWindow(QMainWindow):
             settings = AppSettings(
                 mode=mode,
                 local_model_id=(
-                    self._model_edit.text().strip() or None
+                    self._model_id() or None
                     if mode is AnalysisMode.LOCAL
                     else self._settings.local_model_id
                 ),
@@ -3159,7 +3296,7 @@ class MainWindow(QMainWindow):
                     or self.OPENAI_PROVIDER_ID
                 ),
                 external_model_id=(
-                    self._model_edit.text().strip() or None
+                    self._model_id() or None
                     if mode is AnalysisMode.EXTERNAL
                     else self._settings.external_model_id
                 ),

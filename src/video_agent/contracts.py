@@ -52,6 +52,21 @@ class InformationCertainty(StrEnum):
     UNKNOWN = "unknown"
 
 
+class FocusSituation(StrEnum):
+    """Situation group to check first; it orders review and never judges an act."""
+
+    INTERACTION = "interaction"
+    MOVEMENT = "movement"
+    POSTURE = "posture"
+    STAY = "stay"
+    COMPANY = "company"
+    ENVIRONMENT = "environment"
+
+
+MAX_FOCUS_HINTS = 10
+MAX_FOCUS_HINT_LENGTH = 30
+
+
 class ClueSource(StrEnum):
     """Origin of prior information; never implies that the video confirmed it."""
 
@@ -174,10 +189,17 @@ class CaseRecord:
     management_notes: str = ""
     clues: tuple[AnalysisClue, ...] = ()
     video_links: tuple[CaseVideoLink, ...] = ()
+    focus_situations: tuple[FocusSituation, ...] = ()
+    focus_hints: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.case_id.strip():
             raise ValueError("case_id is required")
+        focus = tuple(FocusSituation(item) for item in self.focus_situations)
+        if len(focus) != len(set(focus)):
+            raise ValueError("focus situations must be unique")
+        object.__setattr__(self, "focus_situations", focus)
+        validate_focus_hints(self.focus_hints)
         if self.revision < 1:
             raise ValueError("case revision must be at least 1")
         if not self.title.strip():
@@ -216,6 +238,8 @@ class CaseRecord:
             "management_notes": self.management_notes,
             "clues": [item.to_dict() for item in self.clues],
             "video_links": [item.to_dict() for item in self.video_links],
+            "focus_situations": [item.value for item in self.focus_situations],
+            "focus_hints": list(self.focus_hints),
         }
 
     @classmethod
@@ -230,13 +254,19 @@ class CaseRecord:
             "management_notes",
             "clues",
             "video_links",
+            "focus_situations",
+            "focus_hints",
         }
         if not isinstance(data, dict) or not set(data).issubset(allowed):
             raise ValueError("case record contains unknown fields")
         raw_clues = data.get("clues", [])
         raw_video_links = data.get("video_links", [])
+        raw_focus = data.get("focus_situations", [])
+        raw_hints = data.get("focus_hints", [])
         if not isinstance(raw_clues, list) or not isinstance(raw_video_links, list):
             raise ValueError("case clues and video links must be lists")
+        if not isinstance(raw_focus, list) or not isinstance(raw_hints, list):
+            raise ValueError("case focus situations and hints must be lists")
         return cls(
             case_id=str(data["case_id"]),
             revision=int(data["revision"]),
@@ -252,7 +282,19 @@ class CaseRecord:
             management_notes=str(data.get("management_notes", "")),
             clues=tuple(AnalysisClue.from_dict(item) for item in raw_clues),
             video_links=tuple(CaseVideoLink.from_dict(item) for item in raw_video_links),
+            focus_situations=tuple(FocusSituation(str(item)) for item in raw_focus),
+            focus_hints=tuple(str(item) for item in raw_hints),
         )
+
+
+def validate_focus_hints(hints: tuple[str, ...]) -> None:
+    """Short user-written search hints: at most 10, each 1-30 characters, no repeats."""
+    if len(hints) > MAX_FOCUS_HINTS:
+        raise ValueError(f"a case can contain at most {MAX_FOCUS_HINTS} focus hints")
+    if any(not item.strip() or len(item) > MAX_FOCUS_HINT_LENGTH for item in hints):
+        raise ValueError(f"focus hints must be 1-{MAX_FOCUS_HINT_LENGTH} characters")
+    if len({item.strip().casefold() for item in hints}) != len(hints):
+        raise ValueError("focus hints must be unique")
 
 
 @dataclass(frozen=True, slots=True)

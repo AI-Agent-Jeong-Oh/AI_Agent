@@ -202,12 +202,11 @@ class CaseClueTests(unittest.TestCase):
         self.assertFalse(self.panel.clue_list.isEnabled())
 
 
-    def test_admin_fields_are_folded_until_used(self) -> None:
+    def test_management_memo_is_folded_until_used(self) -> None:
         panel = self.panel
-        self.assertTrue(panel.type_edit.isHidden())
         self.assertTrue(panel.notes_edit.isHidden())
         panel.admin_toggle.click()
-        self.assertFalse(panel.type_edit.isHidden())
+        self.assertFalse(panel.notes_edit.isHidden())
         panel.admin_toggle.click()
         panel.set_record(
             CaseRecord(case_id="case-a", revision=2, title="택배", management_notes="담당자 확인")

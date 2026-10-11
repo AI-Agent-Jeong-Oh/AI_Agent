@@ -30,14 +30,16 @@ from video_agent.contracts import (
     CaseRecord,
     CaseVideoLink,
     ClueSource,
+    FocusSituation,
     InformationCertainty,
 )
 from video_agent.ui import theme
 from video_agent.ui.card import Card
 from video_agent.ui.clue_delegate import ClueItemDelegate
-from video_agent.ui.disclosure import DisclosureButton
 from video_agent.ui.datetime_field import DateTimeField
+from video_agent.ui.disclosure import DisclosureButton
 from video_agent.ui.flow_layout import FlowRow
+from video_agent.ui.focus_panel import CaseTypeChooser, FocusSection
 from video_agent.ui.popover import info_mark
 from video_agent.ui.wrap_label import WrapLabel
 
@@ -66,6 +68,8 @@ class CaseContextPanel(Card):
     save_requested = Signal()
     load_requested = Signal()
     new_requested = Signal()
+    # A case type was picked by the user (the window may suggest a purpose for it).
+    case_type_chosen = Signal(str)
 
     def __init__(self) -> None:
         super().__init__("사건·사전 정보")
@@ -74,6 +78,7 @@ class CaseContextPanel(Card):
         self._loading = False
         self._build_ui()
         self._connect_signals()
+        self._update_occurrence_field()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self.body)
@@ -105,8 +110,8 @@ class CaseContextPanel(Card):
         theme.polish_form(form)
         self.title_edit = QLineEdit()
         self.title_edit.setPlaceholderText("예: 문 앞 택배 이동 확인")
-        self.type_edit = QLineEdit()
-        self.type_edit.setPlaceholderText("예: 절도")
+        # Chosen type marks the situation groups to check first (FocusSection below).
+        self.case_type = CaseTypeChooser()
         occurrence_widget = QWidget()
         occurrence_row = QHBoxLayout(occurrence_widget)
         occurrence_row.setContentsMargins(0, 0, 0, 0)
@@ -116,20 +121,26 @@ class CaseContextPanel(Card):
         self.occurrence_edit.setPlaceholderText("날짜와 시각 선택")
         self.occurrence_edit.setAccessibleName("발생 시각")
         self.occurrence_certainty = QComboBox()
+        self.occurrence_certainty.setAccessibleName("발생 시각 확실성")
         self._add_certainty_items(self.occurrence_certainty)
-        occurrence_row.addWidget(self.occurrence_edit, 1)
+        self._set_combo_value(self.occurrence_certainty, InformationCertainty.UNKNOWN)
+        # How sure comes first; with "미확인" there is no date to enter, so the field hides.
         occurrence_row.addWidget(self.occurrence_certainty)
+        occurrence_row.addWidget(self.occurrence_edit, 1)
+        self._occurrence_hint = QLabel("발생 시각을 모르면 입력하지 않습니다")
+        self._occurrence_hint.setObjectName("subsectionHelp")
+        occurrence_row.addWidget(self._occurrence_hint, 1)
         self.notes_edit = QPlainTextEdit()
         self.notes_edit.setPlaceholderText("담당자, 처리 메모 등")
         # Two lines; fixed so the clue list, not the memo, gives way when the step is short.
         self.notes_edit.setFixedHeight(64)
-        # Type and memo are kept for management only (never sent to the model), so they
-        # are folded; they open by themselves when a loaded case has them filled in.
-        self.admin_toggle = DisclosureButton("사건 유형·관리 메모")
+        # The memo is kept for management only (never sent to the model), so it is
+        # folded; it opens by itself when a loaded case has one.
+        self.admin_toggle = DisclosureButton("관리 메모")
+        form.addRow("사건 유형", self.case_type)
         form.addRow("사건명", self.title_edit)
         form.addRow("발생 시각", occurrence_widget)
         form.addRow(self.admin_toggle)
-        form.addRow("사건 유형", self.type_edit)
         form.addRow("관리 메모", self.notes_edit)
         self._form = form
         layout.addLayout(form)
@@ -137,10 +148,8 @@ class CaseContextPanel(Card):
 
         # Camera details belong to the open video, so the CCTV card shows this row under
         # its list (see camera_fields); the panel still owns the values and signals.
-        self.camera_location_edit = QLineEdit()
-        self.camera_location_edit.setPlaceholderText("예: 공동현관 앞 CCTV")
-        self.camera_location_edit.setAccessibleName("카메라 위치")
-        self.camera_location_edit.setMinimumWidth(200)
+        # Camera location is no longer asked for; one saved in an older case is kept.
+        self._camera_location = ""
         self.clock_offset = QDoubleSpinBox()
         self.clock_offset.setRange(-86400.0, 86400.0)
         self.clock_offset.setDecimals(1)
@@ -151,13 +160,6 @@ class CaseContextPanel(Card):
         self._add_certainty_items(self.clock_certainty)
         self.camera_fields = FlowRow(spacing=12)
         self.camera_fields.setAccessibleName("선택한 영상의 카메라 정보")
-        location_group = QWidget()
-        location_row = QHBoxLayout(location_group)
-        location_row.setContentsMargins(0, 0, 0, 0)
-        location_label = QLabel("카메라 위치")
-        location_label.setObjectName("fieldLabel")
-        location_row.addWidget(location_label)
-        location_row.addWidget(self.camera_location_edit)
         clock_group = QWidget()
         clock_row = QHBoxLayout(clock_group)
         clock_row.setContentsMargins(0, 0, 0, 0)
@@ -166,8 +168,13 @@ class CaseContextPanel(Card):
         clock_row.addWidget(clock_label)
         clock_row.addWidget(self.clock_offset)
         clock_row.addWidget(self.clock_certainty)
-        self.camera_fields.flow.addWidget(location_group)
         self.camera_fields.flow.addWidget(clock_group)
+
+        focus_divider = QFrame()
+        focus_divider.setObjectName("sectionDivider")
+        layout.addWidget(focus_divider)
+        self.focus = FocusSection()
+        layout.addWidget(self.focus)
 
         divider = QFrame()
         divider.setObjectName("sectionDivider")
@@ -275,13 +282,11 @@ class CaseContextPanel(Card):
     def _connect_signals(self) -> None:
         for edit in (
             self.title_edit,
-            self.type_edit,
             self.occurrence_edit,
-            self.camera_location_edit,
         ):
             edit.textChanged.connect(self._emit_changed)
         self.notes_edit.textChanged.connect(self._emit_changed)
-        self.occurrence_certainty.currentIndexChanged.connect(self._emit_changed)
+        self.occurrence_certainty.currentIndexChanged.connect(self._occurrence_certainty_changed)
         self.clock_offset.valueChanged.connect(self._emit_changed)
         self.clock_certainty.currentIndexChanged.connect(self._emit_changed)
         self.add_clue_button.clicked.connect(self._add_clue)
@@ -293,10 +298,41 @@ class CaseContextPanel(Card):
         self.save_button.clicked.connect(self.save_requested.emit)
         self.load_button.clicked.connect(self._show_case_menu)
         self.admin_toggle.toggled.connect(lambda _checked: self._update_admin_rows())
+        self.case_type.changed.connect(self._case_type_changed)
+        self.focus.changed.connect(self._emit_changed)
+
+    def _occurrence_certainty_changed(self, *_args: object) -> None:
+        if self.occurrence_certainty.currentData() == InformationCertainty.UNKNOWN and not self._loading:
+            # An unknown time has no date; a date typed before is not kept.
+            self.occurrence_edit.clear()
+        self._update_occurrence_field()
+        self._emit_changed()
+
+    def _update_occurrence_field(self) -> None:
+        # An older case may hold a date marked unknown; it stays visible until changed.
+        show = (
+            self.occurrence_certainty.currentData() != InformationCertainty.UNKNOWN
+            or bool(self.occurrence_edit.text().strip())
+        )
+        self.occurrence_edit.setVisible(show)
+        self._occurrence_hint.setVisible(not show)
+
+    def _case_type_changed(self, value: str) -> None:
+        self.focus.set_case_type(value)
+        if not self._loading:
+            self.case_type_chosen.emit(value)
+
+    def case_type_text(self) -> str:
+        return self.case_type.value()
+
+    def focus_situations(self) -> tuple[FocusSituation, ...]:
+        return self.focus.focus()
+
+    def focus_hints(self) -> tuple[str, ...]:
+        return self.focus.hints()
 
     def _update_admin_rows(self) -> None:
-        for widget in (self.type_edit, self.notes_edit):
-            self._form.setRowVisible(widget, self.admin_toggle.isChecked())
+        self._form.setRowVisible(self.notes_edit, self.admin_toggle.isChecked())
 
     def _show_case_menu(self) -> None:
         menu = QMenu(self)
@@ -473,7 +509,7 @@ class CaseContextPanel(Card):
             return None
         return CaseVideoLink(
             video_id=video_id,
-            camera_location=self.camera_location_edit.text().strip(),
+            camera_location=self._camera_location,
             clock_offset_seconds=self.clock_offset.value(),
             clock_certainty=self.clock_certainty.currentData(),
         )
@@ -482,14 +518,16 @@ class CaseContextPanel(Card):
         self._loading = True
         try:
             self.title_edit.setText(record.title)
-            self.type_edit.setText(record.case_type)
+            self.case_type.set_value(record.case_type)
+            self.focus.set_values(record.case_type, record.focus_situations, record.focus_hints)
             self.occurrence_edit.setText(record.occurrence_time_text)
             self._set_combo_value(
                 self.occurrence_certainty,
                 record.occurrence_time_certainty,
             )
+            self._update_occurrence_field()
             self.notes_edit.setPlainText(record.management_notes)
-            if record.case_type or record.management_notes:
+            if record.management_notes:
                 self.admin_toggle.setChecked(True)
             self.clue_list.clear()
             self._cancel_clue_edit()
@@ -520,7 +558,7 @@ class CaseContextPanel(Card):
             self._loading = False
 
     def _set_video_link(self, link: CaseVideoLink | None) -> None:
-        self.camera_location_edit.setText(link.camera_location if link else "")
+        self._camera_location = link.camera_location if link else ""
         self.clock_offset.setValue(link.clock_offset_seconds if link else 0.0)
         self._set_combo_value(
             self.clock_certainty,
@@ -554,7 +592,7 @@ class CaseContextPanel(Card):
 
     def _update_camera_fields(self) -> None:
         enabled = self._video_open and self._editing_enabled
-        for widget in (self.camera_location_edit, self.clock_offset, self.clock_certainty):
+        for widget in (self.clock_offset, self.clock_certainty):
             widget.setEnabled(enabled)
 
     def set_editing_enabled(self, enabled: bool) -> None:
@@ -563,7 +601,8 @@ class CaseContextPanel(Card):
             self.load_button,
             self.save_button,
             self.title_edit,
-            self.type_edit,
+            *self.case_type.buttons.values(),
+            self.case_type.other_edit,
             self.occurrence_edit,
             self.occurrence_certainty,
             self.notes_edit,
@@ -578,4 +617,5 @@ class CaseContextPanel(Card):
         ):
             widget.setEnabled(enabled)
         self.clue_use.setEnabled(enabled and self._editing_clue_row() is None)
+        self.focus.set_editing_enabled(enabled)
         self._update_camera_fields()

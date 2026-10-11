@@ -9,10 +9,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -26,18 +25,13 @@ from PySide6.QtWidgets import (
 from video_agent.contracts import InformationCertainty
 from video_agent.ui import theme
 from video_agent.ui.card import Card
-from video_agent.video.files import format_milliseconds, seconds_to_milliseconds
+from video_agent.ui.video_table import CLOCK_TEXT, CURRENT_ROLE, ENTRY_ROLE, VideoRowDelegate, row_height
 
 VIDEO_ID_ROLE = Qt.ItemDataRole.UserRole + 1
 
-_CERTAINTY_TEXT = {
-    InformationCertainty.CONFIRMED: "확인",
-    InformationCertainty.ESTIMATED: "추정",
-    InformationCertainty.UNKNOWN: "미확인",
-}
 # Columns of the video table; steps ② and ③ keep only the file and its status.
-COLUMNS = ("영상", "위치", "길이", "기준 시각", "분석 상태")
-_DETAIL_COLUMNS = (1, 2, 3)
+COLUMNS = ("영상", "기준 시각", "분석 상태")
+_DETAIL_COLUMNS = (1,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,9 +83,11 @@ class CaseVideoList(Card):
         self.list.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.list.setShowGrid(False)
         self.list.setWordWrap(False)
-        # Narrow cards keep both ends of a file name ("cam_…a.mp4").
-        self.list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        # Rows are drawn by VideoRowDelegate: name with a detail line, dot-led statuses.
+        self.list.setItemDelegate(VideoRowDelegate(self.list))
+        self.list.setFrameShape(QFrame.Shape.NoFrame)
         self.list.verticalHeader().setVisible(False)
+        self.list.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         header = self.list.horizontalHeader()
         header.setHighlightSections(False)
         header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -145,8 +141,9 @@ class CaseVideoList(Card):
         )
 
     def apply_scale(self, scaled) -> None:
-        self.list.setMinimumHeight(scaled(64))
-        self.list.setMaximumHeight(scaled(120))
+        self.list.verticalHeader().setDefaultSectionSize(row_height(self.list.font()))
+        self.list.setMinimumHeight(scaled(96))
+        self.list.setMaximumHeight(scaled(170))
 
     @property
     def entries(self) -> tuple[VideoEntry, ...]:
@@ -199,37 +196,24 @@ class CaseVideoList(Card):
 
     @staticmethod
     def _row_items(entry: VideoEntry, current: bool) -> list[QTableWidgetItem]:
-        """One row: file (the open one bold with a play icon), location, length, clock, status."""
-        duration = (
-            format_milliseconds(seconds_to_milliseconds(entry.duration_seconds))
-            if entry.duration_seconds is not None
-            else "-"
-        )
+        """One row: file, clock check and status (plain text for screen readers)."""
         values = (
             entry.file_name or "파일 다시 연결 필요",
-            entry.camera_location or "-",
-            duration,
-            _CERTAINTY_TEXT[entry.clock_certainty],
+            CLOCK_TEXT[entry.clock_certainty][0],
             entry.analysis_status,
         )
         items = []
         for value in values:
             item = QTableWidgetItem(value)
+            item.setData(ENTRY_ROLE, entry)
+            item.setData(CURRENT_ROLE, current)
             item.setToolTip(value)
-            if not entry.linked:
-                item.setForeground(QColor(theme.TEXT_FAINT))
             items.append(item)
         name = items[0]
         name.setData(VIDEO_ID_ROLE, entry.video_id)
         name.setToolTip(f"{values[0]}\n영상 ID {entry.video_id}")
         if current:
-            font = QFont(name.font())
-            font.setBold(True)
-            name.setFont(font)
-            name.setIcon(theme.icon("play", theme.PRIMARY))
             name.setData(Qt.ItemDataRole.AccessibleDescriptionRole, "재생 중인 영상")
-        elif not entry.linked:
-            name.setIcon(theme.icon("link", theme.GRAY_40))
         return items
 
     def _entry(self, video_id: str | None) -> VideoEntry | None:

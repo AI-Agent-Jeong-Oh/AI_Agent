@@ -16,6 +16,7 @@ from video_agent.contracts import (
     AnalysisMode,
     CandidateReview,
     CaseRecord,
+    FocusSituation,
     CaseVideoLink,
     ClueSource,
     InformationCertainty,
@@ -153,10 +154,32 @@ class SummaryBuilderTests(unittest.TestCase):
         self.assertIn("신고자는 문 앞 상자가 사라졌다고 설명함 (출처: 신고·보고 · 확실성: 추정)", text)
         self.assertNotIn("010-0000-0000", text)
 
+    def test_case_section_shows_type_focus_and_hints_without_judgement(self) -> None:
+        plain = reviewed_summary().section("case").body
+        self.assertIn("우선 확인할 상황: 선택 없음", plain)
+        self.assertNotIn("추가 탐색 힌트", plain)
+
+        focused = replace(
+            CASE,
+            case_type="실종",
+            occurrence_time_text="",
+            occurrence_time_certainty=InformationCertainty.UNKNOWN,
+            focus_situations=(FocusSituation.MOVEMENT, FocusSituation.STAY),
+            focus_hints=("보라색 조끼",),
+        )
+        text = build_summary(
+            job(), session(), focused, video_file_name="front_door.mp4", generated_at=GENERATED
+        ).section("case").body
+        self.assertIn("사건 유형: 실종", text)
+        self.assertIn("발생 시각: 미확인", text)
+        self.assertIn("우선 확인할 상황: 이동·동선, 체류·이탈", text)
+        self.assertIn("범죄 여부를 판단한 것이 아님", text)
+        self.assertIn("추가 탐색 힌트: 보라색 조끼 (사용자 입력이며 영상으로 확인한 사실이 아님)", text)
+
     def test_scope_section_uses_file_name_and_video_id_only(self) -> None:
         text = reviewed_summary().section("scope").body
         self.assertIn("영상: front_door.mp4 (영상 ID video-sum)", text)
-        self.assertIn("분석 방식: 로컬 VLM · qwen3-vl:8b-instruct", text)
+        self.assertIn("분석 방식: 이 컴퓨터에서 AI 분석 (사용 모델 qwen3-vl:8b-instruct)", text)
         self.assertIn("분석 범위: 00:00–01:00", text)
         self.assertIn("결과 상태: 완료", text)
         self.assertNotIn("/", text.replace("12/12", ""))
@@ -224,8 +247,8 @@ class SummaryBuilderTests(unittest.TestCase):
         self.assertIn("미검토 후보: 4개", partial.section("open_items").body)
 
         sample = build_summary(job(ResultOrigin.SAMPLE), None, None, video_file_name="a.mp4")
-        self.assertIn("샘플 결과 — 실제 AI 분석 아님", sample.origin_notice)
-        self.assertIn("분석 방식: 샘플 (실제 AI 분석 아님)", sample.section("scope").body)
+        self.assertIn("시연용 결과 (실제 AI 분석 아님)", sample.origin_notice)
+        self.assertIn("분석 방식: 시연용 (실제 AI 분석 아님)", sample.section("scope").body)
 
     def test_generated_text_contains_no_judgement_of_guilt_or_intent(self) -> None:
         summary = build_summary(job(), session(), CASE, video_file_name="a.mp4")
@@ -364,13 +387,13 @@ class CaseSummaryBuilderTests(unittest.TestCase):
         summary = self.build(case_cameras(job=other_camera_job(ResultOrigin.SAMPLE)))
         self.assertIs(summary.origin, ResultOrigin.SAMPLE)
         self.assertIn("카메라마다 결과 출처가 다릅니다", summary.origin_notice)
-        self.assertIn("문앞 CCTV: 실제 모델 응답(qwen3-vl:8b-instruct)", summary.origin_notice)
-        self.assertIn("복도 CCTV: 샘플 결과(실제 AI 분석 아님)", summary.origin_notice)
-        self.assertIn("결과 출처: 샘플 결과(실제 AI 분석 아님)", summary.section("scope").body)
+        self.assertIn("문앞 CCTV: AI 분석 결과(사용 모델 qwen3-vl:8b-instruct)", summary.origin_notice)
+        self.assertIn("복도 CCTV: 시연용 결과(실제 AI 분석 아님)", summary.origin_notice)
+        self.assertIn("결과 출처: 시연용 결과(실제 AI 분석 아님)", summary.section("scope").body)
 
         same = self.build()
         self.assertIs(same.origin, ResultOrigin.REAL_MODEL)
-        self.assertIn("실제 모델 응답 — qwen3-vl:8b-instruct", same.origin_notice)
+        self.assertIn("AI 분석 결과 (사용 모델 qwen3-vl:8b-instruct)", same.origin_notice)
 
     def test_warnings_name_the_camera(self) -> None:
         summary = self.build(case_cameras(unsaved_count=2, review_load_error="손상된 파일"))
@@ -384,7 +407,7 @@ class CaseSummaryBuilderTests(unittest.TestCase):
     def test_html_names_the_case_and_camera_count(self) -> None:
         page = render_html(self.build())
         self.assertIn("사건 ID case-sum · CCTV 3대 · 작성 2026-10-10 23:30", page)
-        self.assertIn("<title>검토 결과 요약 — 사건_case-sum</title>", page)
+        self.assertIn("<title>검토 결과 요약 · 사건_case-sum</title>", page)
         self.assertIn('class="banner real"', page)
 
     def test_case_text_contains_no_judgement_of_guilt_or_intent(self) -> None:
@@ -423,7 +446,7 @@ class SummaryDialogTests(unittest.TestCase):
         )
         self.assertIn("후보 #1 [관련 있음]", self.dialog.editors["observations"].toPlainText())
         self.assertIn("저장하지 않은 기록 1건", self.dialog.warning_label.text())
-        self.assertIn("실제 모델 응답", self.dialog.banner_label.text())
+        self.assertIn("AI 분석 결과", self.dialog.banner_label.text())
         law_height = self.dialog.editors["open_items"].height()
         self.dialog.editors["open_items"].setPlainText("\n".join(["줄"] * 12))
         self.assertGreater(self.dialog.editors["open_items"].height(), law_height)

@@ -23,6 +23,7 @@ Python 기준 정의는 `src/video_agent/contracts.py`, Agent 계획은 `agent/p
 - `AnalysisPlan.analysis_clues`: 승인한 단서 스냅샷을 fingerprint에 포함해 변경 후 재승인
 - `TransferManifest.analysis_clues`: 외부로 전송할 사전 정보 문구를 프레임과 함께 명시
 - `ReviewSession`, `CandidateReview`, `ReviewJudgement`: 모델 후보에 대한 사람의 검토 판단·메모를 모델 결과와 분리해 저장
+- `CaseRecord.focus_situations`, `CaseRecord.focus_hints`, `FocusSituation`: 사건 유형별로 제안된 "우선 확인할 상황"과 사용자가 직접 입력한 짧은 탐색 힌트를 사건과 함께 저장
 
 모든 시간은 원본 시작 기준 초입니다. Qt UI 밀리초는 UI 경계에서만 변환합니다.
 
@@ -49,7 +50,9 @@ Python 기준 정의는 `src/video_agent/contracts.py`, Agent 계획은 `agent/p
     "camera_location": "공동현관 앞",
     "clock_offset_seconds": 0.0,
     "clock_certainty": "unknown"
-  }]
+  }],
+  "focus_situations": ["movement", "stay"],
+  "focus_hints": ["보라색 조끼"]
 }
 ```
 
@@ -60,6 +63,14 @@ Python 기준 정의는 `src/video_agent/contracts.py`, Agent 계획은 `agent/p
 - `clock_offset_seconds`는 사건 메타데이터입니다. 프레임 추출·결과 계약은 계속 원본 영상 시작 기준 초와 decoded PTS를 사용하며 시각 오차로 원본 타임라인을 다시 쓰지 않습니다.
 - 사건 JSON에는 `video_id`만 저장하고 원본 파일 경로는 저장하지 않습니다. 기본 저장 위치는 사용자 데이터 폴더의 `cases/`입니다.
 - 외부 모드의 `TransferManifest`에는 전송할 단서 전체가 포함되며 UI가 문구를 표시합니다. 사건명·관리 메모·PDF·라벨 JSON은 기본 전송 대상이 아닙니다.
+
+### 우선 확인할 상황 (`focus_situations`, `focus_hints`)
+
+- `FocusSituation` 값: `interaction`(인물 간 상호작용), `movement`(이동·동선), `posture`(자세·움직임 변화), `stay`(체류·이탈), `company`(동행·분리), `environment`(주변 객체·환경 변화). 범주별 세부 예시와 사건 유형별 추천은 `agent/situations.py`에 있으며 팀 데모 화면과 같습니다(실종: 이동·동선·체류·이탈, 폭행: 상호작용·자세 변화, 아동학대: 상호작용·동행·분리·체류·이탈).
+- 선택은 **확인 순서**에만 반영합니다. `AnalysisIntent.focus_situations`/`focus_hints`가 `PlanBuilder`에서 `observation_guidance` 문장으로 바뀌어 계획 fingerprint·분석 요청·모델 프롬프트("승인된 관찰 기준")에 들어갑니다. 문장에는 "선택하지 않은 상황도 관찰", "보이는 움직임만 기술하며 범죄 여부는 판단하지 않음", 힌트는 "영상 관찰 사실이 아님"을 함께 적습니다.
+- 선택이나 힌트가 바뀌면 fingerprint가 바뀌어 기존 승인을 쓸 수 없습니다. 외부 모드에서는 관찰 기준 문장도 전송 내용에 포함됨을 계획 화면에 표시합니다.
+- `focus_hints`는 최대 10개, 각 1~30자, 대소문자·공백 차이를 무시하고 중복 불가입니다. 두 필드가 없는 이전 사건 파일은 빈 값으로 읽습니다.
+- `case_type` 자체는 여전히 모델에 전달하지 않습니다. 사건 유형은 사용자가 고른 값만 쓰며 데이터셋 폴더명·라벨에서 채우지 않습니다.
 
 ## `AnalysisPlan`
 

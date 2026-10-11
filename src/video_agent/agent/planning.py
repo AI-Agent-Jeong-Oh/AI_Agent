@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+from video_agent.agent.situations import focus_guidance
 from video_agent.analysis.evidence import (
     duration_requirement,
     fine_detail_requirement,
@@ -19,7 +20,9 @@ from video_agent.contracts import (
     AnalysisLimits,
     AnalysisMode,
     AnalysisRequest,
+    FocusSituation,
     SamplingStrategy,
+    validate_focus_hints,
 )
 from video_agent.video.probe import VideoMetadata
 
@@ -54,8 +57,15 @@ class AnalysisIntent:
     case_id: str | None = None
     case_revision: int | None = None
     analysis_clues: tuple[AnalysisClue, ...] = ()
+    # Situation groups to check first and short search hints (the case's choices).
+    focus_situations: tuple[FocusSituation, ...] = ()
+    focus_hints: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "focus_situations", tuple(FocusSituation(item) for item in self.focus_situations)
+        )
+        validate_focus_hints(self.focus_hints)
         if not isinstance(self.mode, AnalysisMode):
             object.__setattr__(self, "mode", AnalysisMode(self.mode))
         if self.sampling_strategy is not None and not isinstance(
@@ -189,7 +199,7 @@ class PlanBuilder:
                 temporal_requirement.observation_guidance,
             )
             if item
-        )
+        ) + focus_guidance(intent.focus_situations, intent.focus_hints)
         if (intent.case_id is None) != (intent.case_revision is None):
             raise PlanningError("사건 ID와 버전은 함께 제공해야 합니다.")
         if intent.case_revision is not None and intent.case_revision < 1:

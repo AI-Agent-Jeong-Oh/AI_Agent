@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtGui import QResizeEvent
-from PySide6.QtWidgets import QLayout, QLayoutItem, QWidget
+from PySide6.QtWidgets import QLayout, QLayoutItem, QWidget, QWidgetItem
 
 
 class FlowLayout(QLayout):
@@ -20,6 +20,12 @@ class FlowLayout(QLayout):
 
     def addItem(self, item: QLayoutItem) -> None:  # noqa: N802 - Qt API
         self._items.append(item)
+
+    def insertWidget(self, index: int, widget: QWidget) -> None:  # noqa: N802 - Qt style
+        """Put a widget at a position (for example before a trailing "add" button)."""
+        self.addChildWidget(widget)
+        self._items.insert(max(0, min(index, len(self._items))), QWidgetItem(widget))
+        self.invalidate()
 
     def count(self) -> int:
         return len(self._items)

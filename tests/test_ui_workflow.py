@@ -16,15 +16,18 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
 )
 
+from video_agent.agent.situations import RECOMMENDED
 from video_agent.contracts import (
     AnalysisJob,
     AnalysisMode,
+    FocusSituation,
     InformationCertainty,
     JobStatus,
     MotionProposal,
     MotionScanProfile,
     MotionScanResult,
     ResultOrigin,
+    ReviewJudgement,
     SamplingStrategy,
     Segment,
 )
@@ -112,10 +115,57 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertFalse(self.window._run_button.isEnabled())
         self.assertIsNone(self.window._session.analysis_approval)
 
+    def test_case_type_suggests_purpose_and_focus_flows_into_the_plan(self) -> None:
+        window = self.window
+        panel = window._case_panel
+        panel.case_type.buttons["실종"].click()
+        self.assertEqual(
+            window._purpose_edit.toPlainText(), "실종 대상자의 마지막 확인 위치와 이동 경로 파악"
+        )
+        self.assertEqual(
+            panel.focus_situations(), (FocusSituation.MOVEMENT, FocusSituation.STAY)
+        )
+        window._purpose_edit.setPlainText("사람이 출입문을 지나가는 장면 후보 찾기")
+        panel.case_type.buttons["폭행"].click()  # a written purpose is never replaced
+        self.assertEqual(window._purpose_edit.toPlainText(), "사람이 출입문을 지나가는 장면 후보 찾기")
+
+        window._update_post_run_buttons()
+        window._make_plan()
+        plan_text = window._plan_view.toPlainText()
+        self.assertIn("우선 확인 상황", plan_text)
+        self.assertIn("인물 간 상호작용, 자세·움직임 변화", plan_text)
+        self.assertIn("선택하지 않은 상황도 분석합니다", plan_text)
+        window._approve_plan()
+        self.assertTrue(window._run_button.isEnabled())
+
+        panel.focus.tiles[FocusSituation.ENVIRONMENT].check.click()
+        self.assertFalse(window._run_button.isEnabled())
+        self.assertIsNone(window._session.analysis_approval)
+
+    def test_case_focus_is_saved_and_restored(self) -> None:
+        window = self.window
+        panel = window._case_panel
+        panel.case_type.buttons["아동학대"].click()
+        panel.focus._start_hint()
+        panel.focus.hint_edit.setText("노란색 상의 아동")
+        panel.focus._add_hint()
+        window._save_case()
+        stored = window._case_store.load(window._case_record.case_id)
+        self.assertEqual(stored.case_type, "아동학대")
+        self.assertEqual(set(stored.focus_situations), set(RECOMMENDED["아동학대"]))
+        self.assertEqual(stored.focus_hints, ("노란색 상의 아동",))
+
+        window._new_case()
+        self.assertEqual(panel.focus_situations(), ())
+        panel.set_saved_cases((stored,), stored.case_id)
+        window._load_case()
+        self.assertEqual(panel.case_type_text(), "아동학대")
+        self.assertEqual(panel.focus_hints(), ("노란색 상의 아동",))
+
     def test_case_clue_is_saved_shown_in_plan_and_change_requires_reapproval(self) -> None:
         panel = self.window._case_panel
         panel.title_edit.setText("문 앞 택배 이동 확인")
-        panel.type_edit.setText("관리용 사건 분류")
+        panel.case_type.set_value("관리용 사건 분류")
         panel.clue_text.setText("신고자는 사람이 문 앞 상자를 들었다고 설명함")
         panel.add_clue_button.click()
         self.window._save_case()
@@ -174,28 +224,27 @@ class UiWorkflowTests(unittest.TestCase):
             None,
             ("qwen3-vl:8b-instruct", "qwen3-vl:4b-instruct", "kimi-k3:cloud"),
         )
-        self.window._mode_combo.setCurrentIndex(self.window._mode_combo.findData(AnalysisMode.LOCAL))
-        self.window._model_edit.setText("qwen3-vl:8b-instruct")
+        self.window._select_mode(AnalysisMode.LOCAL)
+        self.window._set_model_id("qwen3-vl:8b-instruct")
         banner = self.window._mode_banner
-        self.assertEqual(banner.text(), "로컬 AI 분석 · Qwen3-VL 8B")
-        self.assertNotIn("4b", banner.text())
-        self.assertNotIn("자동 외부 전환", banner.text())
+        # Plain words on the line; program and model names only in the tooltip.
+        self.assertEqual(banner.text(), "정확한 분석 · 이 컴퓨터에서 처리")
+        self.assertIn("qwen3-vl:8b-instruct", banner.toolTip())
         self.assertIn("자동 전환하지 않습니다", banner.toolTip())
 
-        self.window._model_edit.setText("qwen3-vl:4b-instruct")
-        self.assertEqual(banner.text(), "로컬 AI 분석 · Qwen3-VL 4B")
-        self.window._model_edit.setText("kimi-k3:cloud")
-        self.assertEqual(banner.text(), "클라우드 AI 분석 · Kimi-K3")
+        self.window._set_model_id("qwen3-vl:4b-instruct")
+        self.assertEqual(banner.text(), "빠른 분석 · 이 컴퓨터에서 처리")
+        self.window._set_model_id("kimi-k3:cloud")
+        self.assertEqual(banner.text(), "외부 서버에서 실행되는 프로그램 · 이 컴퓨터 분석에 쓸 수 없음")
         self.assertIn("외부 서버", banner.toolTip())
 
-        self.window._mode_combo.setCurrentIndex(
-            self.window._mode_combo.findData(AnalysisMode.EXTERNAL)
-        )
-        self.window._model_edit.setText("gpt-vision-test")
-        self.assertEqual(banner.text(), "OpenAI API 분석 · gpt-vision-test")
+        self.window._select_mode(AnalysisMode.EXTERNAL)
+        self.window._set_model_id("gpt-vision-test")
+        self.assertEqual(banner.text(), "외부 AI 분석 · 영상 일부를 외부로 보냄")
+        self.assertIn("gpt-vision-test", banner.toolTip())
         self.assertIn("외부 전송 승인", banner.toolTip())
-        self.window._mode_combo.setCurrentIndex(self.window._mode_combo.findData(AnalysisMode.SAMPLE))
-        self.assertEqual(banner.text(), "샘플 결과 (실제 AI 분석 아님)")
+        self.window._select_mode(AnalysisMode.SAMPLE)
+        self.assertEqual(banner.text(), "시연용 결과 (실제 AI 분석 아님)")
 
     def test_step_indicator_is_compact_and_names_each_state(self) -> None:
         self.window.resize(1440, 900)
@@ -216,8 +265,7 @@ class UiWorkflowTests(unittest.TestCase):
         settings = window._purpose_group
         self.assertEqual(settings.title(), "분석 설정")
         for field in (
-            window._mode_combo,
-            window._model_edit,
+            window._analysis_choice,
             window._purpose_edit,
             window._range_start,
             window._range_end,
@@ -262,7 +310,6 @@ class UiWorkflowTests(unittest.TestCase):
         window._make_plan()
         self.assertEqual(shown(), [window._approve_button])
         self.assertEqual(blue(), [window._approve_button])
-        self.assertEqual(window._flow_steps.current_label(), "승인")
         window._approve_plan()
         self.assertEqual(shown(), [window._run_button])
         self.assertEqual(blue(), [window._run_button])
@@ -277,19 +324,19 @@ class UiWorkflowTests(unittest.TestCase):
         for combo in combos:
             self.assertIsInstance(combo.itemDelegate(), QStyledItemDelegate)
 
-    def test_mode_and_model_are_folded_until_needed(self) -> None:
+    def test_one_analysis_choice_and_external_rows_only_when_needed(self) -> None:
         window = self.window
-        window._mode_combo.setCurrentIndex(window._mode_combo.findData(AnalysisMode.SAMPLE))
-        window._advanced_toggle.setChecked(False)
-        self.assertTrue(window._mode_combo.isHidden())
-        self.assertTrue(window._model_edit.isHidden())
-        window._advanced_toggle.click()
-        self.assertFalse(window._mode_combo.isHidden())
-        window._advanced_toggle.click()
-        window._mode_combo.setCurrentIndex(window._mode_combo.findData(AnalysisMode.EXTERNAL))
-        self.assertTrue(window._advanced_toggle.isChecked())
-        self.assertFalse(window._external_api_key_edit.isHidden())
-        self.assertFalse(window._external_vision_confirm.isHidden())
+        window._select_mode(AnalysisMode.SAMPLE)
+        self.assertFalse(window._analysis_choice.isHidden())
+        for widget in (window._external_model_edit, window._external_api_key_edit):
+            self.assertTrue(widget.isHidden())
+        window._select_mode(AnalysisMode.EXTERNAL)
+        for widget in (
+            window._external_model_edit,
+            window._external_api_key_edit,
+            window._external_vision_confirm,
+        ):
+            self.assertFalse(widget.isHidden())
 
     def test_changing_checked_candidates_after_a_plan_requires_a_new_plan(self) -> None:
         window = self.window
@@ -421,8 +468,8 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertIn("지속 시간 기준: 30초 이상", self.window._session.plan.purpose)
 
     def test_external_transfer_approval_is_separate(self) -> None:
-        self.window._mode_combo.setCurrentIndex(self.window._mode_combo.findData(AnalysisMode.EXTERNAL))
-        self.window._model_edit.setText("vision-model")
+        self.window._select_mode(AnalysisMode.EXTERNAL)
+        self.window._set_model_id("vision-model")
         self.window._external_vision_confirm.setChecked(True)
         self.window._external_api_key_edit.setText("sk-test-not-real")
         self.window._purpose_edit.setPlainText("출입문 앞에 사람이 30초 이상 머무르는 장면 후보 찾기")
@@ -438,9 +485,8 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertFalse(self.window._transfer_button.isEnabled())
 
     def test_openai_key_is_masked_memory_only_and_required_for_external_run(self) -> None:
-        external_index = self.window._mode_combo.findData(AnalysisMode.EXTERNAL)
-        self.window._mode_combo.setCurrentIndex(external_index)
-        self.window._model_edit.setText("vision-model")
+        self.window._select_mode(AnalysisMode.EXTERNAL)
+        self.window._set_model_id("vision-model")
         self.window._external_vision_confirm.setChecked(True)
         self.window._purpose_edit.setPlainText(
             "출입문 앞에 사람이 30초 이상 머무르는 장면 후보 찾기"
@@ -535,6 +581,57 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertIn("재생 시작\n00:00 (확인용 범위 시작 최대 1초 전", text)
         self.assertIn("관찰 프레임 원본 시각\n2.000초", text)
 
+    def test_playback_bar_marks_candidates_and_a_click_selects_one(self) -> None:
+        window = self.window
+        window._duration_ms = 10_000
+        window._timeline.setRange(0, 10_000)
+        segments = tuple(
+            Segment(
+                video_id="video-ui",
+                start_sec=start,
+                end_sec=start + 1.0,
+                summary=f"{start}초 후보",
+                evidence=("관찰됨",),
+                uncertainty="원본 확인 필요",
+                source_frame_ids=(f"video-ui:{int(start * 1000)}",),
+                source_timestamps_sec=(start,),
+            )
+            for start in (2.0, 6.0)
+        )
+        job = AnalysisJob(
+            job_id="job-marks",
+            status=JobStatus.COMPLETED,
+            progress=100,
+            video_id="video-ui",
+            mode=AnalysisMode.LOCAL,
+            model_id="fake-vlm",
+            is_sample=False,
+            origin=ResultOrigin.TEST_DOUBLE,
+            purpose="사람이 문을 지나가는 장면 후보 찾기",
+            segments=segments,
+        )
+        window._display_segments(job)
+        marks = window._timeline.marks
+        self.assertEqual([(mark.start_ms, mark.end_ms) for mark in marks], [(2000, 3000), (6000, 7000)])
+        self.assertIn("후보 #1", marks[0].label)
+        self.assertIn("미검토", marks[0].label)
+
+        with patch.object(window, "_seek_to_segment") as seek:
+            window._timeline_mark_clicked(1)
+        self.assertEqual(window._review_panel.current_index, 1)
+        seek.assert_called_once()
+        self.assertTrue(window._timeline.marks[1].selected)
+
+        # A reviewer's saved judgement recolours the mark.
+        window._review_panel.judgement_buttons[ReviewJudgement.RELEVANT].setChecked(True)
+        window._review_panel.save_current()
+        self.assertIn("관련 있음", window._timeline.marks[1].label)
+
+        # Another video's playback bar shows no marks for this result.
+        window._video_id = "video-other"
+        window._refresh_timeline_marks()
+        self.assertEqual(window._timeline.marks, ())
+
     def test_result_click_starts_one_second_before_review_range(self) -> None:
         segment = Segment(
             video_id="video-ui",
@@ -611,18 +708,71 @@ class UiWorkflowTests(unittest.TestCase):
 
         self.assertIn("후보를 찾지 못했습니다", self.window._result_list.item(0).text())
 
-    def test_switching_modes_preserves_each_explicit_model_setting(self) -> None:
-        local_index = self.window._mode_combo.findData(AnalysisMode.LOCAL)
-        external_index = self.window._mode_combo.findData(AnalysisMode.EXTERNAL)
-        self.window._mode_combo.setCurrentIndex(local_index)
-        self.window._model_edit.setText("local-vision-model")
-        self.window._mode_combo.setCurrentIndex(external_index)
-        self.window._model_edit.setText("external-vision-model")
+    def local_inventory(self) -> RuntimeInventory:
+        models = ("qwen3-vl:8b-instruct", "qwen3-vl:4b-instruct", "kimi-k3:cloud", "glm-5.3:cloud")
+        return RuntimeInventory("/opt/homebrew/bin/ollama", models, None, None, models[:3])
 
-        self.window._mode_combo.setCurrentIndex(local_index)
-        self.assertEqual(self.window._model_edit.text(), "local-vision-model")
-        self.window._mode_combo.setCurrentIndex(external_index)
-        self.assertEqual(self.window._model_edit.text(), "external-vision-model")
+    def test_local_models_are_listed_by_name_without_cloud_models(self) -> None:
+        window = self.window
+        window._runtime_inventory = self.local_inventory()
+        window._settings = AppSettings()
+        window._select_mode(AnalysisMode.LOCAL)
+        choice = window._analysis_choice
+        labels = [choice.itemText(index) for index in range(choice.count())]
+        self.assertEqual(
+            labels,
+            ["빠른 분석", "정확한 분석", "시연용 (실제 분석 아님)", "외부 AI 분석 (영상 일부를 외부로 보냄)"],
+        )
+        self.assertEqual(window._model_id(), "qwen3-vl:4b-instruct")
+
+        choice.setCurrentIndex(1)
+        self.assertEqual(window._model_id(), "qwen3-vl:8b-instruct")
+        self.assertEqual(window._mode_banner.text(), "정확한 분석 · 이 컴퓨터에서 처리")
+
+    def test_local_mode_refuses_a_cloud_model_and_can_reread_models(self) -> None:
+        window = self.window
+        window._runtime_inventory = self.local_inventory()
+        window._select_mode(AnalysisMode.LOCAL)
+        window._set_model_id("kimi-k3:cloud")
+        self.assertEqual(window._analysis_choice.currentText(), "AI 분석 (확인되지 않은 프로그램)")
+        window._purpose_edit.setPlainText("사람이 출입문을 지나가는 장면 후보 찾기")
+        with patch.object(window, "_show_error") as error:
+            window._make_plan()
+        self.assertIn("외부 서버에서 실행", error.call_args.args[0])
+        self.assertIsNone(window._session.plan)
+
+        newer = RuntimeInventory(
+            "/opt/homebrew/bin/ollama", ("qwen3-vl:2b-instruct",), None, None, ("qwen3-vl:2b-instruct",)
+        )
+        with patch("video_agent.ui.main_window.RuntimeInventory.detect", return_value=newer):
+            window._model_refresh_button.click()
+        self.assertEqual(window._analysis_choice.itemText(0), "AI 분석")
+
+    def test_first_run_starts_with_local_analysis_when_installed(self) -> None:
+        self.runtime.stop()
+        fresh = Path(self.temporary.name) / "fresh"
+        with patch(
+            "video_agent.ui.main_window.RuntimeInventory.detect",
+            return_value=self.local_inventory(),
+        ), patch.dict(os.environ, {"VIDEO_AGENT_DATA_DIR": str(fresh)}):
+            first = MainWindow()
+        self.runtime.start()
+        self.assertIs(first._current_mode(), AnalysisMode.LOCAL)
+        self.assertEqual(first._analysis_choice.currentText(), "빠른 분석")
+        first.close()
+        # Without an installed program the first run stays on the demonstration.
+        self.assertIs(self.window._current_mode(), AnalysisMode.SAMPLE)
+
+    def test_switching_modes_preserves_each_explicit_model_setting(self) -> None:
+        self.window._select_mode(AnalysisMode.LOCAL)
+        self.window._set_model_id("local-vision-model")
+        self.window._select_mode(AnalysisMode.EXTERNAL)
+        self.window._set_model_id("external-vision-model")
+
+        self.window._select_mode(AnalysisMode.LOCAL)
+        self.assertEqual(self.window._model_id(), "local-vision-model")
+        self.window._select_mode(AnalysisMode.EXTERNAL)
+        self.assertEqual(self.window._model_id(), "external-vision-model")
 
     def test_local_mode_selects_verified_instruct_model_and_uses_local_limit(self) -> None:
         self.window._runtime_inventory = RuntimeInventory(
@@ -633,13 +783,12 @@ class UiWorkflowTests(unittest.TestCase):
             ("qwen3-vl:8b", "qwen3-vl:4b-instruct"),
         )
         self.window._settings = AppSettings()
-        local_index = self.window._mode_combo.findData(AnalysisMode.LOCAL)
-        self.window._mode_combo.setCurrentIndex(local_index)
+        self.window._select_mode(AnalysisMode.LOCAL)
         self.window._purpose_edit.setPlainText("사람과 유모차가 강하게 접촉하는 장면 후보 찾기")
 
         self.window._make_plan()
 
-        self.assertEqual(self.window._model_edit.text(), "qwen3-vl:4b-instruct")
+        self.assertEqual(self.window._model_id(), "qwen3-vl:4b-instruct")
         self.assertIsNotNone(self.window._session.plan)
         self.assertEqual(self.window._session.plan.limits.max_runtime_seconds, 300.0)
         self.assertEqual(self.window._session.plan.limits.max_provider_requests, 3)
@@ -653,8 +802,7 @@ class UiWorkflowTests(unittest.TestCase):
             None,
             ("qwen3-vl:4b-instruct",),
         )
-        local_index = self.window._mode_combo.findData(AnalysisMode.LOCAL)
-        self.window._mode_combo.setCurrentIndex(local_index)
+        self.window._select_mode(AnalysisMode.LOCAL)
         self.window._purpose_edit.setPlainText(
             "사람의 손가락이 초인종 버튼을 반복해서 누르는 장면 후보 찾기"
         )
@@ -693,9 +841,8 @@ class UiWorkflowTests(unittest.TestCase):
             None,
             ("qwen3-vl:8b",),
         )
-        local_index = self.window._mode_combo.findData(AnalysisMode.LOCAL)
-        self.window._mode_combo.setCurrentIndex(local_index)
-        self.window._model_edit.setText("qwen3-vl:8b")
+        self.window._select_mode(AnalysisMode.LOCAL)
+        self.window._set_model_id("qwen3-vl:8b")
         self.window._purpose_edit.setPlainText(
             "사람의 손가락이 초인종 버튼을 누르는 장면 후보 찾기"
         )
@@ -724,7 +871,7 @@ class UiWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             self.window._mode_banner.text(),
-            "모델 응답 실패 · qwen3-vl:8b",
+            "AI 분석 실패",
         )
         self.assertIn("qwen3-vl:8b", self.window._result_list.item(0).text())
         self.assertIn("thinking만 반환", self.window._result_list.item(0).text())
@@ -738,8 +885,7 @@ class UiWorkflowTests(unittest.TestCase):
             None,
             ("qwen3-vl:4b-instruct",),
         )
-        local_index = self.window._mode_combo.findData(AnalysisMode.LOCAL)
-        self.window._mode_combo.setCurrentIndex(local_index)
+        self.window._select_mode(AnalysisMode.LOCAL)
         self.window._purpose_edit.setPlainText("사람의 발과 물체 위치 변화가 보이는 장면 후보 찾기")
         self.window._make_plan()
         self.window._approve_plan()
@@ -792,8 +938,7 @@ class UiWorkflowTests(unittest.TestCase):
             None,
             ("qwen3-vl:4b-instruct",),
         )
-        local_index = self.window._mode_combo.findData(AnalysisMode.LOCAL)
-        self.window._mode_combo.setCurrentIndex(local_index)
+        self.window._select_mode(AnalysisMode.LOCAL)
         self.window._purpose_edit.setPlainText(
             "사람이 주변을 두리번거리며 머리 방향을 반복해서 바꾸는 장면 후보 찾기"
         )
@@ -862,8 +1007,7 @@ class UiWorkflowTests(unittest.TestCase):
             None,
             ("qwen3-vl:4b-instruct",),
         )
-        local_index = self.window._mode_combo.findData(AnalysisMode.LOCAL)
-        self.window._mode_combo.setCurrentIndex(local_index)
+        self.window._select_mode(AnalysisMode.LOCAL)
         self.window._purpose_edit.setPlainText("사람의 발과 물체 위치 변화가 보이는 장면 후보 찾기")
         proposals = tuple(
             MotionProposal(

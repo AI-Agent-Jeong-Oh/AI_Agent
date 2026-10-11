@@ -11,16 +11,18 @@ and real-model output never depend on color alone.
 
 from __future__ import annotations
 
+import atexit
 from collections.abc import Callable, Sequence
 from html import escape
 from functools import lru_cache
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QEvent, QObject, QRectF, Qt
+from PySide6.QtCore import QByteArray, QCoreApplication, QEvent, QObject, QRectF, Qt
 from PySide6.QtGui import QColor, QFontDatabase, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
+    QApplication,
     QComboBox,
     QFormLayout,
     QPushButton,
@@ -169,6 +171,23 @@ def icon(name: str, color: str = "") -> QIcon:
             painter.end()
             result.addPixmap(pixmap, mode)
     return result
+
+
+def _release_qt_objects() -> None:
+    """At exit, free cached icons and windows while the application still exists.
+
+    Python may otherwise drop them after QApplication during shutdown, which crashes.
+    """
+    icon.cache_clear()
+    app = QApplication.instance()
+    if app is None:
+        return
+    for widget in app.topLevelWidgets():
+        widget.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+atexit.register(_release_qt_objects)
 
 
 def set_icon(button: QPushButton, name: str, color: str = "") -> None:
@@ -399,6 +418,12 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
         selection-background-color: {PRIMARY_SOFT}; selection-color: {TEXT};
         gridline-color: {LINE}; }}
     QTableWidget::item {{ padding: 0 {s(8)}px; border-bottom: 1px solid {LINE}; }}
+    QTableWidget#videoList {{ border: none; border-top: 1px solid {LINE}; border-radius: 0;
+        background: {SURFACE}; selection-background-color: {PRIMARY_SOFT}; }}
+    QTableWidget#videoList::item {{ border-bottom: 1px solid {LINE}; padding: 0; }}
+    QTableWidget#videoList QHeaderView::section {{ background: {SURFACE}; color: {TEXT_SUB};
+        font-weight: 400; border: none; border-bottom: 1px solid {LINE};
+        padding: {s(6)}px {s(12)}px; }}
     QFrame#cardDivider {{ background: {LINE}; border: none; min-height: 1px; max-height: 1px; }}
     QWidget#videoPlaceholder {{ background: {VIDEO_BACKGROUND}; }}
     QLabel#videoPlaceholderText {{ color: {GRAY_20}; }}
@@ -407,7 +432,6 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
         text-align: left; padding: {compact_pad}px 0; min-height: {compact_min}px;
         font-size: {s(LABEL_PX)}px; }}
     QPushButton#disclosure:disabled {{ background: transparent; color: {TEXT_SUB}; }}
-    QLabel#flowSteps {{ font-size: {s(LABEL_PX)}px; color: {TEXT_SUB}; }}
     QPushButton[segment] {{ border-radius: 0; }}
     QPushButton[segment="middle"], QPushButton[segment="last"] {{ border-left: none; }}
     QPushButton[segment="first"] {{ border-top-left-radius: {s(6)}px;
@@ -450,7 +474,9 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QRadioButton::indicator {{ width: {s(20)}px; height: {s(20)}px;
                                border: 1px solid {INPUT_BORDER}; border-radius: {s(10)}px;
                                background: {SURFACE}; }}
-    QRadioButton::indicator:checked {{ border: {s(6)}px solid {PRIMARY_FILL}; }}
+    QRadioButton::indicator:checked {{ border-color: {PRIMARY_FILL};
+        background: qradialgradient(cx:0.5, cy:0.5, radius:0.5, fx:0.5, fy:0.5,
+            stop:0 {PRIMARY_FILL}, stop:0.48 {PRIMARY_FILL}, stop:0.56 {SURFACE}, stop:1 {SURFACE}); }}
     QRadioButton::indicator:disabled {{ background: {GRAY_10}; border-color: {GRAY_30}; }}
 
     QLineEdit, QComboBox, QAbstractSpinBox {{
@@ -493,6 +519,10 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QMenu::item:selected {{ background: {PRIMARY_SOFT}; color: {PRIMARY}; }}
     QMenu::item:disabled {{ color: {GRAY_50}; }}
     QMenu::separator {{ height: 1px; background: {LINE}; margin: {s(4)}px {s(8)}px; }}
+    QFrame#situationTile {{ background: {SURFACE}; border: 1px solid {GRAY_30};
+        border-radius: {s(6)}px; }}
+    QFrame#situationTile[checked="true"] {{ background: {PRIMARY_SOFT}; border-color: {PRIMARY_FILL}; }}
+    QLabel#recommendTag {{ font-size: {s(CAPTION_PX)}px; color: {TEXT_SUB}; }}
     QFrame#datePopover {{ background: {SURFACE}; border: 1px solid {GRAY_30}; }}
     QLabel#popoverTitle {{ font-size: {s(HEADING_PX)}px; font-weight: 700; color: {TEXT}; }}
     QLabel#popoverText {{ font-size: {s(LABEL_PX)}px; color: {TEXT}; }}
