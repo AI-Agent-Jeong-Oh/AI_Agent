@@ -10,29 +10,34 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from video_agent.contracts import InformationCertainty
 from video_agent.ui import theme
+from video_agent.ui.card import Card
 from video_agent.video.files import format_milliseconds, seconds_to_milliseconds
 
 VIDEO_ID_ROLE = Qt.ItemDataRole.UserRole + 1
 
 _CERTAINTY_TEXT = {
-    InformationCertainty.CONFIRMED: "시각 확인",
-    InformationCertainty.ESTIMATED: "시각 추정",
-    InformationCertainty.UNKNOWN: "시각 미확인",
+    InformationCertainty.CONFIRMED: "확인",
+    InformationCertainty.ESTIMATED: "추정",
+    InformationCertainty.UNKNOWN: "미확인",
 }
+# Columns of the video table; steps ② and ③ keep only the file and its status.
+COLUMNS = ("영상", "위치", "길이", "기준 시각", "분석 상태")
+_DETAIL_COLUMNS = (1, 2, 3)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +55,7 @@ class VideoEntry:
         return self.file_name is not None
 
 
-class CaseVideoList(QGroupBox):
+class CaseVideoList(Card):
     add_requested = Signal()
     video_activated = Signal(str)
     relink_requested = Signal(str)
@@ -62,40 +67,59 @@ class CaseVideoList(QGroupBox):
         self._current_id: str | None = None
         self._locked = False
         self._refreshing = False
+        self._select_only = False
+        self._detail_widgets: list[QWidget] = []
 
-        layout = QVBoxLayout(self)
-        header = QHBoxLayout()
-        self.count_label = QLabel("등록 0")
-        self.count_label.setObjectName("fieldLabel")
-        self.add_button = QPushButton("+ 영상 추가")
+        layout = QVBoxLayout(self.body)
+        layout.setContentsMargins(12, 12, 12, 12)
+        # Count beside the title and "add" at the right of the header, as on the demo page.
+        self.count_label = self.aside_label
+        self.set_aside("영상 0건")
+        self.add_button = QPushButton("영상 추가")
+        theme.set_icon(self.add_button, "plus")
+        theme.mark_compact(self.add_button)
         self.add_button.setToolTip("이 사건의 CCTV 영상을 하나 이상 고릅니다. 원본은 복사하거나 바꾸지 않습니다.")
-        header.addWidget(self.count_label, 1)
-        header.addWidget(self.add_button)
-        layout.addLayout(header)
+        self.add_header_widget(self.add_button)
 
-        self.list = QListWidget()
+        self.list = QTableWidget(0, len(COLUMNS))
         self.list.setObjectName("videoList")
+        self.list.setHorizontalHeaderLabels(COLUMNS)
         self.list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.list.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.list.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.list.setShowGrid(False)
+        self.list.setWordWrap(False)
+        # Narrow cards keep both ends of a file name ("cam_…a.mp4").
+        self.list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        self.list.verticalHeader().setVisible(False)
+        header = self.list.horizontalHeader()
+        header.setHighlightSections(False)
+        header.setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.list.setAccessibleName("사건의 CCTV 영상 목록")
-        self.list.setWordWrap(True)
         layout.addWidget(self.list)
 
-        self.metadata_label = QLabel("메타데이터 미확인")
+        self.metadata_label = QLabel("영상 정보 확인 전")
         self.metadata_label.setWordWrap(True)
         self.metadata_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         footer = QHBoxLayout()
         self.relink_button = QPushButton("파일 연결")
         self.relink_button.setToolTip("사건에 연결된 영상과 같은 파일을 다시 고릅니다")
         self.remove_button = QPushButton("목록에서 빼기")
+        theme.set_icon(self.relink_button, "link")
+        theme.set_icon(self.remove_button, "x")
         self.remove_button.setToolTip("사건과의 연결만 끊습니다. 파일은 지우지 않습니다.")
         footer.addWidget(self.metadata_label, 1)
         footer.addWidget(self.relink_button)
         footer.addWidget(self.remove_button)
         layout.addLayout(footer)
+        # Spare height (beside the taller settings card in step ②) stays below the card.
+        layout.addStretch(1)
         self._layout = layout
 
         self.add_button.clicked.connect(self.add_requested.emit)
-        self.list.currentItemChanged.connect(self._current_changed)
+        self.list.currentCellChanged.connect(self._current_changed)
         self.list.itemDoubleClicked.connect(self._item_double_clicked)
         self.relink_button.clicked.connect(self._emit_relink)
         self.remove_button.clicked.connect(self._emit_remove)
@@ -103,7 +127,22 @@ class CaseVideoList(QGroupBox):
 
     def add_detail_widget(self, widget: QWidget) -> None:
         """Show per-video fields (camera details) under the list, above the file actions."""
-        self._layout.insertWidget(self._layout.count() - 1, widget)
+        self._layout.insertWidget(self._layout.count() - 2, widget)
+        self._detail_widgets.append(widget)
+
+    def set_select_only(self, select_only: bool) -> None:
+        """Steps ② and ③ only pick a registered video: no adding, relinking or removing."""
+        self._select_only = select_only
+        self.add_button.setVisible(not select_only)
+        self.relink_button.setVisible(not select_only)
+        self.remove_button.setVisible(not select_only)
+        for widget in self._detail_widgets:
+            widget.setVisible(not select_only)
+        for column in _DETAIL_COLUMNS:
+            self.list.setColumnHidden(column, select_only)
+        self.list.setAccessibleDescription(
+            "목록에서 고르면 그 영상을 엽니다" if select_only else ""
+        )
 
     def apply_scale(self, scaled) -> None:
         self.list.setMinimumHeight(scaled(64))
@@ -114,7 +153,8 @@ class CaseVideoList(QGroupBox):
         return self._entries
 
     def selected_video_id(self) -> str | None:
-        item = self.list.currentItem()
+        row = self.list.currentRow()
+        item = self.list.item(row, 0) if row >= 0 else None
         value = item.data(VIDEO_ID_ROLE) if item is not None else None
         return value if isinstance(value, str) else None
 
@@ -125,27 +165,30 @@ class CaseVideoList(QGroupBox):
         self._refreshing = True
         try:
             keep = self.selected_video_id()
-            self.list.clear()
+            self.list.setRowCount(0)
+            self.list.setRowCount(len(entries))
             select_row = -1
             for row, entry in enumerate(entries):
-                item = QListWidgetItem(self._item_text(entry, entry.video_id == current_id))
-                item.setData(VIDEO_ID_ROLE, entry.video_id)
-                item.setToolTip(f"영상 ID {entry.video_id}")
-                if not entry.linked:
-                    item.setForeground(QColor(theme.TEXT_FAINT))
-                self.list.addItem(item)
+                for column, item in enumerate(self._row_items(entry, entry.video_id == current_id)):
+                    self.list.setItem(row, column, item)
                 if entry.video_id == current_id:
                     select_row = row
                 elif select_row < 0 and entry.video_id == keep and current_id is None:
                     select_row = row
-            self.list.setCurrentRow(select_row)
+            if select_row >= 0:
+                self.list.setCurrentCell(select_row, 0)
+            else:
+                self.list.setCurrentCell(-1, -1)
         finally:
             self._refreshing = False
         linked = sum(entry.linked for entry in entries)
         analyzed = sum(entry.analyzed for entry in entries)
-        self.count_label.setText(
-            f"등록 {len(entries)} · 파일 연결 {linked} · 분석 결과 {analyzed}"
-        )
+        parts = [f"영상 {len(entries)}건"]
+        if linked < len(entries):
+            parts.append(f"파일 연결 필요 {len(entries) - linked}건")
+        if analyzed:
+            parts.append(f"분석 {analyzed}건")
+        self.count_label.setText(" · ".join(parts))
         self._update_buttons()
 
     def set_locked(self, locked: bool) -> None:
@@ -155,32 +198,55 @@ class CaseVideoList(QGroupBox):
         self._update_buttons()
 
     @staticmethod
-    def _item_text(entry: VideoEntry, current: bool) -> str:
-        name = entry.file_name or "파일 다시 연결 필요"
-        mark = "▶ " if current else ""
-        location = entry.camera_location or "위치 미입력"
+    def _row_items(entry: VideoEntry, current: bool) -> list[QTableWidgetItem]:
+        """One row: file (the open one bold with a play icon), location, length, clock, status."""
         duration = (
             format_milliseconds(seconds_to_milliseconds(entry.duration_seconds))
             if entry.duration_seconds is not None
-            else "길이 미확인"
+            else "-"
         )
-        details = f"{location} · {duration} · {_CERTAINTY_TEXT[entry.clock_certainty]}"
-        return f"{mark}{name}\n{details}\n{entry.analysis_status}"
+        values = (
+            entry.file_name or "파일 다시 연결 필요",
+            entry.camera_location or "-",
+            duration,
+            _CERTAINTY_TEXT[entry.clock_certainty],
+            entry.analysis_status,
+        )
+        items = []
+        for value in values:
+            item = QTableWidgetItem(value)
+            item.setToolTip(value)
+            if not entry.linked:
+                item.setForeground(QColor(theme.TEXT_FAINT))
+            items.append(item)
+        name = items[0]
+        name.setData(VIDEO_ID_ROLE, entry.video_id)
+        name.setToolTip(f"{values[0]}\n영상 ID {entry.video_id}")
+        if current:
+            font = QFont(name.font())
+            font.setBold(True)
+            name.setFont(font)
+            name.setIcon(theme.icon("play", theme.PRIMARY))
+            name.setData(Qt.ItemDataRole.AccessibleDescriptionRole, "재생 중인 영상")
+        elif not entry.linked:
+            name.setIcon(theme.icon("link", theme.GRAY_40))
+        return items
 
     def _entry(self, video_id: str | None) -> VideoEntry | None:
         return next((entry for entry in self._entries if entry.video_id == video_id), None)
 
-    def _current_changed(self, current: QListWidgetItem | None, _previous) -> None:
+    def _current_changed(self, row: int, _column: int, previous_row: int, _previous_column: int) -> None:
         self._update_buttons()
-        if self._refreshing or current is None:
+        if self._refreshing or row < 0 or row == previous_row:
             return
-        entry = self._entry(current.data(VIDEO_ID_ROLE))
+        entry = self._entry(self.selected_video_id())
         if entry is not None and entry.linked and entry.video_id != self._current_id:
             self.video_activated.emit(entry.video_id)
 
-    def _item_double_clicked(self, item: QListWidgetItem) -> None:
-        entry = self._entry(item.data(VIDEO_ID_ROLE))
-        if entry is not None and not entry.linked and not self._locked:
+    def _item_double_clicked(self, item: QTableWidgetItem) -> None:
+        name = self.list.item(item.row(), 0)
+        entry = self._entry(name.data(VIDEO_ID_ROLE) if name is not None else None)
+        if entry is not None and not entry.linked and not self._locked and not self._select_only:
             self.relink_requested.emit(entry.video_id)
 
     def _emit_relink(self) -> None:

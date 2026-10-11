@@ -8,7 +8,13 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontInfo
-from PySide6.QtWidgets import QApplication, QLineEdit, QListWidgetItem
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QLineEdit,
+    QListWidgetItem,
+    QStyledItemDelegate,
+)
 
 from video_agent.contracts import (
     AnalysisJob,
@@ -122,7 +128,7 @@ class UiWorkflowTests(unittest.TestCase):
             "사람이 문 앞 상자를 들어 이동시키는 장면 후보 찾기"
         )
         self.window._make_plan()
-        self.assertIn("사전 정보(영상 관찰 사실 아님)", self.window._plan_view.toPlainText())
+        self.assertIn("영상에서 확인한 사실이 아닙니다", self.window._plan_view.toPlainText())
         self.assertIn("문 앞 상자를 들었다고 설명함", self.window._plan_view.toPlainText())
         self.window._approve_plan()
         self.assertTrue(self.window._run_button.isEnabled())
@@ -189,7 +195,7 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertEqual(banner.text(), "OpenAI API 분석 · gpt-vision-test")
         self.assertIn("외부 전송 승인", banner.toolTip())
         self.window._mode_combo.setCurrentIndex(self.window._mode_combo.findData(AnalysisMode.SAMPLE))
-        self.assertEqual(banner.text(), "샘플 결과 — 실제 AI 분석 아님")
+        self.assertEqual(banner.text(), "샘플 결과 (실제 AI 분석 아님)")
 
     def test_step_indicator_is_compact_and_names_each_state(self) -> None:
         self.window.resize(1440, 900)
@@ -204,6 +210,171 @@ class UiWorkflowTests(unittest.TestCase):
         )
         centers = [button.geometry().center().x() for button in self.window._step_buttons]
         self.assertLessEqual(centers[-1] - centers[0], 2 * 260)
+
+    def test_analysis_settings_sit_beside_the_video_list_on_step_two_only(self) -> None:
+        window = self.window
+        settings = window._purpose_group
+        self.assertEqual(settings.title(), "분석 설정")
+        for field in (
+            window._mode_combo,
+            window._model_edit,
+            window._purpose_edit,
+            window._range_start,
+            window._range_end,
+        ):
+            self.assertTrue(settings.isAncestorOf(field))
+        # [CCTV 영상][분석 설정] in one row above the player; the plan side keeps no settings.
+        row = window._top_row
+        self.assertLess(row.indexOf(window._video_list), row.indexOf(settings))
+        left = window._video_stack.parentWidget()
+        self.assertTrue(left.isAncestorOf(settings))
+        self.assertFalse(window._step_stack.isAncestorOf(settings))
+        window.resize(1440, 900)
+        window.show()
+        window._show_step(1)
+        self.app.processEvents()
+        self.assertFalse(settings.isHidden())
+        list_box = window._video_list.geometry()
+        self.assertEqual(list_box.top(), settings.geometry().top())
+        self.assertEqual(list_box.bottom(), settings.geometry().bottom())
+        self.assertLess(settings.geometry().bottom(), window._video_stack.geometry().top())
+        self.assertGreaterEqual(window._video_stack.height(), 288)
+        plan_top = window._plan_group.mapTo(window._plan_scroll.widget(), window._plan_group.rect().topLeft())
+        self.assertEqual(plan_top.y(), 0)
+        for step in (0, 2):
+            window._show_step(step)
+            self.assertTrue(settings.isHidden())
+
+    def test_step_two_shows_one_next_action_at_a_time(self) -> None:
+        window = self.window
+        window._update_post_run_buttons()
+        window._purpose_edit.setPlainText("사람이 문 앞 상자를 들어 이동시키는 장면 후보 찾기")
+
+        def blue() -> list:
+            return [b for b in window._next_action_buttons if b.property("variant") == "primary"]
+
+        def shown() -> list:
+            buttons = (window._make_plan_button, window._approve_button, window._run_button)
+            return [button for button in buttons if not button.isHidden()]
+
+        self.assertEqual(blue(), [window._motion_scan_button])
+        self.assertEqual(shown(), [window._make_plan_button])
+        window._make_plan()
+        self.assertEqual(shown(), [window._approve_button])
+        self.assertEqual(blue(), [window._approve_button])
+        self.assertEqual(window._flow_steps.current_label(), "승인")
+        window._approve_plan()
+        self.assertEqual(shown(), [window._run_button])
+        self.assertEqual(blue(), [window._run_button])
+        # A changed purpose needs a new plan and a new approval.
+        window._purpose_edit.setPlainText("사람이 상자를 옮기는 장면 후보 찾기")
+        self.assertEqual(shown(), [window._make_plan_button])
+        self.assertFalse(window._run_button.isEnabled())
+
+    def test_every_drop_down_uses_the_styled_list(self) -> None:
+        combos = self.window.findChildren(QComboBox)
+        self.assertGreaterEqual(len(combos), 5)
+        for combo in combos:
+            self.assertIsInstance(combo.itemDelegate(), QStyledItemDelegate)
+
+    def test_mode_and_model_are_folded_until_needed(self) -> None:
+        window = self.window
+        window._mode_combo.setCurrentIndex(window._mode_combo.findData(AnalysisMode.SAMPLE))
+        window._advanced_toggle.setChecked(False)
+        self.assertTrue(window._mode_combo.isHidden())
+        self.assertTrue(window._model_edit.isHidden())
+        window._advanced_toggle.click()
+        self.assertFalse(window._mode_combo.isHidden())
+        window._advanced_toggle.click()
+        window._mode_combo.setCurrentIndex(window._mode_combo.findData(AnalysisMode.EXTERNAL))
+        self.assertTrue(window._advanced_toggle.isChecked())
+        self.assertFalse(window._external_api_key_edit.isHidden())
+        self.assertFalse(window._external_vision_confirm.isHidden())
+
+    def test_changing_checked_candidates_after_a_plan_requires_a_new_plan(self) -> None:
+        window = self.window
+        window._update_post_run_buttons()
+        window._purpose_edit.setPlainText("사람이 문 앞 상자를 들어 이동시키는 장면 후보 찾기")
+        proposals = tuple(
+            MotionProposal(
+                proposal_id=f"motion-{index}", video_id="video-ui", start_sec=start,
+                end_sec=start + 2.0, peak_timestamp_sec=start + 1.0, motion_score=5.0 - index,
+                recommended_sampling_interval_sec=0.5,
+            )
+            for index, start in enumerate((1.0, 6.0))
+        )
+        window._active_motion_scan_id = "scan-two"
+        window._on_motion_scan_result(
+            MotionScanResult(
+                scan_id="scan-two", video_id="video-ui", range_start_sec=0.0,
+                range_end_sec=10.0, sample_interval_sec=0.5, sampled_frame_count=19,
+                proposals=proposals,
+            )
+        )
+        window._make_plan()
+        self.assertEqual((window._session.plan.range_start_sec, window._session.plan.range_end_sec), (1.0, 8.0))
+        self.assertTrue(window._approve_button.isEnabled())
+
+        window._motion_list.item(1).setCheckState(Qt.CheckState.Unchecked)
+        self.assertFalse(window._approve_button.isEnabled())
+        self.assertFalse(window._make_plan_button.isHidden())
+        window._make_plan()
+        self.assertTrue(all(1.0 <= value <= 3.0 for value in window._session.plan.sample_timestamps_sec))
+
+        # With nothing checked the plan goes back to the range the user had set.
+        window._motion_list.item(0).setCheckState(Qt.CheckState.Unchecked)
+        window._make_plan()
+        self.assertEqual((window._range_start.value(), window._range_end.value()), (0.0, 0.0))
+        self.assertEqual(window._applied_motion_proposals, ())
+
+    def test_motion_guidance_is_short_and_split_by_importance(self) -> None:
+        window = self.window
+        self.assertEqual(
+            window._motion_help.text(),
+            "영상 내 움직임이 큰 구간을 후보로 제안합니다. 최대 3개까지 선택할 수 있습니다.",
+        )
+        self.assertEqual(window._motion_note.text(), "움직임 후보는 AI의 행동 판정 결과가 아닙니다.")
+        self.assertEqual(window._motion_note.objectName(), "subsectionHelp")
+
+    def test_motion_candidates_show_short_empty_states(self) -> None:
+        window = self.window
+        self.assertEqual(window._motion_empty_label.text(), "등록된 CCTV 영상이 없습니다.")
+        self.assertTrue(window._motion_list.isHidden())
+
+        window._case_videos[window._video_id] = self.video
+        window._refresh_motion_empty_state()
+        self.assertEqual(
+            window._motion_empty_label.text(), "움직임 후보 찾기를 실행하면 분석할 구간이 표시됩니다."
+        )
+        result = dict(
+            video_id="video-ui", range_start_sec=0.0, range_end_sec=10.0,
+            sample_interval_sec=0.5, sampled_frame_count=19,
+        )
+        window._active_motion_scan_id = "scan-empty"
+        window._on_motion_scan_result(MotionScanResult(scan_id="scan-empty", proposals=(), **result))
+        self.assertEqual(
+            window._motion_empty_label.text(), "현재 분석 범위에서 발견된 움직임 후보가 없습니다."
+        )
+        self.assertTrue(window._motion_list.isHidden())
+
+        proposal = MotionProposal(
+            proposal_id="motion-1", video_id="video-ui", start_sec=2.0, end_sec=8.0,
+            peak_timestamp_sec=5.0, motion_score=4.2, recommended_sampling_interval_sec=0.5,
+        )
+        window._active_motion_scan_id = "scan-found"
+        window._on_motion_scan_result(
+            MotionScanResult(scan_id="scan-found", proposals=(proposal,), **result)
+        )
+        self.assertTrue(window._motion_empty_label.isHidden())
+        self.assertFalse(window._motion_list.isHidden())
+        self.assertFalse(window._motion_selection_label.isHidden())
+        self.assertEqual(window._motion_list.item(0).checkState(), Qt.CheckState.Checked)
+
+        window._range_changed()  # inputs changed: proposals cleared, back to "not scanned"
+        self.assertTrue(window._motion_list.isHidden())
+        self.assertEqual(
+            window._motion_empty_label.text(), "움직임 후보 찾기를 실행하면 분석할 구간이 표시됩니다."
+        )
 
     def test_analysis_panel_preserves_readable_motion_and_plan_areas(self) -> None:
         self.assertGreaterEqual(self.window._motion_list.minimumHeight(), 120)
@@ -220,17 +391,17 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertGreater(QFontInfo(self.window._metadata_label.font()).pixelSize(), card_text_size)
 
         self.assertEqual(self.window._ui_zoom_percent, 130)
-        self.assertEqual(self.window._zoom_reset_button.text(), "130%")
+        self.assertEqual(self.window._zoom_reset_action.text(), "기본 크기 (현재 130%)")
         self.assertGreater(QFontInfo(self.window.font()).pixelSize(), base_size)
         self.assertGreaterEqual(self.window._motion_list.minimumHeight(), 166)
 
         self.window._set_ui_zoom(999)
         self.assertEqual(self.window._ui_zoom_percent, self.window.UI_ZOOM_MAX)
-        self.assertFalse(self.window._zoom_in_button.isEnabled())
+        self.assertFalse(self.window._zoom_in_action.isEnabled())
 
         self.window._set_ui_zoom(-1)
         self.assertEqual(self.window._ui_zoom_percent, self.window.UI_ZOOM_MIN)
-        self.assertFalse(self.window._zoom_out_button.isEnabled())
+        self.assertFalse(self.window._zoom_out_action.isEnabled())
 
         self.window._set_ui_zoom(100)
         self.assertEqual(QFontInfo(self.window.font()).pixelSize(), base_size)
@@ -361,8 +532,8 @@ class UiWorkflowTests(unittest.TestCase):
 
         text = self.window._review_panel.detail_view.toPlainText()
         self.assertIn("확인용 재생 범위", text)
-        self.assertIn("클릭 시 맥락 재생 시작 00:00", text)
-        self.assertIn("관찰 프레임 원본 시각: 2.000초", text)
+        self.assertIn("재생 시작\n00:00 (확인용 범위 시작 최대 1초 전", text)
+        self.assertIn("관찰 프레임 원본 시각\n2.000초", text)
 
     def test_result_click_starts_one_second_before_review_range(self) -> None:
         segment = Segment(
@@ -553,7 +724,7 @@ class UiWorkflowTests(unittest.TestCase):
 
         self.assertEqual(
             self.window._mode_banner.text(),
-            "모델 응답 실패 — qwen3-vl:8b",
+            "모델 응답 실패 · qwen3-vl:8b",
         )
         self.assertIn("qwen3-vl:8b", self.window._result_list.item(0).text())
         self.assertIn("thinking만 반환", self.window._result_list.item(0).text())
@@ -650,7 +821,6 @@ class UiWorkflowTests(unittest.TestCase):
         )
 
         self.assertIn("반복 변화 점수", self.window._motion_list.item(0).text())
-        self.window._apply_motion_proposal()
         self.window._make_plan()
 
         plan = self.window._session.plan
@@ -661,7 +831,7 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertTrue(plan.observation_guidance)
         plan_text = self.window._plan_view.toPlainText()
         self.assertIn("각 구간 전체에 분산한 시간순 비교", plan_text)
-        self.assertIn("관찰 기준:", plan_text)
+        self.assertIn("관찰 기준", plan_text)
 
     def test_temporal_result_displays_observation_span_without_claiming_continuity(self) -> None:
         segment = Segment(
@@ -721,7 +891,6 @@ class UiWorkflowTests(unittest.TestCase):
         )
 
         self.assertEqual(len(self.window._checked_motion_proposals()), 3)
-        self.assertEqual(self.window._selected_motion_list.count(), 3)
         self.assertIn("3/3", self.window._motion_selection_label.text())
         self.assertEqual(
             self.window._motion_list.item(3).checkState(),
@@ -735,12 +904,11 @@ class UiWorkflowTests(unittest.TestCase):
             Qt.CheckState.Unchecked,
         )
 
-        self.window._selected_motion_list.setCurrentRow(1)
-        self.window._uncheck_selected_motion_proposal()
+        self.window._motion_list.item(1).setCheckState(Qt.CheckState.Unchecked)
         self.assertEqual(len(self.window._checked_motion_proposals()), 2)
         self.assertIn("2/3", self.window._motion_selection_label.text())
         self.window._motion_list.item(1).setCheckState(Qt.CheckState.Checked)
-        self.window._apply_motion_proposal()
+        # No separate apply step: making the plan uses the checked candidates.
         self.window._make_plan()
 
         plan = self.window._session.plan
@@ -780,7 +948,7 @@ class UiWorkflowTests(unittest.TestCase):
         )
 
         self.assertEqual(self.window._motion_list.count(), 0)
-        self.assertFalse(self.window._motion_apply_button.isEnabled())
+        self.assertEqual(self.window._checked_motion_proposals(), ())
 
     def finish_run(
         self,
@@ -858,8 +1026,11 @@ class UiWorkflowTests(unittest.TestCase):
                 recommended_sampling_interval_sec=0.5,
             ),
         )
-        # Set after the range change, which clears applied proposals.
-        with patch.object(self.window, "_range_changed", self.window._inputs_changed):
+        # Set after the range change, which clears applied proposals; no checks to sync.
+        with (
+            patch.object(self.window, "_range_changed", self.window._inputs_changed),
+            patch.object(self.window, "_sync_motion_selection", return_value=True),
+        ):
             self.finish_run(0.0, 10.0)
 
         self.assertTrue(self.expansion_shown())

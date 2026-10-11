@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QListView,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
@@ -32,17 +33,21 @@ from video_agent.contracts import (
     InformationCertainty,
 )
 from video_agent.ui import theme
+from video_agent.ui.card import Card
 from video_agent.ui.clue_delegate import ClueItemDelegate
+from video_agent.ui.disclosure import DisclosureButton
+from video_agent.ui.datetime_field import DateTimeField
 from video_agent.ui.flow_layout import FlowRow
+from video_agent.ui.popover import info_mark
 from video_agent.ui.wrap_label import WrapLabel
 
 
-_CERTAINTY_LABELS = {
+CERTAINTY_LABELS = {
     InformationCertainty.CONFIRMED: "확인",
     InformationCertainty.ESTIMATED: "추정",
     InformationCertainty.UNKNOWN: "미확인",
 }
-_SOURCE_LABELS = {
+SOURCE_LABELS = {
     ClueSource.USER_STATEMENT: "사용자 진술",
     ClueSource.REPORT: "신고·보고",
     ClueSource.DOCUMENT: "문서",
@@ -54,7 +59,7 @@ CERTAINTY_HELP = (
 )
 
 
-class CaseContextPanel(QGroupBox):
+class CaseContextPanel(Card):
     """Minimal case/prior-information UI that a teammate can extend independently."""
 
     changed = Signal()
@@ -71,57 +76,64 @@ class CaseContextPanel(QGroupBox):
         self._connect_signals()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        help_label = WrapLabel(
-            "사건명·유형·관리 메모는 저장용이며 모델에 보내지 않습니다. "
-            "아래 단서 중 '분석 사용'으로 체크한 항목만 계획에 포함됩니다. "
-            "사전 정보는 영상에서 확인된 사실이 아닙니다."
+        layout = QVBoxLayout(self.body)
+        layout.setContentsMargins(12, 12, 12, 12)
+        # Explanation behind a mark next to the title; loading (with "new case") is one
+        # menu beside saving, at the right of the header.
+        self.add_header_widget(
+            info_mark(
+                "사건명·유형·관리 메모는 저장용이며 모델에 보내지 않습니다. "
+                "아래 단서 중 '분석 사용'으로 체크한 항목만 계획에 포함됩니다. "
+                "사전 정보는 영상에서 확인된 사실이 아닙니다.",
+                "사건 정보 안내",
+            ),
+            after_title=True,
         )
-        layout.addWidget(help_label)
-
-        saved_row = QHBoxLayout()
-        self.saved_cases = QComboBox()
+        self._saved_cases: tuple[tuple[str, str], ...] = ()
+        self._selected_case_id: str | None = None
         self.load_button = QPushButton("불러오기")
-        self.load_button.setToolTip("선택한 저장 사건을 불러옵니다")
-        self.load_button.setAccessibleName("선택 사건 불러오기")
-        self.new_button = QPushButton("새 사건")
+        theme.set_icon(self.load_button, "folder-open")
+        self.load_button.setToolTip("저장한 사건을 불러오거나 새 사건을 시작합니다")
+        self.load_button.setAccessibleName("사건 불러오기 또는 새 사건")
         self.save_button = QPushButton("사건 저장")
-        saved_row.addWidget(self.saved_cases, 1)
-        saved_row.addWidget(self.load_button)
-        saved_row.addWidget(self.new_button)
-        saved_row.addWidget(self.save_button)
-        for button in (self.load_button, self.new_button, self.save_button):
+        theme.set_icon(self.save_button, "save")
+        for button in (self.load_button, self.save_button):
             theme.mark_compact(button)
-        self.saved_cases.setSizeAdjustPolicy(
-            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
-        )
-        self.saved_cases.setMinimumContentsLength(4)
-        self.saved_cases.setAccessibleName("저장된 사건")
-        layout.addLayout(saved_row)
+            self.add_header_widget(button)
 
         form = QFormLayout()
+        theme.polish_form(form)
         self.title_edit = QLineEdit()
         self.title_edit.setPlaceholderText("예: 문 앞 택배 이동 확인")
         self.type_edit = QLineEdit()
-        self.type_edit.setPlaceholderText("관리용 분류 · 모델에는 전송하지 않음")
+        self.type_edit.setPlaceholderText("예: 절도")
         occurrence_widget = QWidget()
         occurrence_row = QHBoxLayout(occurrence_widget)
         occurrence_row.setContentsMargins(0, 0, 0, 0)
-        self.occurrence_edit = QLineEdit()
-        self.occurrence_edit.setPlaceholderText("예: 2026-10-10 20시 전후 · 원본 경과 초와 구분")
+        # Picked from a calendar that opens when the field is clicked; how sure it is goes
+        # in the certainty choice beside it.
+        self.occurrence_edit = DateTimeField()
+        self.occurrence_edit.setPlaceholderText("날짜와 시각 선택")
+        self.occurrence_edit.setAccessibleName("발생 시각")
         self.occurrence_certainty = QComboBox()
         self._add_certainty_items(self.occurrence_certainty)
         occurrence_row.addWidget(self.occurrence_edit, 1)
         occurrence_row.addWidget(self.occurrence_certainty)
         self.notes_edit = QPlainTextEdit()
-        self.notes_edit.setPlaceholderText("담당자·관리 메모 등 · 모델에는 전송하지 않음")
+        self.notes_edit.setPlaceholderText("담당자, 처리 메모 등")
         # Two lines; fixed so the clue list, not the memo, gives way when the step is short.
         self.notes_edit.setFixedHeight(64)
+        # Type and memo are kept for management only (never sent to the model), so they
+        # are folded; they open by themselves when a loaded case has them filled in.
+        self.admin_toggle = DisclosureButton("사건 유형·관리 메모")
         form.addRow("사건명", self.title_edit)
-        form.addRow("사건 유형", self.type_edit)
         form.addRow("발생 시각", occurrence_widget)
+        form.addRow(self.admin_toggle)
+        form.addRow("사건 유형", self.type_edit)
         form.addRow("관리 메모", self.notes_edit)
+        self._form = form
         layout.addLayout(form)
+        self._update_admin_rows()
 
         # Camera details belong to the open video, so the CCTV card shows this row under
         # its list (see camera_fields); the panel still owns the values and signals.
@@ -163,20 +175,23 @@ class CaseContextPanel(QGroupBox):
         title_row = QHBoxLayout()
         clue_title = QLabel("분석 단서")
         clue_title.setObjectName("subsectionTitle")
-        clue_aside = WrapLabel("체크한 단서만 분석 계획과 모델 입력에 포함")
+        clue_aside = WrapLabel("체크한 단서만 분석에 사용")
         clue_aside.setObjectName("subsectionAside")
         title_row.addWidget(clue_title)
         title_row.addSpacing(8)
         title_row.addWidget(clue_aside, 1, Qt.AlignmentFlag.AlignBottom)
+        title_row.addWidget(
+            info_mark(
+                "데이터셋 폴더명·라벨 정답을 복사하지 말고, 사용자가 실제로 제공한 정보만 등록하세요.",
+                "분석 단서 안내",
+            ),
+            0,
+            Qt.AlignmentFlag.AlignBottom,
+        )
         self.clue_count_label = QLabel("분석 사용 0 / 전체 0")
         self.clue_count_label.setObjectName("subsectionAside")
         title_row.addWidget(self.clue_count_label, 0, Qt.AlignmentFlag.AlignBottom)
         layout.addLayout(title_row)
-        clue_help = WrapLabel(
-            "데이터셋 폴더명·라벨 정답을 복사하지 말고, 사용자가 실제로 제공한 정보만 등록하세요."
-        )
-        clue_help.setObjectName("subsectionHelp")
-        layout.addWidget(clue_help)
 
         editor = QWidget()
         editor.setObjectName("clueEditor")
@@ -192,7 +207,7 @@ class CaseContextPanel(QGroupBox):
         source_label.setObjectName("fieldLabel")
         self.clue_source = QComboBox()
         self.clue_source.setAccessibleName("출처")
-        for value, label in _SOURCE_LABELS.items():
+        for value, label in SOURCE_LABELS.items():
             self.clue_source.addItem(label, value)
         certainty_label = QLabel("확실성")
         certainty_label.setObjectName("fieldLabel")
@@ -210,6 +225,8 @@ class CaseContextPanel(QGroupBox):
         self.remove_clue_button.setAccessibleName("선택 단서 삭제")
         self.remove_clue_button.setVisible(False)
         self.add_clue_button = QPushButton("단서 추가")
+        theme.set_icon(self.add_clue_button, "plus")
+        theme.set_icon(self.remove_clue_button, "trash-2")
         # Label and choice stay together; the groups wrap at large text sizes.
         for parts in ((source_label, self.clue_source), (certainty_label, self.clue_certainty)):
             group = QWidget()
@@ -225,7 +242,7 @@ class CaseContextPanel(QGroupBox):
         text_row.addWidget(self.add_clue_button)
         editor_layout.addWidget(clue_row)
         self.clue_edit_label = WrapLabel(
-            "선택한 단서를 고치는 중 · 분석 사용 여부는 목록의 체크박스로 바꿉니다"
+            "단서 수정 중"
         )
         self.clue_edit_label.setObjectName("subsectionHelp")
         self.clue_edit_label.setVisible(False)
@@ -242,7 +259,7 @@ class CaseContextPanel(QGroupBox):
         )
         self.clue_list.setAccessibleName("분석 단서 목록")
         self.clue_list.setItemDelegate(
-            ClueItemDelegate(_SOURCE_LABELS, _CERTAINTY_LABELS, self.clue_list)
+            ClueItemDelegate(SOURCE_LABELS, CERTAINTY_LABELS, self.clue_list)
         )
         # Rows wrap to the list width, so their heights follow it.
         self.clue_list.setResizeMode(QListView.ResizeMode.Adjust)
@@ -252,7 +269,7 @@ class CaseContextPanel(QGroupBox):
 
     @staticmethod
     def _add_certainty_items(combo: QComboBox) -> None:
-        for value, label in _CERTAINTY_LABELS.items():
+        for value, label in CERTAINTY_LABELS.items():
             combo.addItem(label, value)
 
     def _connect_signals(self) -> None:
@@ -274,8 +291,40 @@ class CaseContextPanel(QGroupBox):
         self.clue_list.itemChanged.connect(self._clue_item_changed)
         self.clue_list.currentRowChanged.connect(self._select_clue)
         self.save_button.clicked.connect(self.save_requested.emit)
-        self.load_button.clicked.connect(self.load_requested.emit)
-        self.new_button.clicked.connect(self.new_requested.emit)
+        self.load_button.clicked.connect(self._show_case_menu)
+        self.admin_toggle.toggled.connect(lambda _checked: self._update_admin_rows())
+
+    def _update_admin_rows(self) -> None:
+        for widget in (self.type_edit, self.notes_edit):
+            self._form.setRowVisible(widget, self.admin_toggle.isChecked())
+
+    def _show_case_menu(self) -> None:
+        menu = QMenu(self)
+        self.fill_case_menu(menu)
+        menu.popup(self.load_button.mapToGlobal(self.load_button.rect().bottomLeft()))
+
+    def fill_case_menu(self, menu: QMenu, *, with_new: bool = True) -> None:
+        """Saved cases to load (the current one checked), then "new case" if asked."""
+        menu.clear()
+        for case_id, label in self._saved_cases:
+            current = case_id == self._selected_case_id
+            action = menu.addAction(f"{label}  (현재)" if current else label)
+            if current:
+                font = action.font()
+                font.setBold(True)
+                action.setFont(font)
+            action.triggered.connect(
+                lambda _checked=False, value=case_id: self._load_saved_case(value)
+            )
+        if not self._saved_cases:
+            menu.addAction("저장한 사건 없음").setEnabled(False)
+        if with_new:
+            menu.addSeparator()
+            menu.addAction("새 사건 시작").triggered.connect(self.new_requested.emit)
+
+    def _load_saved_case(self, case_id: str) -> None:
+        self._selected_case_id = case_id
+        self.load_requested.emit()
 
     def _emit_changed(self, *_args: object) -> None:
         if not self._loading:
@@ -396,8 +445,8 @@ class CaseContextPanel(QGroupBox):
         Analysis use is the item's check state, which screen readers announce themselves.
         """
         return (
-            f"{clue.text} — 출처: {_SOURCE_LABELS[clue.source]}, "
-            f"확실성: {_CERTAINTY_LABELS[clue.certainty]}"
+            f"{clue.text} — 출처: {SOURCE_LABELS[clue.source]}, "
+            f"확실성: {CERTAINTY_LABELS[clue.certainty]}"
         )
 
     def _update_clue_count(self) -> None:
@@ -440,6 +489,8 @@ class CaseContextPanel(QGroupBox):
                 record.occurrence_time_certainty,
             )
             self.notes_edit.setPlainText(record.management_notes)
+            if record.case_type or record.management_notes:
+                self.admin_toggle.setChecked(True)
             self.clue_list.clear()
             self._cancel_clue_edit()
             for clue in record.clues:
@@ -482,22 +533,17 @@ class CaseContextPanel(QGroupBox):
         combo.setCurrentIndex(max(0, index))
 
     def set_saved_cases(self, records: tuple[CaseRecord, ...], selected_id: str) -> None:
-        self.saved_cases.blockSignals(True)
-        self.saved_cases.clear()
-        for record in records:
-            self.saved_cases.addItem(
-                f"{record.title} · v{record.revision}",
-                record.case_id,
-            )
-        index = self.saved_cases.findData(selected_id)
-        if index >= 0:
-            self.saved_cases.setCurrentIndex(index)
-        self.saved_cases.blockSignals(False)
-        self.load_button.setEnabled(self.saved_cases.count() > 0)
+        self._saved_cases = tuple(
+            (record.case_id, f"{record.title} · v{record.revision}") for record in records
+        )
+        ids = [case_id for case_id, _label in self._saved_cases]
+        self._selected_case_id = selected_id if selected_id in ids else (ids[0] if ids else None)
+
+    def saved_case_labels(self) -> tuple[str, ...]:
+        return tuple(label for _case_id, label in self._saved_cases)
 
     def selected_case_id(self) -> str | None:
-        value = self.saved_cases.currentData()
-        return str(value) if value else None
+        return self._selected_case_id
 
     def set_video_open(self, video_open: bool) -> None:
         """Camera details belong to one video; without an open video they stay empty."""
@@ -514,9 +560,7 @@ class CaseContextPanel(QGroupBox):
     def set_editing_enabled(self, enabled: bool) -> None:
         self._editing_enabled = enabled
         for widget in (
-            self.saved_cases,
             self.load_button,
-            self.new_button,
             self.save_button,
             self.title_edit,
             self.type_edit,

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem, QPushButton
 
+from video_agent.ui import theme
 from video_agent.video.files import format_milliseconds, seconds_to_milliseconds
 
 ROW_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -41,7 +42,7 @@ class CaseCandidateOverview(QListWidget):
         self.setWordWrap(True)
         self.setAccessibleName("사건 전체 후보 목록")
         self.setToolTip("두 번 누르면 그 카메라의 결과를 열고 해당 후보를 선택합니다")
-        self.toggle_button = QPushButton("▸ 사건 전체 후보")
+        self.toggle_button = QPushButton("사건 전체 후보")
         self.toggle_button.setCheckable(True)
         self.toggle_button.setObjectName("overviewToggle")
         self.toggle_button.setAccessibleName("사건 전체 후보 목록 펼치기")
@@ -66,23 +67,27 @@ class CaseCandidateOverview(QListWidget):
         for row in rows:
             start = format_milliseconds(seconds_to_milliseconds(row.start_sec))
             end = format_milliseconds(seconds_to_milliseconds(row.end_sec))
-            mark = " ★" if row.bookmarked else ""
             item = QListWidgetItem(
-                f"[{row.judgement}]{mark} {row.camera} · 후보 #{row.segment_index + 1} · "
+                f"[{row.judgement}] {row.camera} · 후보 #{row.segment_index + 1} · "
                 f"{start}–{end}\n{row.summary}"
             )
+            if row.bookmarked:
+                item.setIcon(theme.icon("bookmark", theme.PRIMARY))
             item.setData(ROW_ROLE, row)
             self.addItem(item)
         self._update_toggle_text()
 
     def _update_toggle_text(self) -> None:
-        arrow = "▾" if self.toggle_button.isChecked() else "▸"
+        theme.set_icon(
+            self.toggle_button,
+            "chevron-down" if self.toggle_button.isChecked() else "chevron-right",
+        )
         counts = {label: 0 for label in self._judgement_order}
         for row in self._rows:
             counts[row.judgement] = counts.get(row.judgement, 0) + 1
         parts = [f"{label} {count}" for label, count in counts.items() if count]
         summary = f"사건 전체 후보 {len(self._rows)}" + (f" · {' · '.join(parts)}" if parts else "")
-        self.toggle_button.setText(f"{arrow} 전체 후보 {len(self._rows)}")
+        self.toggle_button.setText(f"전체 후보 {len(self._rows)}")
         self.toggle_button.setToolTip(summary)
         self.toggle_button.setAccessibleDescription(summary)
 

@@ -98,9 +98,44 @@ class CandidateReviewPanelTests(unittest.TestCase):
 
     def test_default_sort_is_time_and_model_order_is_available(self) -> None:
         self.assertEqual(self.visible_indexes(), [1, 2, 0])
-        self.assertTrue(self.panel.sort_buttons["time"].isChecked())
-        self.panel.sort_buttons["model"].click()
+        self.assertEqual(self.panel.sort_combo.currentData(), "time")
+        self.panel.sort_combo.setCurrentIndex(self.panel.sort_combo.findData("model"))
         self.assertEqual(self.visible_indexes(), [0, 1, 2])
+
+    def test_tags_are_folded_unless_used(self) -> None:
+        self.select(0)
+        self.assertTrue(self.panel.tags_edit.isHidden())
+        self.panel.tags_toggle.click()
+        self.assertFalse(self.panel.tags_edit.isHidden())
+        self.panel.tags_toggle.click()
+        self.panel.tags_edit.setText("손 접촉")
+        self.panel.save_current()
+        self.select(2)
+        self.select(0)
+        self.assertTrue(self.panel.tags_toggle.isChecked())
+        self.assertFalse(self.panel.tags_edit.isHidden())
+
+    def test_one_blue_button_moves_from_save_to_finish_to_summary(self) -> None:
+        panel = self.panel
+
+        def blue() -> list:
+            buttons = (panel.save_button, panel.complete_button, panel.summary_button)
+            return [button for button in buttons if button.property("variant") == "primary"]
+
+        self.assertEqual(blue(), [])
+        self.select(0)
+        panel.judgement_buttons[ReviewJudgement.RELEVANT].setChecked(True)
+        self.assertEqual(blue(), [panel.save_button])
+        panel.save_current()
+        self.assertEqual(blue(), [])  # two candidates are still unreviewed
+        for index in (1, 2):
+            self.select(index)
+            panel.judgement_buttons[ReviewJudgement.EXCLUDED].setChecked(True)
+            panel.save_current()
+        self.assertEqual(blue(), [panel.complete_button])
+        with patch.object(panel, "_confirm_completion", return_value=True):
+            panel.complete_review()
+        self.assertEqual(blue(), [panel.summary_button])
 
     def test_items_start_unreviewed_and_show_badge(self) -> None:
         text = self.panel.candidate_list.item(0).text()
@@ -148,7 +183,7 @@ class CandidateReviewPanelTests(unittest.TestCase):
 
         self.assertEqual(self.panel.memo_edit.toPlainText(), "상자 아님")
         self.assertEqual(self.panel.unsaved_indexes(), (0,))
-        self.assertIn("●저장 안 됨", self.panel.candidate_list.currentItem().text())
+        self.assertIn("(저장 안 됨)", self.panel.candidate_list.currentItem().text())
         self.assertIn("후보 #1", self.panel.unsaved_label.text())
         self.assertEqual(self.panel.saved_record_for(0), ReviewRecord())
 
@@ -157,7 +192,7 @@ class CandidateReviewPanelTests(unittest.TestCase):
         self.assertEqual(self.panel.memo_edit.toPlainText(), "")
         self.assertTrue(self.panel.judgement_buttons[ReviewJudgement.UNREVIEWED].isChecked())
         self.assertFalse(self.panel.has_unsaved_changes())
-        self.assertNotIn("●저장 안 됨", self.panel.candidate_list.currentItem().text())
+        self.assertNotIn("(저장 안 됨)", self.panel.candidate_list.currentItem().text())
 
     def test_editing_back_to_saved_value_clears_draft(self) -> None:
         self.select(0)
@@ -208,9 +243,9 @@ class CandidateReviewPanelTests(unittest.TestCase):
 
     def test_origin_label_distinguishes_sample_and_real_model(self) -> None:
         self.panel.set_job(job(ResultOrigin.SAMPLE))
-        self.assertIn("샘플 결과 — 실제 AI 분석 아님", self.panel.origin_label.text())
+        self.assertIn("샘플 결과 (실제 AI 분석 아님)", self.panel.origin_label.text())
         self.panel.set_job(job(ResultOrigin.REAL_MODEL))
-        self.assertIn("실제 모델 응답 — vision-model", self.panel.origin_label.text())
+        self.assertIn("실제 모델 결과 · vision-model", self.panel.origin_label.text())
 
     def test_new_job_resets_records(self) -> None:
         self.select(0)
@@ -285,7 +320,7 @@ class CandidateReviewPersistenceTests(unittest.TestCase):
         self.assertEqual(self.panel.unsaved_indexes(), (1,))
         self.assertEqual(self.panel.saved_record_for(1), ReviewRecord())
         self.assertEqual(self.panel.memo_edit.toPlainText(), "실패해도 남아야 함")
-        self.assertIn("●저장 안 됨", self.panel.candidate_list.currentItem().text())
+        self.assertIn("(저장 안 됨)", self.panel.candidate_list.currentItem().text())
         self.assertTrue(self.panel.save_button.isEnabled())
 
     def test_invalid_record_is_reported_as_failure(self) -> None:
@@ -673,7 +708,7 @@ class MainWindowReviewIntegrationTests(unittest.TestCase):
             panel.candidate_list.setCurrentRow(0)
             self.assertEqual(panel.memo_edit.toPlainText(), "재시작 후에도 남아야 함")
             self.assertTrue(panel.judgement_buttons[ReviewJudgement.NEEDS_CHECK].isChecked())
-            self.assertEqual(restarted._mode_banner.text(), "샘플 결과 — 실제 AI 분석 아님")
+            self.assertEqual(restarted._mode_banner.text(), "샘플 결과 (실제 AI 분석 아님)")
         finally:
             restarted.close()
 

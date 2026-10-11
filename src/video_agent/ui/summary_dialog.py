@@ -51,7 +51,7 @@ class ResultSummaryDialog(QDialog):
         case_build: Callable[[], ResultSummary] | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("결과 요약 — 검토 기록 기반 초안")
+        self.setWindowTitle("결과 요약 (초안)")
         self.setModal(True)
         self.resize(760, 820)
         self._builders = {SCOPE_CAMERA: build}

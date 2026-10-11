@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QApplication
 
 from dataclasses import replace
@@ -91,10 +92,9 @@ class CaseVideoListTests(unittest.TestCase):
 
     def select(self, video_id: str) -> None:
         video_list = self.window._video_list.list
-        for row in range(video_list.count()):
-            item = video_list.item(row)
+        for row in range(video_list.rowCount()):
             if self.window._video_list.entries[row].video_id == video_id:
-                video_list.setCurrentItem(item)
+                video_list.setCurrentCell(row, 0)
                 return
         self.fail(f"{video_id} not listed")
 
@@ -106,7 +106,7 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertEqual(names, ["cam_a.mp4", "cam_b.mp4"])
         self.assertEqual(self.window._video_id, build_video_id(self.cam_a))
         self.assertEqual(
-            self.window._video_list.count_label.text(), "등록 2 · 파일 연결 2 · 분석 결과 0"
+            self.window._video_list.count_label.text(), "영상 2건"
         )
 
     def test_selecting_another_video_opens_it(self) -> None:
@@ -165,7 +165,7 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertEqual(reopened._case_panel.camera_location_edit.text(), "")
         self.assertFalse(reopened._case_panel.camera_location_edit.isEnabled())
         self.assertEqual(
-            reopened._video_list.count_label.text(), "등록 2 · 파일 연결 0 · 분석 결과 0"
+            reopened._video_list.count_label.text(), "영상 2건 · 파일 연결 필요 2건"
         )
 
         other = self.video("other.mp4")
@@ -214,7 +214,7 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertEqual(self.status_of(self.cam_a), "분석 전")
         self.assertEqual(self.status_of(self.cam_b), "분석 완료(테스트 응답) · 후보 3")
         self.assertEqual(
-            self.window._video_list.count_label.text(), "등록 2 · 파일 연결 2 · 분석 결과 1"
+            self.window._video_list.count_label.text(), "영상 2건 · 분석 1건"
         )
 
     def test_partial_and_sample_results_are_named(self) -> None:
@@ -265,6 +265,47 @@ class CaseVideoListTests(unittest.TestCase):
     def click_tab(self, path: Path, window: MainWindow | None = None) -> None:
         window = window or self.window
         window._camera_tabs.setCurrentIndex(self.tab_ids(window).index(build_video_id(path)))
+
+    def test_work_context_shows_case_state_and_open_checks(self) -> None:
+        window = self.window
+        self.assertEqual(window._case_title_label.text(), "새 사건")
+        self.assertEqual(window._case_state_label.text(), "저장 안 됨")
+        self.assertEqual(window._video_stack.currentIndex(), 0)
+        self.assertEqual(window._video_placeholder_text.text(), "CCTV 영상을 추가하세요")
+        self.assertTrue(window._attention_label.isHidden())
+
+        self.add(self.cam_a, self.cam_b)
+        self.assertEqual(window._video_stack.currentIndex(), 1)
+        # New videos have no checked clock yet: listed at the bottom until someone checks it.
+        self.assertFalse(window._attention_label.isHidden())
+        self.assertIn("확인 필요 2건", window._attention_label.text())
+        self.assertIn("기준 시각 미확인", window._attention_label.toolTip())
+
+        window._case_panel.title_edit.setText("문 앞 택배 이동")
+        window._save_case()
+        self.assertEqual(window._case_title_label.text(), "문 앞 택배 이동")
+        self.assertEqual(window._case_state_label.text(), "저장됨 v1")
+        window._case_panel.title_edit.setText("문 앞 택배 이동 확인")
+        self.assertEqual(window._case_state_label.text(), "저장 안 된 수정 있음")
+
+    def test_file_menu_offers_the_usual_shortcuts(self) -> None:
+        window = self.window
+        self.assertEqual(window._save_case_action.shortcut(), QKeySequence(QKeySequence.StandardKey.Save))
+        self.assertEqual(window._new_case_action.shortcut(), QKeySequence(QKeySequence.StandardKey.New))
+        self.assertEqual(window._add_video_action.shortcut(), QKeySequence(QKeySequence.StandardKey.Open))
+        titles = [action.text() for action in window.menuBar().actions()]
+        self.assertEqual(titles, ["파일", "보기"])
+
+    def test_skip_buttons_move_ten_seconds_within_the_video(self) -> None:
+        window = self.window
+        window._duration_ms = 15_000
+        with patch.object(window._player, "position", return_value=8_000), patch.object(
+            window._player, "setPosition"
+        ) as seek:
+            window._skip_playback(10)
+            seek.assert_called_with(15_000)
+            window._skip_playback(-10)
+            seek.assert_called_with(0)
 
     def test_camera_tabs_appear_for_two_or_more_videos(self) -> None:
         self.add(self.cam_a)
@@ -335,7 +376,7 @@ class CaseVideoListTests(unittest.TestCase):
         relevant = [row for row in rows if row.judgement == "관련 있음"]
         self.assertEqual([(row.job_id, row.segment_index) for row in relevant], [("job-a", 1)])
         toggle = self.window._case_overview.toggle_button
-        self.assertEqual(toggle.text(), "▸ 전체 후보 6")
+        self.assertEqual(toggle.text(), "전체 후보 6")
         self.assertIn("관련 있음 1", toggle.toolTip())
 
     def test_overview_row_opens_the_other_camera_and_selects_the_candidate(self) -> None:
@@ -394,6 +435,40 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertEqual(dialog.scope, "camera")
         self.assertEqual(dialog.scope_buttons, {})
         dialog.close()
+
+    def test_later_steps_only_choose_among_registered_videos(self) -> None:
+        self.add(self.cam_a, self.cam_b)
+        card = self.window._video_list
+        self.window._show_step(1)
+
+        for hidden in (card.add_button, card.relink_button, card.remove_button,
+                       self.window._case_panel.camera_fields):
+            self.assertTrue(hidden.isHidden())
+        self.select(build_video_id(self.cam_b))
+        self.assertEqual(self.window._video_id, build_video_id(self.cam_b))
+
+        self.window._show_step(2)
+        self.assertTrue(card.add_button.isHidden())
+        self.window._show_step(0)
+        self.assertFalse(card.add_button.isHidden())
+        self.assertFalse(self.window._case_panel.camera_fields.isHidden())
+
+    def test_unlinked_video_is_not_relinked_from_later_steps(self) -> None:
+        self.add(self.cam_a, self.cam_b)
+        self.window._save_case()
+        saved = self.window._case_record
+        reopened = self.new_window()
+        reopened._case_panel.set_saved_cases((saved,), saved.case_id)
+        reopened._load_case()
+        reopened._show_step(1)
+        card = reopened._video_list
+        with patch.object(reopened, "_relink_video") as relink:
+            card._item_double_clicked(card.list.item(0, 0))
+        relink.assert_not_called()
+        reopened._show_step(0)
+        with patch.object(reopened, "_relink_video") as relink:
+            card._item_double_clicked(card.list.item(0, 0))
+        relink.assert_called_once()
 
     def test_dataset_file_name_never_reaches_the_model_prompt(self) -> None:
         labeled = self.video(LABELED_NAME)

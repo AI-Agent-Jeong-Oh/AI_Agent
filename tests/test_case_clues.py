@@ -202,5 +202,32 @@ class CaseClueTests(unittest.TestCase):
         self.assertFalse(self.panel.clue_list.isEnabled())
 
 
+    def test_admin_fields_are_folded_until_used(self) -> None:
+        panel = self.panel
+        self.assertTrue(panel.type_edit.isHidden())
+        self.assertTrue(panel.notes_edit.isHidden())
+        panel.admin_toggle.click()
+        self.assertFalse(panel.type_edit.isHidden())
+        panel.admin_toggle.click()
+        panel.set_record(
+            CaseRecord(case_id="case-a", revision=2, title="택배", management_notes="담당자 확인")
+        )
+        self.assertTrue(panel.admin_toggle.isChecked())
+        self.assertFalse(panel.notes_edit.isHidden())
+
+    def test_saved_cases_load_from_one_menu(self) -> None:
+        records = (
+            CaseRecord(case_id="case-a", revision=1, title="가"),
+            CaseRecord(case_id="case-b", revision=3, title="나"),
+        )
+        self.panel.set_saved_cases(records, "case-unsaved")
+        self.assertEqual(self.panel.selected_case_id(), "case-a")
+        self.assertEqual(self.panel.saved_case_labels(), ("가 · v1", "나 · v3"))
+        loads: list[str | None] = []
+        self.panel.load_requested.connect(lambda: loads.append(self.panel.selected_case_id()))
+        self.panel._load_saved_case("case-b")
+        self.assertEqual(loads, ["case-b"])
+
+
 if __name__ == "__main__":
     unittest.main()

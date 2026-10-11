@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QPointF, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QObject, QPointF, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -23,6 +23,7 @@ from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QAbstractSpinBox,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -40,6 +41,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -69,6 +71,7 @@ from video_agent.contracts import (
     AnalysisMode,
     CaseRecord,
     CaseVideoLink,
+    InformationCertainty,
     JobStatus,
     ReviewJudgement,
     ReviewSession,
@@ -89,7 +92,12 @@ from video_agent.storage.json_store import (
     StoredResult,
 )
 from video_agent.storage.paths import AppPaths, CacheManager
-from video_agent.ui.case_panel import CaseContextPanel
+from video_agent.ui.card import Card
+from video_agent.ui.case_panel import CERTAINTY_LABELS, SOURCE_LABELS, CaseContextPanel
+from video_agent.ui.disclosure import DisclosureButton
+from video_agent.ui.flow_steps import FlowSteps
+from video_agent.ui.motion_table import MotionHeader, MotionItemDelegate
+from video_agent.ui.popover import info_mark
 from video_agent.ui import theme
 from video_agent.ui.video_list import CaseVideoList, VideoEntry
 from video_agent.knowledge.common_rules import CommonRules, load_common_rules
@@ -196,6 +204,19 @@ class MainWindow(QMainWindow):
     APP_TITLE = "CCTV 영상수사 지원 Agent"
     ORGANIZATION = "대한민국 경찰청"
     STEP_TITLES = ("사건·영상", "분석 계획·실행", "후보 검토")
+    # One short line per detection profile; the muted note says it is not an AI judgement.
+    MOTION_HELP_GENERAL = "영상 내 움직임이 큰 구간을 후보로 제안합니다. 최대 3개까지 선택할 수 있습니다."
+    MOTION_HELP_REPEATED = (
+        "작은 영역에서 반복되는 변화가 있는 구간을 후보로 제안합니다. 최대 3개까지 선택할 수 있습니다."
+    )
+    MOTION_HELP_FINE_DETAIL = (
+        "작은 손·손가락·버튼 접촉 변화가 있는 구간을 후보로 제안합니다. 최대 3개까지 선택할 수 "
+        "있으며, 적용하면 전체 화면 보기와 중앙 60% 확대 보기로 함께 분석합니다."
+    )
+    MOTION_EMPTY_NO_VIDEO = "등록된 CCTV 영상이 없습니다."
+    MOTION_EMPTY_NOT_SCANNED = "움직임 후보 찾기를 실행하면 분석할 구간이 표시됩니다."
+    MOTION_EMPTY_SCANNING = "움직임 후보를 찾는 중입니다."
+    MOTION_EMPTY_NONE_FOUND = "현재 분석 범위에서 발견된 움직임 후보가 없습니다."
     OPENAI_PROVIDER_ID = "openai"
     OPENAI_CHAT_COMPLETIONS_ENDPOINT = "https://api.openai.com/v1/chat/completions"
     OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
@@ -239,6 +260,10 @@ class MainWindow(QMainWindow):
         self._sampling_timestamps_override: tuple[float, ...] = ()
         self._sampling_strategy_override: SamplingStrategy | None = None
         self._applied_motion_proposals: tuple[MotionProposal, ...] = ()
+        # The range typed before checked candidates replaced it; restored if all are unchecked.
+        self._range_before_motion: tuple[float, float] | None = None
+        # "idle" (not scanned), "scanning", "none_found" or "found"; display only.
+        self._motion_scan_state = "idle"
         # (metadata, intent) of the run that produced the range expansion proposal.
         self._expansion_context: tuple[object, object] | None = None
         self._motion_scan_profile = MotionScanProfile.GENERAL_PEAK
@@ -292,6 +317,14 @@ class MainWindow(QMainWindow):
         self._refresh_case_choices()
         self._set_idle_state()
         self._refresh_saved_results()
+        # Fills the list-dependent parts: candidate empty state, player placeholder,
+        # "확인 필요" line and the case name in the header.
+        self._refresh_video_list()
+        # Drop-down lists drawn by the style sheet (rows, hover and selection) everywhere.
+        for combo in self.findChildren(QComboBox):
+            theme.polish_combo(combo)
+        for spin in self.findChildren(QAbstractSpinBox):
+            theme.polish_spin_box(spin)
         self._show_step(0)
 
     def _build_ui(self) -> None:
@@ -320,7 +353,7 @@ class MainWindow(QMainWindow):
         status_layout = QHBoxLayout(status_row)
         status_layout.setContentsMargins(0, 0, 0, 0)
         status_layout.setSpacing(8)
-        self._mode_dot = QLabel("●")
+        self._mode_dot = QLabel()
         self._mode_dot.setObjectName("modeDot")
         self._mode_dot.setAccessibleName("")
         self._mode_banner = QLabel()
@@ -346,7 +379,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("영상 파일을 선택해 주세요.")
 
     def _build_header(self) -> QWidget:
-        """Organization mark and app name on the left, zoom controls on the right."""
+        """Organization mark and app name on the left, the open case on the right."""
         header = QWidget()
         header.setObjectName("appHeader")
         header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -370,20 +403,23 @@ class MainWindow(QMainWindow):
         row.addWidget(divider)
         row.addWidget(title)
         row.addStretch()
-        zoom_label = QLabel("화면 크기")
-        zoom_label.setObjectName("headerHint")
-        self._zoom_out_button = QPushButton("−")
-        self._zoom_out_button.setToolTip("화면 축소 (⌘-)")
-        self._zoom_reset_button = QPushButton("100%")
-        self._zoom_reset_button.setToolTip("기본 화면 크기 (⌘0)")
-        self._zoom_in_button = QPushButton("+")
-        self._zoom_in_button.setToolTip("화면 확대 (⌘+)")
-        for button in (self._zoom_out_button, self._zoom_reset_button, self._zoom_in_button):
-            button.setObjectName("zoomButton")
-        row.addWidget(zoom_label)
-        row.addWidget(self._zoom_out_button)
-        row.addWidget(self._zoom_reset_button)
-        row.addWidget(self._zoom_in_button)
+        # The open case and whether it is saved, like the case number area of the demo.
+        case_caption = QLabel("사건")
+        case_caption.setObjectName("headerHint")
+        self._case_title_label = QLabel()
+        self._case_title_label.setObjectName("headerCase")
+        self._case_title_label.setAccessibleName("열린 사건")
+        case_divider = QFrame()
+        case_divider.setObjectName("headerDivider")
+        case_divider.setFrameShape(QFrame.Shape.VLine)
+        case_divider.setFixedWidth(1)
+        self._case_state_label = QLabel()
+        self._case_state_label.setObjectName("headerHint")
+        self._case_state_label.setAccessibleName("사건 저장 상태")
+        row.addWidget(case_caption)
+        row.addWidget(self._case_title_label)
+        row.addWidget(case_divider)
+        row.addWidget(self._case_state_label)
         return header
 
     def _build_step_navigation(self) -> None:
@@ -394,7 +430,10 @@ class MainWindow(QMainWindow):
         row.setSpacing(8)
         self._prev_step_button = QPushButton()
         self._next_step_button = QPushButton()
-        theme.mark_primary(self._next_step_button)
+        theme.set_icon(self._prev_step_button, "arrow-left")
+        theme.set_icon(self._next_step_button, "arrow-right")
+        # The arrow follows the step name, as on the demo page.
+        self._next_step_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
         for button in (self._prev_step_button, self._next_step_button):
             # Keep each button at its text width when the other one is hidden.
             button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -407,6 +446,11 @@ class MainWindow(QMainWindow):
         self._status_label.setAccessibleName("상태 메시지")
         status_bar = self.statusBar()
         status_bar.messageChanged.connect(self._status_label.setText)
+        self._attention_label = QLabel()
+        self._attention_label.setObjectName("statusAttention")
+        self._attention_label.setAccessibleName("확인 필요")
+        self._attention_label.setVisible(False)
+        status_bar.addPermanentWidget(self._attention_label)
         status_bar.addPermanentWidget(self._status_label, 1)
         status_bar.addPermanentWidget(navigation)
         navigation.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
@@ -444,21 +488,57 @@ class MainWindow(QMainWindow):
         self._video_list = CaseVideoList()
         self._choose_button = self._video_list.add_button
         self._metadata_label = self._video_list.metadata_label
-        layout.addWidget(self._video_list)
+        # Step ② sets up the analysis beside the video list, above the player; the
+        # settings card is added in _build_analysis_panel and shown only on that step.
+        self._top_row = QHBoxLayout()
+        self._top_row.addWidget(self._video_list, 5)
+        layout.addLayout(self._top_row)
 
         self._video_widget = QVideoWidget()
-        self._video_widget.setMinimumHeight(288)
         self._video_widget.setStyleSheet(f"background: {theme.VIDEO_BACKGROUND};")
         self._player.setVideoOutput(self._video_widget)
-        layout.addWidget(self._video_widget, 1)
+        # Until a video is open the player area says what to do instead of staying blank.
+        placeholder = QWidget()
+        placeholder.setObjectName("videoPlaceholder")
+        placeholder.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        placeholder_layout = QVBoxLayout(placeholder)
+        placeholder_layout.addStretch(1)
+        placeholder_icon = QLabel()
+        placeholder_icon.setPixmap(theme.icon("video-off", theme.GRAY_40).pixmap(40, 40))
+        placeholder_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._video_placeholder_text = QLabel()
+        self._video_placeholder_text.setObjectName("videoPlaceholderText")
+        self._video_placeholder_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._video_placeholder_text.setWordWrap(True)
+        placeholder_layout.addWidget(placeholder_icon)
+        placeholder_layout.addWidget(self._video_placeholder_text)
+        placeholder_layout.addStretch(1)
+        self._video_stack = QStackedWidget()
+        self._video_stack.setMinimumHeight(200)
+        self._video_stack.addWidget(placeholder)
+        self._video_stack.addWidget(self._video_widget)
+        layout.addWidget(self._video_stack, 1)
 
         controls = QHBoxLayout()
+        self._back_button = QPushButton()
+        self._back_button.setToolTip("10초 뒤로")
+        self._back_button.setAccessibleName("10초 뒤로")
+        theme.set_icon(self._back_button, "rewind")
         self._play_button = QPushButton("재생")
-        self._play_button.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        theme.set_icon(self._play_button, "play")
+        self._forward_button = QPushButton()
+        self._forward_button.setToolTip("10초 앞으로")
+        self._forward_button.setAccessibleName("10초 앞으로")
+        theme.set_icon(self._forward_button, "fast-forward")
+        for button in (self._back_button, self._play_button, self._forward_button):
+            theme.mark_compact(button)
         self._timeline = QSlider(Qt.Orientation.Horizontal)
         self._timeline.setRange(0, 0)
+        self._timeline.setAccessibleName("재생 위치")
         self._time_label = QLabel("00:00 / 00:00")
+        controls.addWidget(self._back_button)
         controls.addWidget(self._play_button)
+        controls.addWidget(self._forward_button)
         controls.addWidget(self._timeline, 1)
         controls.addWidget(self._time_label)
         layout.addLayout(controls)
@@ -478,26 +558,31 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        purpose_group = QGroupBox("분석 목적과 범위")
-        purpose_layout = QFormLayout(purpose_group)
+        purpose_group = Card("분석 설정")
+        purpose_layout = QFormLayout(purpose_group.body)
+        purpose_layout.setContentsMargins(12, 12, 12, 12)
         self._mode_combo = QComboBox()
         self._mode_combo.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self._mode_combo.setMinimumContentsLength(8)
-        self._mode_combo.addItem("샘플 — 실제 AI 분석 아님", AnalysisMode.SAMPLE)
-        self._mode_combo.addItem("로컬 VLM — 명시적 연결", AnalysisMode.LOCAL)
-        self._mode_combo.addItem("외부 API VLM — 별도 전송 승인", AnalysisMode.EXTERNAL)
+        self._mode_combo.addItem("샘플 (실제 분석 아님)", AnalysisMode.SAMPLE)
+        self._mode_combo.addItem("로컬 AI (이 컴퓨터)", AnalysisMode.LOCAL)
+        self._mode_combo.addItem("외부 AI (OpenAI)", AnalysisMode.EXTERNAL)
         self._model_edit = QLineEdit()
-        self._model_edit.setPlaceholderText("실제 모드에서 영상 입력 지원이 확인된 모델 ID")
+        self._model_edit.setPlaceholderText("예: qwen3-vl:8b-instruct")
         self._external_api_key_edit = QLineEdit()
         self._external_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self._external_api_key_edit.setClearButtonEnabled(True)
-        self._external_api_key_edit.setPlaceholderText("OpenAI API 키 · 현재 실행 중에만 사용")
+        self._external_api_key_edit.setPlaceholderText("API 키 (저장하지 않음)")
         self._external_api_key_edit.setToolTip(
             "키는 설정·결과·로그에 저장하지 않습니다. OPENAI_API_KEY 환경 변수도 사용할 수 있습니다."
         )
+        # Two lines so the narrower settings card beside the video list keeps its width.
         self._external_vision_confirm = QCheckBox(
+            "입력한 외부 모델이 이미지 입력을\n지원함을 확인했습니다"
+        )
+        self._external_vision_confirm.setAccessibleName(
             "입력한 외부 모델이 이미지 입력을 지원함을 확인했습니다"
         )
         self._external_vision_confirm.setToolTip(
@@ -505,7 +590,7 @@ class MainWindow(QMainWindow):
         )
         self._purpose_edit = QPlainTextEdit()
         self._purpose_edit.setPlaceholderText(
-            "예: 출입문 앞에 사람이 오래 머무르는 것으로 보이는 장면 후보를 찾고 싶습니다."
+            "예: 출입문 앞에 30초 이상 머무는 사람"
         )
         range_row = QWidget()
         range_layout = QHBoxLayout(range_row)
@@ -517,84 +602,112 @@ class MainWindow(QMainWindow):
             spin.setRange(0, 0)
             spin.setSuffix(" 초")
         self._range_end.setSpecialValueText("영상 끝")
-        range_layout.addWidget(QLabel("시작"))
-        range_layout.addWidget(self._range_start)
-        range_layout.addWidget(QLabel("종료"))
-        range_layout.addWidget(self._range_end)
+        for label, spin in (("시작", self._range_start), ("종료", self._range_end)):
+            name = QLabel(label)
+            name.setObjectName("fieldLabel")
+            range_layout.addWidget(name)
+            range_layout.addWidget(spin, 1)
+        self._purpose_edit.setAccessibleName("분석 목적")
+        self._range_start.setAccessibleName("분석 구간 시작")
+        self._range_end.setAccessibleName("분석 구간 종료")
+        # Mode and model rarely change, so they sit folded under the purpose and range;
+        # the status line above always names the current mode.
+        self._advanced_toggle = DisclosureButton("분석 방식과 모델")
+        purpose_layout.addRow("분석 목적", self._purpose_edit)
+        purpose_layout.addRow("분석 구간", range_row)
+        purpose_layout.addRow(self._advanced_toggle)
         purpose_layout.addRow("모드", self._mode_combo)
         purpose_layout.addRow("모델", self._model_edit)
         purpose_layout.addRow("OpenAI 키", self._external_api_key_edit)
         purpose_layout.addRow("영상 입력", self._external_vision_confirm)
-        purpose_layout.addRow("목적", self._purpose_edit)
-        purpose_layout.addRow("원본 범위", range_row)
         self._purpose_form_layout = purpose_layout
         # Labels move above their fields only when a row would not fit (large text).
         self._purpose_form_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        layout.addWidget(purpose_group)
+        # Left-aligned labels and full-width fields on every platform (macOS centres forms).
+        theme.polish_form(purpose_layout)
+        # Beside the video list, a little wider since it holds more inputs.
+        purpose_group.setVisible(False)
+        self._top_row.addWidget(purpose_group, 6)
 
-        self._plan_group = QGroupBox("추가 질문과 분석 계획")
-        plan_layout = QVBoxLayout(self._plan_group)
-        self._motion_help = WrapLabel(
-            "로컬 픽셀 변화가 큰 짧은 구간을 먼저 제안합니다. 상위 3개가 기본 선택되며 "
-            "각 항목의 체크박스로 최대 3개를 조정할 수 있습니다. 행동 판정이나 AI 결과가 아닙니다."
-        )
+        self._plan_group = Card("분석 계획")
+        plan_layout = QVBoxLayout(self._plan_group.body)
+        plan_layout.setContentsMargins(12, 12, 12, 12)
+        self._motion_help = WrapLabel(self.MOTION_HELP_GENERAL)
+        self._motion_note = WrapLabel("움직임 후보는 AI의 행동 판정 결과가 아닙니다.")
+        self._motion_note.setObjectName("subsectionHelp")
+        # Shown instead of the empty candidate lists (see _refresh_motion_empty_state).
+        self._motion_empty_label = WrapLabel("")
+        self._motion_empty_label.setObjectName("emptyState")
         # Button rows wrap instead of widening the step at large text sizes.
         motion_buttons = FlowRow(spacing=8)
-        self._motion_scan_button = QPushButton("현재 범위 움직임 후보 찾기")
-        self._motion_apply_button = QPushButton("선택 후보(최대 3개)를 분석 계획에 적용")
+        self._motion_scan_button = QPushButton("움직임 후보 찾기")
         motion_buttons.flow.addWidget(self._motion_scan_button)
-        motion_buttons.flow.addWidget(self._motion_apply_button)
         self._motion_list = QListWidget()
         self._motion_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        # Rows drawn in columns under a header, like a table (see motion_table).
+        self._motion_list.setItemDelegate(MotionItemDelegate(self._motion_list))
+        self._motion_header = MotionHeader(self._motion_list)
         self._motion_list.setToolTip(
-            "변화 점수는 저해상도 프레임 차이이며 행동 확률이 아닙니다. "
-            "각 항목의 체크박스로 최대 3개를 선택할 수 있습니다."
+            "변화 크기는 이번 탐색 안에서 비교한 값이며 행동 판정이 아닙니다. "
+            "체크박스로 최대 3개까지 고를 수 있습니다."
         )
-        self._motion_selection_label = WrapLabel("선택한 분석 구간: 0/3")
-        self._selected_motion_list = QListWidget()
-        self._selected_motion_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        selected_motion_buttons = FlowRow(spacing=8)
-        self._selected_motion_uncheck_button = QPushButton("선택 목록의 항목 해제")
-        self._selected_motion_clear_button = QPushButton("전체 선택 해제")
-        selected_motion_buttons.flow.addWidget(self._selected_motion_uncheck_button)
-        selected_motion_buttons.flow.addWidget(self._selected_motion_clear_button)
-        for button in (
-            self._motion_scan_button,
-            self._motion_apply_button,
-            self._selected_motion_uncheck_button,
-            self._selected_motion_clear_button,
-        ):
-            theme.mark_compact(button)
-        self._question_label = WrapLabel("추가 질문 없음")
+        self._motion_selection_label = WrapLabel("선택 0/3")
+        self._motion_selection_label.setObjectName("subsectionHelp")
+        theme.mark_compact(self._motion_scan_button)
+        # Shown only while the planner has a question to answer.
+        self._question_label = WrapLabel("")
         self._clarification_edit = QLineEdit()
-        self._clarification_edit.setPlaceholderText("질문이 표시된 경우 답변")
-        self._plan_view = QPlainTextEdit()
+        self._clarification_edit.setPlaceholderText("답변 입력 후 '분석 계획 만들기'")
+        self._question_label.setVisible(False)
+        self._clarification_edit.setVisible(False)
+        self._plan_view = QTextEdit()
         self._plan_view.setReadOnly(True)
-        self._plan_view.setPlaceholderText("영상 메타데이터와 목적을 확인한 뒤 계획을 만드세요.")
-        self._make_plan_button = QPushButton("추가 질문 확인 / 계획 만들기")
+        self._plan_view.setPlaceholderText("계획을 만들면 여기에 표시됩니다.")
+        self._make_plan_button = QPushButton("분석 계획 만들기")
+        self._make_plan_button.setToolTip(
+            "체크한 움직임 후보와 입력한 목적·구간으로 계획을 만듭니다. 추가 질문이 있으면 먼저 표시합니다."
+        )
         plan_layout.addWidget(self._motion_help)
+        plan_layout.addWidget(self._motion_note)
         plan_layout.addWidget(motion_buttons)
-        plan_layout.addWidget(self._motion_list)
+        plan_layout.addWidget(self._motion_empty_label)
+        motion_table = QWidget()
+        motion_table_layout = QVBoxLayout(motion_table)
+        motion_table_layout.setContentsMargins(0, 0, 0, 0)
+        motion_table_layout.setSpacing(0)
+        motion_table_layout.addWidget(self._motion_header)
+        motion_table_layout.addWidget(self._motion_list, 1)
+        plan_layout.addWidget(motion_table, 1)
         plan_layout.addWidget(self._motion_selection_label)
-        plan_layout.addWidget(self._selected_motion_list)
-        plan_layout.addWidget(selected_motion_buttons)
         plan_layout.addWidget(self._question_label)
         plan_layout.addWidget(self._clarification_edit)
         plan_layout.addWidget(self._plan_view)
-        plan_layout.addWidget(self._make_plan_button)
-        layout.addWidget(self._plan_group)
+        plan_layout.addStretch(0)
+        layout.addWidget(self._plan_group, 1)
 
-        # One pinned bar for approval, run and progress so the plan above keeps the space.
+        # One pinned bar for planning, approval, run and progress so the plan keeps the space.
         run_bar = QFrame()
         run_bar.setObjectName("runBar")
         run_bar.setAccessibleName("승인과 실행")
         run_layout = QVBoxLayout(run_bar)
         self._approve_button = QPushButton("분석 계획 승인")
-        self._transfer_button = QPushButton("표시된 외부 전송 내용·범위 별도 승인")
-        self._run_button = QPushButton("승인된 계획 실행")
+        self._transfer_button = QPushButton("외부 전송 승인")
+        self._run_button = QPushButton("분석 실행")
         theme.mark_primary(self._approve_button)
         theme.mark_primary(self._run_button)
+        # KRDS xsmall (32px) buttons and 8-point margins keep the pinned bar short.
+        for button in (
+            self._make_plan_button,
+            self._approve_button,
+            self._run_button,
+            self._transfer_button,
+        ):
+            theme.mark_compact(button)
+        run_layout.setContentsMargins(12, 8, 12, 8)
+        run_layout.setSpacing(6)
+        # One always-visible place for the main action: plan, then approve, then run.
         approve_row = QHBoxLayout()
+        approve_row.addWidget(self._make_plan_button, 1)
         approve_row.addWidget(self._approve_button, 1)
         approve_row.addWidget(self._run_button, 1)
         run_layout.addLayout(approve_row)
@@ -603,14 +716,13 @@ class MainWindow(QMainWindow):
         self._progress_bar = QProgressBar()
         self._progress_label = WrapLabel("대기 중")
         self._progress_label.setAccessibleName("실행 상태")
-        self._cancel_button = QPushButton("작업 취소")
+        self._cancel_button = QPushButton("취소")
         theme.set_variant(self._cancel_button, "chip")
         run_layout.addWidget(self._progress_bar)
         status_row = QHBoxLayout()
         status_row.addWidget(self._progress_label, 1)
         status_row.addWidget(self._cancel_button, 0, Qt.AlignmentFlag.AlignTop)
         run_layout.addLayout(status_row)
-        layout.addStretch(1)
 
         # Approval and run stay visible below the scrolling plan content.
         self._plan_scroll = QScrollArea()
@@ -620,23 +732,22 @@ class MainWindow(QMainWindow):
         plan_step = QWidget()
         plan_step_layout = QVBoxLayout(plan_step)
         plan_step_layout.setContentsMargins(0, 0, 0, 0)
+        # Where the user is in step ②: done steps get a check, the next one an arrow.
+        self._flow_steps = FlowSteps(("후보 찾기(선택)", "계획 만들기", "승인", "실행"))
+        plan_step_layout.addWidget(self._flow_steps)
         plan_step_layout.addWidget(self._plan_scroll, 1)
         plan_step_layout.addWidget(run_bar)
 
-        result_group = QGroupBox("중요 구간 후보")
-        result_layout = QVBoxLayout(result_group)
+        result_group = Card("중요 구간 후보")
+        result_layout = QVBoxLayout(result_group.body)
+        result_layout.setContentsMargins(12, 12, 12, 12)
         help_text = (
             "후보를 선택하면 맥락 확인을 위해 원본 영상이 확인용 범위 시작의 최대 1초 전으로 이동하고, "
             "표시된 근거 범위를 지나 계속 재생합니다. "
             "입력한 분석 구간 수와 결과 후보 수는 같지 않을 수 있으며, 결과는 0개·1개·여러 개이거나 중복 정리로 합쳐질 수 있습니다."
         )
         # Kept as a tooltip (like the demo's info marks) so the review step fits one screen.
-        help_label = QLabel("ⓘ 재생 안내")
-        help_label.setObjectName("infoMark")
-        help_label.setCursor(Qt.CursorShape.WhatsThisCursor)
-        help_label.setToolTip(help_text)
-        help_label.setAccessibleName("후보 재생과 결과 수 안내")
-        help_label.setAccessibleDescription(help_text)
+        help_label = info_mark(help_text, "후보 재생과 결과 수 안내", "재생 안내")
         saved_row = QHBoxLayout()
         self._saved_results_combo = QComboBox()
         self._saved_results_combo.setAccessibleName("이 영상의 저장된 분석 결과")
@@ -671,8 +782,7 @@ class MainWindow(QMainWindow):
         self._review_panel.playback_row.flow.addWidget(help_label)
         self._result_list = self._review_panel.candidate_list
         self._review_empty_label = QLabel(
-            "아직 표시할 결과가 없습니다. 분석 계획·실행 단계에서 분석을 실행하거나, "
-            "위의 저장된 결과를 열어 주세요."
+            "표시할 결과가 없습니다. ② 분석 계획·실행에서 분석하거나 저장된 결과를 여세요."
         )
         self._review_empty_label.setWordWrap(True)
         self._review_empty_label.setObjectName("placeholder")
@@ -741,6 +851,8 @@ class MainWindow(QMainWindow):
         self._expansion_apply_button.clicked.connect(self._apply_range_expansion)
         self._expansion_close_button.clicked.connect(self._hide_range_expansion)
         self._play_button.clicked.connect(self._toggle_playback)
+        self._back_button.clicked.connect(lambda: self._skip_playback(-10))
+        self._forward_button.clicked.connect(lambda: self._skip_playback(10))
         self._timeline.sliderPressed.connect(self._slider_pressed)
         self._timeline.sliderReleased.connect(self._slider_released)
         self._purpose_edit.textChanged.connect(self._purpose_changed)
@@ -753,22 +865,24 @@ class MainWindow(QMainWindow):
         self._range_start.valueChanged.connect(self._range_changed)
         self._range_end.valueChanged.connect(self._range_changed)
         self._motion_scan_button.clicked.connect(self._start_motion_scan)
-        self._motion_apply_button.clicked.connect(self._apply_motion_proposal)
         self._motion_list.itemClicked.connect(self._preview_motion_proposal)
         self._motion_list.itemChanged.connect(self._motion_check_changed)
-        self._selected_motion_list.itemClicked.connect(self._preview_motion_proposal)
-        self._selected_motion_list.currentItemChanged.connect(
-            lambda *_args: self._update_motion_selection_buttons()
-        )
-        self._selected_motion_uncheck_button.clicked.connect(
-            self._uncheck_selected_motion_proposal
-        )
-        self._selected_motion_clear_button.clicked.connect(self._clear_motion_checks)
+        self._advanced_toggle.toggled.connect(lambda _checked: self._update_external_controls())
         self._make_plan_button.clicked.connect(self._make_plan)
         self._approve_button.clicked.connect(self._approve_plan)
         self._transfer_button.clicked.connect(self._approve_transfer)
         self._run_button.clicked.connect(self._start_analysis)
         self._cancel_button.clicked.connect(self._cancel_analysis)
+        # Every enable/disable of a step ② action re-picks the one blue "next" button.
+        self._next_action_buttons = (
+            self._motion_scan_button,
+            self._make_plan_button,
+            self._approve_button,
+            self._transfer_button,
+            self._run_button,
+        )
+        for button in self._next_action_buttons:
+            button.installEventFilter(self)
         self._result_list.itemActivated.connect(self._seek_to_segment)
         self._result_list.itemClicked.connect(self._seek_to_segment)
         self._review_panel.playback_range_requested.connect(self._play_review_range)
@@ -785,13 +899,6 @@ class MainWindow(QMainWindow):
         if application is not None:
             application.applicationStateChanged.connect(self._on_application_state_changed)
             self._on_application_state_changed(application.applicationState())
-        self._zoom_out_button.clicked.connect(
-            lambda: self._change_ui_zoom(-self.UI_ZOOM_STEP)
-        )
-        self._zoom_reset_button.clicked.connect(lambda: self._set_ui_zoom(100))
-        self._zoom_in_button.clicked.connect(
-            lambda: self._change_ui_zoom(self.UI_ZOOM_STEP)
-        )
         self._player.durationChanged.connect(self._on_duration_changed)
         self._player.positionChanged.connect(self._on_position_changed)
         self._player.playbackStateChanged.connect(self._on_playback_state_changed)
@@ -812,10 +919,35 @@ class MainWindow(QMainWindow):
         )
         self.addAction(self._zoom_out_action)
 
-        self._zoom_reset_action = QAction("화면 크기 초기화", self)
+        self._zoom_reset_action = QAction("기본 크기", self)
         self._zoom_reset_action.setShortcut(QKeySequence("Ctrl+0"))
         self._zoom_reset_action.triggered.connect(lambda: self._set_ui_zoom(100))
         self.addAction(self._zoom_reset_action)
+        self._build_menu_bar()
+
+    def _build_menu_bar(self) -> None:
+        """File and view menus with the usual shortcuts (the macOS menu bar on a Mac)."""
+        file_menu = self.menuBar().addMenu("파일")
+        self._new_case_action = file_menu.addAction("새 사건")
+        self._new_case_action.setShortcut(QKeySequence.StandardKey.New)
+        self._new_case_action.triggered.connect(self._new_case)
+        self._open_case_menu = file_menu.addMenu("사건 불러오기")
+        self._open_case_menu.aboutToShow.connect(
+            lambda: self._case_panel.fill_case_menu(self._open_case_menu, with_new=False)
+        )
+        self._save_case_action = file_menu.addAction("사건 저장")
+        self._save_case_action.setShortcut(QKeySequence.StandardKey.Save)
+        self._save_case_action.triggered.connect(self._save_case)
+        file_menu.addSeparator()
+        self._add_video_action = file_menu.addAction("영상 추가…")
+        self._add_video_action.setShortcut(QKeySequence.StandardKey.Open)
+        self._add_video_action.triggered.connect(self._choose_video)
+        file_menu.addSeparator()
+        summary_action = file_menu.addAction("결과 요약…")
+        summary_action.triggered.connect(self._review_panel.summary_button.click)
+        view_menu = self.menuBar().addMenu("보기")
+        for action in (self._zoom_in_action, self._zoom_out_action, self._zoom_reset_action):
+            view_menu.addAction(action)
 
     def _change_ui_zoom(self, delta: int) -> None:
         self._set_ui_zoom(self._ui_zoom_percent + delta)
@@ -855,12 +987,10 @@ class MainWindow(QMainWindow):
             )
         for step_layout in self._step_layouts:
             step_layout.setSpacing(scaled(16))
-        self._purpose_edit.setMinimumHeight(scaled(60))
-        self._purpose_edit.setMaximumHeight(scaled(96))
+        # Two lines above the video; longer purposes scroll inside the box.
+        self._purpose_edit.setFixedHeight(scaled(64))
         self._motion_list.setMinimumHeight(scaled(128))
-        self._motion_list.setMaximumHeight(scaled(170))
-        self._selected_motion_list.setMinimumHeight(scaled(64))
-        self._selected_motion_list.setMaximumHeight(scaled(110))
+        self._motion_list.setMaximumHeight(scaled(320))
         self._plan_view.setMinimumHeight(scaled(145))
         self._plan_view.setMaximumHeight(scaled(220))
         self._case_panel.clue_list.setMinimumHeight(scaled(100))
@@ -868,15 +998,14 @@ class MainWindow(QMainWindow):
         # Lines up with the 40px choices beside it in the wrapping row.
         self._case_panel.clue_use.setMinimumHeight(scaled(40))
         self._plan_group.setMinimumHeight(scaled(480))
-        purpose_height = 265 if self._current_mode() is AnalysisMode.EXTERNAL else 185
-        self._purpose_group.setMinimumHeight(scaled(purpose_height))
+        self._top_row.setSpacing(scaled(12))
         self._review_panel.apply_scale(scaled)
         self._video_list.apply_scale(scaled)
         self._case_overview.apply_scale(scaled)
 
-        self._zoom_reset_button.setText(f"{self._ui_zoom_percent}%")
-        self._zoom_out_button.setEnabled(self._ui_zoom_percent > self.UI_ZOOM_MIN)
-        self._zoom_in_button.setEnabled(self._ui_zoom_percent < self.UI_ZOOM_MAX)
+        self._zoom_reset_action.setText(f"기본 크기 (현재 {self._ui_zoom_percent}%)")
+        self._zoom_out_action.setEnabled(self._ui_zoom_percent > self.UI_ZOOM_MIN)
+        self._zoom_in_action.setEnabled(self._ui_zoom_percent < self.UI_ZOOM_MAX)
         self.setStyleSheet(theme.build_stylesheet(scaled))
 
     def _restore_settings(self) -> None:
@@ -891,6 +1020,8 @@ class MainWindow(QMainWindow):
         self._model_edit.setEnabled(self._settings.mode is not AnalysisMode.SAMPLE)
         self._model_edit.blockSignals(False)
         self._mode_combo.blockSignals(False)
+        if self._model_needs_attention():
+            self._advanced_toggle.setChecked(True)
         self._update_external_controls()
         self._update_mode_banner()
         if self._settings_error:
@@ -946,6 +1077,7 @@ class MainWindow(QMainWindow):
         self._case_saved = True
         self._refresh_case_choices()
         self._inputs_changed()
+        self._refresh_case_header()
         self.statusBar().showMessage(
             f"사건 정보 v{candidate.revision} 저장 완료: {path.name}",
             6000,
@@ -1014,11 +1146,8 @@ class MainWindow(QMainWindow):
         self._case_panel.set_saved_cases(records, self._case_record.case_id)
 
     def _set_idle_state(self) -> None:
-        self._play_button.setEnabled(False)
+        self._set_player_controls_enabled(False)
         self._motion_scan_button.setEnabled(False)
-        self._motion_apply_button.setEnabled(False)
-        self._selected_motion_uncheck_button.setEnabled(False)
-        self._selected_motion_clear_button.setEnabled(False)
         self._make_plan_button.setEnabled(False)
         self._approve_button.setEnabled(False)
         self._transfer_button.setEnabled(False)
@@ -1210,6 +1339,10 @@ class MainWindow(QMainWindow):
         self._video_list.set_entries(tuple(entries), self._video_id)
         self._refresh_camera_tabs()
         self._refresh_case_overview()
+        self._refresh_motion_empty_state()
+        self._refresh_video_placeholder()
+        self._refresh_attention()
+        self._refresh_case_header()
 
     def _review_target(self) -> str | None:
         return self._review_video_id or self._video_id
@@ -1350,10 +1483,10 @@ class MainWindow(QMainWindow):
         self._case_panel.set_video_open(True)
         self._metadata = None
         self._duration_ms = 0
-        self._metadata_label.setText("FFprobe 메타데이터 확인 중…")
+        self._metadata_label.setText("영상 정보 확인 중…")
         self._timeline.setRange(0, 0)
         self._time_label.setText("00:00 / 길이 확인 중")
-        self._play_button.setEnabled(False)
+        self._set_player_controls_enabled(False)
         self._review_panel.clear()
         self._hide_range_expansion()
         self._refresh_review_empty_state()
@@ -1403,18 +1536,23 @@ class MainWindow(QMainWindow):
             vfr = "VFR 여부 미확정"
         else:
             vfr = "VFR 징후 미감지(고정 FPS 단정 안 함)"
+        # Size and length for the reader; the technical probe details stay in the tooltip.
         self._metadata_label.setText(
-            f"{metadata.display_width}×{metadata.display_height} · {metadata.duration_seconds:.3f}초 · "
-            f"평균 FPS {average_rate} · 회전 {metadata.rotation_degrees}° · {vfr}"
+            f"{metadata.display_width}×{metadata.display_height} · "
+            f"{format_milliseconds(seconds_to_milliseconds(metadata.duration_seconds))}"
+        )
+        self._metadata_label.setToolTip(
+            f"길이 {metadata.duration_seconds:.3f}초 · 평균 FPS {average_rate} · "
+            f"회전 {metadata.rotation_degrees}° · {vfr}"
         )
         self._motion_scan_button.setEnabled(True)
         self._make_plan_button.setEnabled(True)
         self._inputs_changed()
-        self.statusBar().showMessage("영상 메타데이터 확인 완료", 5000)
+        self.statusBar().showMessage("영상 정보 확인 완료", 5000)
 
     def _on_metadata_error(self, message: str) -> None:
         self._metadata = None
-        self._metadata_label.setText("메타데이터 확인 실패")
+        self._metadata_label.setText("영상 정보를 읽지 못함")
         self._motion_scan_button.setEnabled(False)
         self._make_plan_button.setEnabled(False)
         self._show_error(message)
@@ -1425,7 +1563,7 @@ class MainWindow(QMainWindow):
 
     def _start_motion_scan(self) -> None:
         if self._video_path is None or self._metadata is None:
-            self._show_error("먼저 영상 메타데이터 확인을 완료해 주세요.")
+            self._show_error("영상 정보 확인이 끝난 뒤 다시 시도해 주세요.")
             return
         if self._background_work_running():
             self._show_error("이미 백그라운드 작업이 실행 중입니다.")
@@ -1465,24 +1603,16 @@ class MainWindow(QMainWindow):
         self._progress_bar.setRange(0, 0)
         self._analysis_started_at = time.monotonic()
         if fine_detail.required:
-            self._motion_help.setText(
-                "작은 손·손가락·버튼 접촉 목적이므로 변화 정점 중심의 짧은 구간을 제안합니다. "
-                "적용 후 각 원본 시각을 전체 화면 보기와 중앙 60% 확대 보기로 함께 분석합니다. "
-                "움직임 점수는 접촉 확률이나 행동 판정이 아닙니다."
-            )
-            self._last_progress_message = "작은 접촉 변화 탐색 중 · 진행률 알 수 없음"
+            self._motion_help.setText(self.MOTION_HELP_FINE_DETAIL)
+            self._last_progress_message = "작은 접촉 변화 찾는 중"
         elif profile is MotionScanProfile.REPEATED_SUBTLE:
-            self._motion_help.setText(
-                "입력 목적이 미세·반복 시간 변화로 분류되어 작은 영역의 변화를 시간 동안 비교합니다. "
-                "가장 큰 움직임은 감점해 덜 두드러진 반복 변화도 제안합니다. 행동 판정이나 AI 결과가 아닙니다."
-            )
-            self._last_progress_message = "국소 반복 변화 탐색 중 · 진행률 알 수 없음"
+            self._motion_help.setText(self.MOTION_HELP_REPEATED)
+            self._last_progress_message = "반복 변화 찾는 중"
         else:
-            self._motion_help.setText(
-                "큰 픽셀 변화가 있는 짧은 구간을 먼저 제안합니다. 상위 3개가 기본 선택되며 "
-                "각 항목의 체크박스로 최대 3개를 조정할 수 있습니다. 행동 판정이나 AI 결과가 아닙니다."
-            )
-            self._last_progress_message = "로컬 움직임 변화 탐색 중 · 진행률 알 수 없음"
+            self._motion_help.setText(self.MOTION_HELP_GENERAL)
+            self._last_progress_message = "움직임 후보 찾는 중"
+        self._motion_scan_state = "scanning"
+        self._refresh_motion_empty_state()
         self._refresh_elapsed_status()
         self._elapsed_timer.start()
         self._set_analysis_running(True)
@@ -1521,14 +1651,14 @@ class MainWindow(QMainWindow):
                 else "큰 움직임 후보"
             )
             message = (
-                f"{profile_text} {len(result.proposals)}개 · {result.sampled_frame_count}개 저해상도 표본 · "
-                f"상위 {min(3, len(result.proposals))}개 체크됨 · 점수는 확률이나 행동 판정이 아님"
+                f"{profile_text} {len(result.proposals)}개, 상위 {min(3, len(result.proposals))}개 선택"
             )
         else:
-            self._motion_list.addItem("현재 범위에서 비교 가능한 움직임 후보를 만들지 못했습니다.")
-            message = "움직임 후보 없음 · 행동 부재를 의미하지 않음"
+            message = "움직임 후보 없음"
         self._motion_list.blockSignals(False)
+        self._motion_scan_state = "found" if result.proposals else "none_found"
         self._refresh_motion_selection_display()
+        self._refresh_motion_empty_state()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(100)
         self._progress_label.setText(message)
@@ -1537,6 +1667,8 @@ class MainWindow(QMainWindow):
         if self._active_motion_scan_id is None:
             return
         self._active_motion_scan_id = None
+        self._motion_scan_state = "idle"
+        self._refresh_motion_empty_state()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
         self._progress_label.setText("움직임 탐색 오류")
@@ -1544,6 +1676,8 @@ class MainWindow(QMainWindow):
 
     def _on_motion_scan_canceled(self) -> None:
         self._active_motion_scan_id = None
+        self._motion_scan_state = "idle"
+        self._refresh_motion_empty_state()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
         self._progress_label.setText("움직임 탐색 취소됨")
@@ -1584,6 +1718,9 @@ class MainWindow(QMainWindow):
                 5000,
             )
         self._refresh_motion_selection_display()
+        # A plan made from other candidates no longer matches the checks: make it again.
+        if self._session.plan is not None and self._session.state is not WorkflowState.RUNNING:
+            self._inputs_changed()
 
     def _checked_motion_proposals(self) -> tuple[MotionProposal, ...]:
         checked: list[MotionProposal] = []
@@ -1600,62 +1737,45 @@ class MainWindow(QMainWindow):
     def _refresh_motion_selection_display(self) -> None:
         proposals = self._checked_motion_proposals()
         self._motion_selection_label.setText(
-            f"선택한 분석 구간: {len(proposals)}/3"
-            + (" · '분석 계획에 적용' 버튼을 눌러 등록" if proposals else "")
-        )
-        self._selected_motion_list.clear()
-        for proposal in proposals:
-            start = format_milliseconds(seconds_to_milliseconds(proposal.start_sec))
-            end = format_milliseconds(seconds_to_milliseconds(proposal.end_sec))
-            peak = format_milliseconds(seconds_to_milliseconds(proposal.peak_timestamp_sec))
-            item = QListWidgetItem(f"{start}–{end} · 최대 변화 {peak}")
-            item.setData(Qt.ItemDataRole.UserRole, proposal)
-            self._selected_motion_list.addItem(item)
-        running = self._background_work_running()
-        self._motion_apply_button.setEnabled(bool(proposals) and not running)
-        self._selected_motion_clear_button.setEnabled(bool(proposals) and not running)
-        self._update_motion_selection_buttons()
-
-    def _update_motion_selection_buttons(self) -> None:
-        self._selected_motion_uncheck_button.setEnabled(
-            self._selected_motion_list.currentItem() is not None
-            and not self._background_work_running()
+            f"선택 {len(proposals)}/3"
         )
 
-    def _uncheck_selected_motion_proposal(self) -> None:
-        selected = self._selected_motion_list.currentItem()
-        if selected is None:
-            return
-        proposal = selected.data(Qt.ItemDataRole.UserRole)
-        if not isinstance(proposal, MotionProposal):
-            return
-        for row in range(self._motion_list.count()):
-            item = self._motion_list.item(row)
-            candidate = item.data(Qt.ItemDataRole.UserRole)
-            if isinstance(candidate, MotionProposal) and candidate.proposal_id == proposal.proposal_id:
-                item.setCheckState(Qt.CheckState.Unchecked)
-                return
+    def _sync_motion_selection(self) -> bool:
+        """Plans use the checked motion candidates; there is no separate apply step."""
+        checked = tuple(
+            sorted(self._checked_motion_proposals(), key=lambda item: (item.start_sec, item.end_sec))
+        )
+        if checked == self._applied_motion_proposals:
+            return True
+        if checked:
+            return self._apply_motion_proposal(announce=False)
+        # Every candidate was unchecked: sample the range the user had set, evenly.
+        self._sampling_interval_override = None
+        self._sampling_timestamps_override = ()
+        self._sampling_strategy_override = None
+        self._applied_motion_proposals = ()
+        if self._range_before_motion is not None:
+            self._range_start.blockSignals(True)
+            self._range_end.blockSignals(True)
+            self._range_start.setValue(self._range_before_motion[0])
+            self._range_end.setValue(self._range_before_motion[1])
+            self._range_start.blockSignals(False)
+            self._range_end.blockSignals(False)
+            self._range_before_motion = None
+        self._inputs_changed()
+        return True
 
-    def _clear_motion_checks(self) -> None:
-        self._motion_list.blockSignals(True)
-        for row in range(self._motion_list.count()):
-            item = self._motion_list.item(row)
-            if isinstance(item.data(Qt.ItemDataRole.UserRole), MotionProposal):
-                item.setCheckState(Qt.CheckState.Unchecked)
-        self._motion_list.blockSignals(False)
-        self._refresh_motion_selection_display()
-
-    def _apply_motion_proposal(self) -> None:
+    def _apply_motion_proposal(self, *, announce: bool = True) -> bool:
         proposals = self._checked_motion_proposals()
         if not proposals:
             self._show_error("먼저 움직임 후보를 선택해 주세요.")
-            return
+            return False
         if len(proposals) > 3:
             self._show_error("한 계획에는 움직임 후보를 최대 3개까지 선택할 수 있습니다.")
-            return
+            return False
         if any(proposal.video_id != self._video_id for proposal in proposals):
             self._show_error("현재 영상과 다른 움직임 후보입니다. 다시 탐색해 주세요.")
-            return
+            return False
         proposals = tuple(sorted(proposals, key=lambda item: (item.start_sec, item.end_sec)))
         try:
             if self._motion_scan_profile is MotionScanProfile.REPEATED_SUBTLE:
@@ -1666,8 +1786,10 @@ class MainWindow(QMainWindow):
                 sampling_strategy = SamplingStrategy.MOTION_PEAK
         except ValueError as exc:
             self._show_error(str(exc))
-            return
+            return False
 
+        if not self._applied_motion_proposals:
+            self._range_before_motion = (self._range_start.value(), self._range_end.value())
         self._range_start.blockSignals(True)
         self._range_end.blockSignals(True)
         self._range_start.setValue(min(proposal.start_sec for proposal in proposals))
@@ -1682,18 +1804,41 @@ class MainWindow(QMainWindow):
         self._inputs_changed()
         position_ms = seconds_to_milliseconds(proposals[0].start_sec)
         self._player.setPosition(min(position_ms, self._duration_ms))
-        self.statusBar().showMessage(
-            f"선택한 움직임 후보 {len(proposals)}개와 총 {len(timestamps)}개 원본 시각을 "
-            f"{sampling_strategy.value} 전략으로 적용했습니다. "
-            "새 계획을 만들고 다시 승인해 주세요.",
-            7000,
-        )
+        if announce:
+            self.statusBar().showMessage(
+                f"선택한 움직임 후보 {len(proposals)}개와 총 {len(timestamps)}개 원본 시각을 "
+                f"{sampling_strategy.value} 전략으로 적용했습니다. "
+                "새 계획을 만들고 다시 승인해 주세요.",
+                7000,
+            )
+        return True
 
     def _clear_motion_proposals(self) -> None:
         self._motion_list.blockSignals(True)
         self._motion_list.clear()
         self._motion_list.blockSignals(False)
+        self._motion_scan_state = "idle"
         self._refresh_motion_selection_display()
+        self._refresh_motion_empty_state()
+
+    def _refresh_motion_empty_state(self) -> None:
+        """Short text instead of empty candidate lists; the lists return once found."""
+        found = self._motion_list.count() > 0
+        if found:
+            text = ""
+        elif not self._case_videos:
+            text = self.MOTION_EMPTY_NO_VIDEO
+        elif self._motion_scan_state == "scanning":
+            text = self.MOTION_EMPTY_SCANNING
+        elif self._motion_scan_state == "none_found":
+            text = self.MOTION_EMPTY_NONE_FOUND
+        else:
+            text = self.MOTION_EMPTY_NOT_SCANNED
+        self._motion_empty_label.setText(text)
+        self._motion_empty_label.setVisible(not found)
+        for widget in (self._motion_header, self._motion_list, self._motion_selection_label):
+            widget.setVisible(found)
+        self._refresh_next_action()
 
     def _toggle_playback(self) -> None:
         if self._player.playbackState() is QMediaPlayer.PlaybackState.PlayingState:
@@ -1712,7 +1857,7 @@ class MainWindow(QMainWindow):
     def _on_duration_changed(self, duration_ms: int) -> None:
         self._duration_ms = max(0, duration_ms)
         self._timeline.setRange(0, self._duration_ms)
-        self._play_button.setEnabled(self._duration_ms > 0)
+        self._set_player_controls_enabled(self._duration_ms > 0)
         self._time_label.setText(f"00:00 / {format_milliseconds(self._duration_ms)}")
 
     def _on_position_changed(self, position_ms: int) -> None:
@@ -1728,8 +1873,55 @@ class MainWindow(QMainWindow):
     def _on_playback_state_changed(self, state: QMediaPlayer.PlaybackState) -> None:
         playing = state is QMediaPlayer.PlaybackState.PlayingState
         self._play_button.setText("일시정지" if playing else "재생")
-        icon = QStyle.StandardPixmap.SP_MediaPause if playing else QStyle.StandardPixmap.SP_MediaPlay
-        self._play_button.setIcon(self.style().standardIcon(icon))
+        theme.set_icon(self._play_button, "pause" if playing else "play")
+
+    def _skip_playback(self, seconds: int) -> None:
+        position = self._player.position() + seconds * 1000
+        self._player.setPosition(max(0, min(position, self._duration_ms)))
+
+    def _set_player_controls_enabled(self, enabled: bool) -> None:
+        for button in (self._back_button, self._play_button, self._forward_button):
+            button.setEnabled(enabled)
+
+    def _refresh_attention(self) -> None:
+        """Videos that still need a file or a checked clock, shown at the bottom left."""
+        items = []
+        for video_id, path in self._case_videos.items():
+            name = path.name if path is not None else self._camera_name(video_id)
+            if path is None:
+                items.append(f"{name} 파일 연결 필요")
+            elif self._link_for(video_id).clock_certainty is InformationCertainty.UNKNOWN:
+                items.append(f"{name} 기준 시각 미확인")
+        self._attention_label.setVisible(bool(items))
+        if not items:
+            return
+        more = f" 외 {len(items) - 1}건" if len(items) > 1 else ""
+        self._attention_label.setText(f"확인 필요 {len(items)}건  {items[0]}{more}")
+        self._attention_label.setToolTip("\n".join(items))
+
+    def _refresh_case_header(self) -> None:
+        title = self._case_panel.title_edit.text().strip() or self._case_record.title
+        self._case_title_label.setText(title)
+        try:
+            edited = self._case_content(
+                self._case_from_panel(self._case_record.revision)
+            ) != self._case_content(self._case_record)
+        except ValueError:
+            edited = True
+        if not self._case_saved:
+            state = "저장 안 됨"
+        elif edited:
+            state = "저장 안 된 수정 있음"
+        else:
+            state = f"저장됨 v{self._case_record.revision}"
+        self._case_state_label.setText(state)
+
+    def _refresh_video_placeholder(self) -> None:
+        open_video = self._video_path is not None
+        self._video_stack.setCurrentIndex(1 if open_video else 0)
+        self._video_placeholder_text.setText(
+            "목록에서 재생할 영상을 고르세요" if self._case_videos else "CCTV 영상을 추가하세요"
+        )
 
     def _on_media_error(self, error: QMediaPlayer.Error, error_string: str) -> None:
         if error is QMediaPlayer.Error.NoError:
@@ -1756,6 +1948,8 @@ class MainWindow(QMainWindow):
         self._model_edit.setEnabled(mode is not AnalysisMode.SAMPLE)
         self._model_edit.blockSignals(False)
         self._external_vision_confirm.setChecked(False)
+        if self._model_needs_attention():
+            self._advanced_toggle.setChecked(True)
         self._update_external_controls()
         self._apply_ui_zoom()
         self._update_mode_banner()
@@ -1774,11 +1968,22 @@ class MainWindow(QMainWindow):
         self._update_mode_banner()
         self._update_post_run_buttons()
 
+    def _model_needs_attention(self) -> bool:
+        """External mode needs a key and a check; local mode needs an installed vision model."""
+        mode = self._current_mode()
+        if mode is AnalysisMode.EXTERNAL:
+            return True
+        model_id = self._model_edit.text().strip() or None
+        return mode is AnalysisMode.LOCAL and not self._runtime_inventory.confirms_vision(model_id)
+
     def _update_external_controls(self) -> None:
         external = self._current_mode() is AnalysisMode.EXTERNAL
-        self._purpose_form_layout.setRowVisible(self._external_api_key_edit, external)
-        self._purpose_form_layout.setRowVisible(self._external_vision_confirm, external)
-        self._transfer_button.setVisible(external)
+        advanced = self._advanced_toggle.isChecked()
+        self._purpose_form_layout.setRowVisible(self._mode_combo, advanced)
+        self._purpose_form_layout.setRowVisible(self._model_edit, advanced)
+        self._purpose_form_layout.setRowVisible(self._external_api_key_edit, advanced and external)
+        self._purpose_form_layout.setRowVisible(self._external_vision_confirm, advanced and external)
+        self._refresh_next_action()
         editable = external and not self._background_work_running()
         self._external_api_key_edit.setEnabled(editable)
         self._external_vision_confirm.setEnabled(editable)
@@ -1882,6 +2087,7 @@ class MainWindow(QMainWindow):
         self._inputs_changed()
 
     def _range_changed(self) -> None:
+        self._range_before_motion = None
         self._sampling_interval_override = None
         self._sampling_timestamps_override = ()
         self._sampling_strategy_override = None
@@ -1907,8 +2113,10 @@ class MainWindow(QMainWindow):
 
     def _invalidate_plan_display(self) -> None:
         self._plan_view.clear()
-        self._question_label.setText("추가 질문 없음")
+        self._question_label.setText("")
+        self._question_label.setVisible(False)
         self._clarification_edit.clear()
+        self._clarification_edit.setVisible(False)
         self._clarification_edit.setEnabled(True)
         self._clarification_id = None
         self._approve_button.setEnabled(False)
@@ -1917,13 +2125,15 @@ class MainWindow(QMainWindow):
 
     def _make_plan(self) -> None:
         if self._metadata is None or self._video_path is None:
-            self._show_error("먼저 FFprobe로 메타데이터를 확인할 수 있는 영상을 선택해 주세요.")
+            self._show_error("영상 정보를 확인할 수 있는 영상을 먼저 선택해 주세요.")
             return
         if not self._purpose_edit.toPlainText().strip():
             self._show_error("분석 목적을 입력해 주세요.")
             return
         mode = self._current_mode()
         model_id = self._model_edit.text().strip() or None
+        if self._model_needs_attention():
+            self._advanced_toggle.setChecked(True)
         if mode is AnalysisMode.LOCAL and not self._runtime_inventory.confirms_vision(model_id):
             if model_id:
                 self._show_error(
@@ -1939,6 +2149,8 @@ class MainWindow(QMainWindow):
                 "'영상 입력' 항목을 체크해 주세요."
             )
             return
+        if not self._sync_motion_selection():
+            return
         self._session.update_context(self._metadata, self._current_intent())
         questions = self._session.questions()
         if questions:
@@ -1951,6 +2163,8 @@ class MainWindow(QMainWindow):
                 question = questions[0]
                 self._clarification_id = question.question_id
                 self._question_label.setText(f"추가 질문: {question.prompt}\n이유: {question.reason}")
+                self._question_label.setVisible(True)
+                self._clarification_edit.setVisible(True)
                 self._clarification_edit.setFocus()
                 self.statusBar().showMessage("추가 질문에 답한 뒤 계획 버튼을 다시 눌러 주세요.")
                 return
@@ -1970,7 +2184,7 @@ class MainWindow(QMainWindow):
             return
 
         if plan.mode is AnalysisMode.SAMPLE:
-            sampling = "프레임 미추출(길이 비율 기반 샘플 결과)"
+            sampling = "프레임을 뽑지 않음 (샘플 결과)"
         elif self._sampling_timestamps_override:
             fine_detail = fine_detail_requirement(plan.purpose)
             proposal_ranges = "\n".join(
@@ -1984,36 +2198,30 @@ class MainWindow(QMainWindow):
                 else "최대 변화 시각 중심의 촘촘한 비교"
             )
             sampling = (
-                f"계획에 등록된 움직임 후보 {len(self._applied_motion_proposals)}개에서 "
-                f"{strategy_text} 원본 타임스탬프 {len(plan.sample_timestamps_sec)}개, "
-                f"최소 약 {plan.sampling_interval_sec:.3f}초 간격\n"
+                f"움직임 후보 {len(self._applied_motion_proposals)}개 구간에서 원본 시각 "
+                f"{len(plan.sample_timestamps_sec)}개 ({strategy_text}, "
+                f"최소 {plan.sampling_interval_sec:.3f}초 간격)\n"
                 f"등록된 분석 구간:\n{proposal_ranges}\n"
-                "입력 구간 수와 최종 결과 후보 수는 서로 다를 수 있음"
+                "구간 수와 결과 후보 수는 다를 수 있음"
             )
             if (
                 plan.mode is AnalysisMode.LOCAL
                 and plan.sampling_strategy is SamplingStrategy.TEMPORAL_SEQUENCE
                 and not fine_detail.required
             ):
-                sampling += (
-                    "\n원본 프레임은 최대 4개씩 최대 2×2 시간순 비교 보드로 묶어 "
-                    "로컬 모델에 입력"
-                )
+                sampling += "\n프레임 4개씩 2×2 비교 화면으로 묶어 분석"
         elif plan.sampling_strategy is SamplingStrategy.TEMPORAL_SEQUENCE:
             fine_detail = fine_detail_requirement(plan.purpose)
             sampling = (
-                f"미세·반복 변화 시간순 비교 표본 {len(plan.sample_timestamps_sec)}개, "
-                f"약 {plan.sampling_interval_sec:.3f}초 간격"
+                f"반복 변화 비교용 원본 시각 {len(plan.sample_timestamps_sec)}개 "
+                f"(약 {plan.sampling_interval_sec:.3f}초 간격)"
             )
             if plan.mode is AnalysisMode.LOCAL and not fine_detail.required:
-                sampling += (
-                    "\n원본 프레임은 최대 4개씩 최대 2×2 시간순 비교 보드로 묶어 "
-                    "로컬 모델에 입력"
-                )
+                sampling += "\n프레임 4개씩 2×2 비교 화면으로 묶어 분석"
         else:
             sampling = (
-                f"원본 타임스탬프 균등 샘플 {len(plan.sample_timestamps_sec)}개, "
-                f"약 {plan.sampling_interval_sec:.3f}초 간격"
+                f"원본 시각 {len(plan.sample_timestamps_sec)}개를 고르게 선택 "
+                f"(약 {plan.sampling_interval_sec:.3f}초 간격)"
             )
         if (
             plan.mode is AnalysisMode.LOCAL
@@ -2023,45 +2231,63 @@ class MainWindow(QMainWindow):
                 "\n작은 접촉 정밀 입력: 최대 1920px 원본에서 각 시각별 "
                 "전체 화면 보기 + 중앙 60% 확대 보기(1280×1080)를 모델에 전달"
             )
-        lines = [
-            f"사건: {self._case_panel.title_edit.text().strip() or self._case_record.title} · "
-            f"ID {plan.case_id or '미연결'} · 정보 버전 {plan.case_revision or '없음'}",
-            f"모드: {plan.mode.value} · 모델: {plan.model_id or '없음(샘플)'}",
-            f"분석 대상: {plan.video_id} · 원본 {plan.range_start_sec:.3f}~{plan.range_end_sec:.3f}초",
-            f"분석 전략: {plan.sampling_strategy.value}",
-            f"샘플링: {sampling}",
-            f"한도: {plan.limits.max_runtime_seconds:g}초 · 프레임 {plan.limits.max_frames}개 · 자동 재분석 {plan.limits.max_reanalysis_attempts}회",
-            f"모델 요청: 최대 {plan.limits.max_provider_requests}회 · 요청당 최대 {plan.limits.max_frames_per_request}프레임 · 자동 재시도 없음",
-            "범위 확대가 필요하면 자동 실행하지 않고 제안 상태로 남깁니다.",
+        case_title = self._case_panel.title_edit.text().strip() or self._case_record.title
+        mode_text = {
+            AnalysisMode.SAMPLE: "샘플 (실제 분석 아님)",
+            AnalysisMode.LOCAL: "로컬 AI",
+            AnalysisMode.EXTERNAL: "외부 AI (OpenAI)",
+        }[plan.mode]
+        video_name = self._video_path.name if self._video_path is not None else plan.video_id
+        start = format_milliseconds(seconds_to_milliseconds(plan.range_start_sec))
+        end = format_milliseconds(seconds_to_milliseconds(plan.range_end_sec))
+        limits = plan.limits
+        rows = [
+            ("사건", f"{case_title} (사건 정보 v{plan.case_revision})" if plan.case_revision else case_title),
+            ("분석 방식", f"{mode_text} · {plan.model_id}" if plan.model_id else mode_text),
+            ("대상 영상", f"{video_name} · {start}–{end}"),
+            ("표본", sampling),
+            (
+                "한도",
+                f"최대 {limits.max_runtime_seconds:g}초 · 프레임 {limits.max_frames}개 · "
+                f"모델 요청 {limits.max_provider_requests}회(요청당 {limits.max_frames_per_request}프레임) · "
+                f"자동 재분석 {limits.max_reanalysis_attempts}회",
+            ),
+            ("범위 확대", "필요하면 자동 실행하지 않고 제안만 합니다"),
+            (
+                "사전 정보",
+                "\n".join(
+                    f"{item.text} (출처: {SOURCE_LABELS[item.source]}, "
+                    f"확실성: {CERTAINTY_LABELS[item.certainty]})"
+                    for item in plan.analysis_clues
+                )
+                + "\n영상에서 확인한 사실이 아닙니다."
+                if plan.analysis_clues
+                else "없음",
+            ),
         ]
-        if plan.analysis_clues:
-            lines.append("분석에 사용하는 사전 정보(영상 관찰 사실 아님):")
-            lines.extend(
-                f"  - [{item.source.value}/{item.certainty.value}] {item.text}"
-                for item in plan.analysis_clues
-            )
-        else:
-            lines.append("분석에 사용하는 사전 정보: 없음")
         if plan.observation_guidance:
-            lines.append("관찰 기준: " + " / ".join(plan.observation_guidance))
+            rows.append(("관찰 기준", " / ".join(plan.observation_guidance)))
         if plan.transfer_manifest:
             manifest = plan.transfer_manifest
             times = ", ".join(f"{item:.3f}s" for item in manifest.frame_timestamps_sec)
-            lines.extend(
+            rows.extend(
                 [
-                    "[외부 전송은 분석 승인과 별도 승인 필요]",
-                    f"공급자/목적지: {manifest.provider_id} · {manifest.endpoint_origin}",
-                    f"전송: 분석 목적 텍스트 + JPEG 프레임 {len(manifest.frame_timestamps_sec)}개 ({times})",
-                    "외부로 전송할 사전 정보: "
-                    + (
+                    ("외부 전송", "분석 승인과 별도로 승인해야 합니다"),
+                    ("전송 대상", f"{manifest.provider_id} · {manifest.endpoint_origin}"),
+                    (
+                        "전송 내용",
+                        f"분석 목적 텍스트 + JPEG 프레임 {len(manifest.frame_timestamps_sec)}개 ({times})",
+                    ),
+                    (
+                        "전송 사전 정보",
                         " / ".join(item.text for item in manifest.analysis_clues)
                         if manifest.analysis_clues
-                        else "없음"
+                        else "없음",
                     ),
-                    "PDF·원본 영상 전체·라벨 JSON은 전송하지 않습니다.",
+                    ("전송하지 않음", "PDF·원본 영상 전체·라벨 JSON"),
                 ]
             )
-        self._plan_view.setPlainText("\n".join(lines))
+        self._plan_view.setHtml(theme.label_value_table(rows))
         self._clarification_edit.setEnabled(False)
         self._approve_button.setEnabled(True)
         self._transfer_button.setEnabled(False)
@@ -2163,11 +2389,6 @@ class MainWindow(QMainWindow):
         self._refresh_video_list()
         self._motion_scan_button.setEnabled(not running and self._metadata is not None)
         self._motion_list.setEnabled(not running)
-        self._selected_motion_list.setEnabled(not running)
-        checked_motion = self._checked_motion_proposals()
-        self._motion_apply_button.setEnabled(not running and bool(checked_motion))
-        self._selected_motion_clear_button.setEnabled(not running and bool(checked_motion))
-        self._update_motion_selection_buttons()
         for widget in (
             self._purpose_edit,
             self._mode_combo,
@@ -2213,7 +2434,7 @@ class MainWindow(QMainWindow):
             self._active_motion_scan_id = None
             self._motion_worker.request_cancel()
             self._cancel_button.setEnabled(False)
-            self._last_progress_message = "움직임 탐색 취소 중 · FFmpeg 정리 중"
+            self._last_progress_message = "움직임 후보 찾기 취소 중"
             self._refresh_elapsed_status()
             self.statusBar().showMessage("움직임 탐색을 취소하고 있습니다.", 5000)
             return
@@ -2223,7 +2444,7 @@ class MainWindow(QMainWindow):
         self._session.cancel_active()
         self._worker.request_cancel()
         self._cancel_button.setEnabled(False)
-        self._last_progress_message = "취소됨 · 서버 응답/시간 제한까지 백그라운드 정리 중"
+        self._last_progress_message = "취소 중 (정리가 끝나면 다시 실행할 수 있음)"
         self._refresh_elapsed_status()
         self.statusBar().showMessage(
             "취소 결과는 저장하지 않으며 정리가 끝날 때까지 새 분석을 시작할 수 없습니다.",
@@ -2250,9 +2471,9 @@ class MainWindow(QMainWindow):
         if job.status is JobStatus.COMPLETED:
             self._progress_bar.setValue(100)
             origin_text = {
-                ResultOrigin.SAMPLE: "샘플 결과 — 실제 AI 분석 아님",
-                ResultOrigin.TEST_DOUBLE: "테스트용 가짜 공급자 응답 — 실제 모델 아님",
-                ResultOrigin.REAL_MODEL: f"실제 모델 응답 · {job.model_id}",
+                ResultOrigin.SAMPLE: "샘플 결과 (실제 AI 분석 아님)",
+                ResultOrigin.TEST_DOUBLE: "테스트 응답 (실제 모델 아님)",
+                ResultOrigin.REAL_MODEL: f"실제 모델 {job.model_id}",
             }[job.origin]
             elapsed = f" · {job.elapsed_seconds:.1f}초" if job.elapsed_seconds is not None else ""
             outcome = f"후보 {len(job.segments)}개" if job.segments else "후보 없음"
@@ -2262,7 +2483,7 @@ class MainWindow(QMainWindow):
             self._refresh_saved_results(select_job_id=job.job_id)
             self._propose_range_expansion(job)
             self.statusBar().showMessage(
-                f"분석이 끝났습니다. [{self.STEP_TITLES[2]} →]에서 후보를 검토하세요.", 10000
+                f"분석이 끝났습니다. [{self.STEP_TITLES[2]}] 단계에서 후보를 검토하세요.", 10000
             )
         elif job.status is JobStatus.PARTIAL:
             elapsed = f" · {job.elapsed_seconds:.1f}초" if job.elapsed_seconds is not None else ""
@@ -2281,7 +2502,7 @@ class MainWindow(QMainWindow):
             self._progress_label.setText("오류로 종료됨")
             self._set_terminal_banner("모델 응답 실패", job.model_id, failed=True)
             self._review_panel.show_message(
-                f"분석 실패 — {job.model_id or '모델 없음'} · "
+                f"분석 실패: {job.model_id or '모델 없음'}, "
                 f"{job.error or '알 수 없는 분석 오류'}"
             )
             self._refresh_review_empty_state()
@@ -2301,21 +2522,25 @@ class MainWindow(QMainWindow):
         index = max(0, min(index, len(self.STEP_TITLES) - 1))
         self._step_stack.setCurrentIndex(index)
         self._step_buttons[index].setChecked(True)
+        # Videos are added and linked in step ①; later steps only choose among them.
+        self._video_list.set_select_only(index != 0)
+        self._purpose_group.setVisible(index == 1)
         previous_exists = index > 0
         next_exists = index < len(self.STEP_TITLES) - 1
         self._prev_step_button.setEnabled(previous_exists)
         self._prev_step_button.setVisible(previous_exists)
-        self._prev_step_button.setText("← 이전")
+        self._prev_step_button.setText("이전")
         self._prev_step_button.setToolTip(
             f"{self.STEP_TITLES[index - 1]} 단계로" if previous_exists else ""
         )
         self._next_step_button.setEnabled(next_exists)
         self._next_step_button.setVisible(next_exists)
         self._next_step_button.setText(
-            f"{self.STEP_TITLES[index + 1]} →" if next_exists else "다음 →"
+            self.STEP_TITLES[index + 1] if next_exists else "다음"
         )
         self._step_navigation.adjustSize()
         self._refresh_review_empty_state()
+        self._refresh_step_emphasis()
 
     def _refresh_review_empty_state(self) -> None:
         has_job = self._review_panel.job is not None
@@ -2430,28 +2655,110 @@ class MainWindow(QMainWindow):
                 and self._external_vision_confirmed()
             )
         self._run_button.setEnabled(can_run)
+        self._refresh_next_action()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt API
+        if event.type() == QEvent.Type.EnabledChange and watched in self._next_action_buttons:
+            self._refresh_next_action()
+        return super().eventFilter(watched, event)
+
+    def _refresh_next_action(self) -> None:
+        """Step ②: plan, approval and run share one place, and only the next action is blue."""
+        state = self._session.state
+        approved = state in (
+            WorkflowState.ANALYSIS_APPROVED,
+            WorkflowState.APPROVED,
+            WorkflowState.RUNNING,
+            WorkflowState.VALIDATING,
+        )
+        finished = state in (
+            WorkflowState.COMPLETED,
+            WorkflowState.PARTIAL,
+            WorkflowState.EXPANSION_PROPOSED,
+        )
+        planned = finished or approved or state is WorkflowState.PLAN_READY
+        scanned = self._motion_scan_state in ("found", "none_found")
+        # Plan, approve and run take turns in the pinned bar.
+        self._make_plan_button.setVisible(not approved and state is not WorkflowState.PLAN_READY)
+        self._approve_button.setVisible(state is WorkflowState.PLAN_READY)
+        self._run_button.setVisible(approved)
+        # External mode: the separate transfer approval appears at its turn, after approval.
+        self._transfer_button.setVisible(
+            self._current_mode() is AnalysisMode.EXTERNAL
+            and state is WorkflowState.ANALYSIS_APPROVED
+        )
+
+        next_button: QPushButton | None = None
+        if self._run_button.isEnabled() and approved:
+            next_button = self._run_button
+        elif self._transfer_button.isEnabled() and self._current_mode() is AnalysisMode.EXTERNAL:
+            next_button = self._transfer_button
+        elif self._approve_button.isEnabled():
+            next_button = self._approve_button
+        elif self._make_plan_button.isEnabled() and not planned:
+            if self._motion_scan_state == "scanning":
+                next_button = None
+            elif not scanned and self._motion_scan_button.isEnabled():
+                next_button = self._motion_scan_button
+            else:
+                next_button = self._make_plan_button
+        for button in self._next_action_buttons:
+            theme.set_primary(button, button is next_button)
+
+        current = {
+            self._motion_scan_button: 0,
+            self._make_plan_button: 1,
+            self._approve_button: 2,
+            self._transfer_button: 2,
+            self._run_button: 3,
+        }.get(next_button)
+        if state in (WorkflowState.RUNNING, WorkflowState.VALIDATING):
+            current = 3
+        done = (
+            scanned or planned,
+            planned,
+            approved and state is not WorkflowState.ANALYSIS_APPROVED or finished,
+            finished,
+        )
+        self._flow_steps.set_state(done, current)
+        self._refresh_step_emphasis()
+
+    def _refresh_step_emphasis(self) -> None:
+        """The bottom 'next step' button turns blue once the current step's work is done."""
+        step = self._step_stack.currentIndex()
+        has_videos = bool(self._case_videos)
+        theme.set_primary(self._video_list.add_button, not has_videos)
+        if step == 0:
+            ready = has_videos
+        else:
+            ready = self._review_panel.job is not None or self._session.state in (
+                WorkflowState.COMPLETED,
+                WorkflowState.PARTIAL,
+                WorkflowState.EXPANSION_PROPOSED,
+            )
+        theme.set_primary(self._next_step_button, ready)
 
     def _show_status(self, kind: str, text: str, detail: str = "") -> None:
         text_color, dot_color = theme.status_line_colors(kind)
         self._mode_banner.setText(text)
         self._mode_banner.setStyleSheet(f"color:{text_color};")
-        self._mode_dot.setStyleSheet(f"color:{dot_color};")
+        self._mode_dot.setPixmap(theme.dot_pixmap(dot_color, 8))
         self._mode_banner.setToolTip(detail)
         self._mode_banner.setAccessibleDescription(detail)
 
     def _set_result_banner(self, origin: ResultOrigin, model_id: str | None) -> None:
         if origin is ResultOrigin.SAMPLE:
-            self._show_status("sample", "샘플 결과 — 실제 AI 분석 아님")
+            self._show_status("sample", "샘플 결과 (실제 AI 분석 아님)")
         elif origin is ResultOrigin.TEST_DOUBLE:
-            self._show_status("test_double", "테스트용 가짜 모델 응답 — 실제 모델 검증 아님")
+            self._show_status("test_double", "테스트 응답 (실제 모델 검증 아님)")
         else:
-            self._show_status("real_model", f"실제 모델 응답 — {model_id}")
+            self._show_status("real_model", f"실제 모델 결과 · {model_id}")
 
     def _set_running_banner(self, mode: AnalysisMode, model_id: str | None) -> None:
         if mode is AnalysisMode.SAMPLE:
-            text = "샘플 분석 실행 중 — 실제 AI 분석 아님"
+            text = "샘플 분석 실행 중 (실제 AI 분석 아님)"
         else:
-            text = f"분석 실행 중 — {model_id or '모델 미지정'}"
+            text = f"분석 실행 중 · {model_id or '모델 미지정'}"
         self._show_status("running", text)
 
     def _set_terminal_banner(
@@ -2461,7 +2768,7 @@ class MainWindow(QMainWindow):
         *,
         failed: bool,
     ) -> None:
-        self._show_status("failed" if failed else "neutral", f"{label} — {model_id or '모델 없음'}")
+        self._show_status("failed" if failed else "neutral", f"{label} · {model_id or '모델 없음'}")
 
     @staticmethod
     def _model_display_name(model_id: str) -> tuple[str, bool]:
@@ -2536,7 +2843,6 @@ class MainWindow(QMainWindow):
             seconds_to_milliseconds(cls._segment_playback_start_sec(segment))
         )
         evidence = " / ".join(segment.evidence)
-        frames = f"\n원본 프레임: {', '.join(segment.source_frame_ids)}" if segment.source_frame_ids else ""
         observed = (
             "\n관찰 프레임 원본 시각: "
             + ", ".join(f"{timestamp:.3f}초" for timestamp in segment.source_timestamps_sec)
@@ -2590,13 +2896,23 @@ class MainWindow(QMainWindow):
                     f"{len(timestamps)}개 관찰 시각 · 표본 사이 {span:.3f}초 · "
                     "중간 동작과 실제 반복 횟수는 원본 확인 필요"
                 )
-        return (
-            f"확인용 재생 범위 {start}–{end}  {segment.summary}\n"
-            f"클릭 시 맥락 재생 시작 {context_start} "
-            f"(확인용 범위 시작 최대 {cls.RESULT_CONTEXT_PREROLL_SECONDS:g}초 전, 이후 계속 재생)\n"
-            f"근거: {evidence}{frames}{observed}{duration_evidence}{temporal_evidence}\n"
-            f"불확실성: {segment.uncertainty}"
-        )
+        rows = [
+            ("요약", segment.summary),
+            ("확인용 재생 범위", f"{start}–{end}"),
+            (
+                "재생 시작",
+                f"{context_start} (확인용 범위 시작 최대 "
+                f"{cls.RESULT_CONTEXT_PREROLL_SECONDS:g}초 전부터 이어서 재생)",
+            ),
+            ("근거", evidence),
+        ]
+        # Evidence lines built above are "label: value" lines too.
+        for line in f"{observed}{duration_evidence}{temporal_evidence}".splitlines():
+            if line:
+                label, _, value = line.partition(": ")
+                rows.append((label, value))
+        rows.append(("불확실성", segment.uncertainty))
+        return "\n".join(f"{label}: {value}" for label, value in rows)
 
     @classmethod
     def _segment_playback_start_sec(cls, segment: Segment) -> float:

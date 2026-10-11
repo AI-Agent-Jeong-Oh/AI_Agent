@@ -10,9 +10,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
+    QComboBox,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPlainTextEdit,
+    QTextEdit,
     QPushButton,
     QRadioButton,
     QSizePolicy,
@@ -38,6 +41,7 @@ from video_agent.contracts import (
     Segment,
 )
 from video_agent.ui import theme
+from video_agent.ui.disclosure import DisclosureButton
 from video_agent.ui.flow_layout import FlowLayout, FlowRow
 from video_agent.video.files import format_milliseconds, seconds_to_milliseconds
 
@@ -98,6 +102,16 @@ class _CompactTextView(QPlainTextEdit):
         return QSize(super().minimumSizeHint().width(), self.minimumHeight())
 
 
+class _CompactRichView(QTextEdit):
+    """Read-only rich text with the same sizing as _CompactTextView (for the detail grid)."""
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        return QSize(super().sizeHint().width(), self.minimumHeight())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        return QSize(super().minimumSizeHint().width(), self.minimumHeight())
+
+
 class CandidateReviewPanel(QWidget):
     """Candidate list, selected-segment detail and reviewer notes for one analysis job.
 
@@ -149,26 +163,13 @@ class CandidateReviewPanel(QWidget):
         self.origin_label.setAccessibleName("검토 중인 결과의 출처")
         layout.addWidget(self.origin_label)
 
-        sort_row = QHBoxLayout()
-        sort_row.setSpacing(0)
-        sort_label = QLabel("정렬")
-        sort_label.setObjectName("fieldLabel")
-        sort_row.addWidget(sort_label)
-        sort_row.addSpacing(8)
-        self.sort_group = QButtonGroup(self)
-        self.sort_buttons: dict[str, QPushButton] = {}
-        sorts = (("시간순", SORT_TIME), ("모델 순서", SORT_MODEL))
-        for position, (label, key) in enumerate(sorts):
-            button = QPushButton(label)
-            button.setCheckable(True)
-            button.setAccessibleName(f"후보 정렬: {label}")
-            theme.set_segment(button, position, len(sorts))
-            self.sort_group.addButton(button)
-            self.sort_buttons[key] = button
-            sort_row.addWidget(button)
-        self.sort_buttons[SORT_TIME].setChecked(True)
-        sort_row.addStretch(1)
-        layout.addLayout(sort_row)
+        # Sorting is a small choice at the end of the filter chips, not a row of its own.
+        self.sort_combo = QComboBox()
+        self.sort_combo.setAccessibleName("후보 정렬")
+        self.sort_combo.setToolTip("후보 정렬")
+        for label, key in (("시간순", SORT_TIME), ("모델 순서", SORT_MODEL)):
+            self.sort_combo.addItem(label, key)
+        theme.mark_compact(self.sort_combo)
 
         # Chips wrap onto a second line when the panel is narrow or the UI is zoomed.
         self.filter_chips = QWidget()
@@ -188,6 +189,7 @@ class CandidateReviewPanel(QWidget):
             self.filter_buttons[key] = button
             filter_row.addWidget(button)
         self.filter_buttons[FILTER_ALL].setChecked(True)
+        filter_row.addWidget(self.sort_combo)
         layout.addWidget(self.filter_chips)
 
         self.candidate_list = _CompactListWidget()
@@ -200,8 +202,8 @@ class CandidateReviewPanel(QWidget):
         self.candidate_list.setAccessibleName("중요 구간 후보 목록")
         layout.addWidget(self.candidate_list, 1)
 
-        detail_label = QLabel("선택 구간 상세 (모델 출력 — 사람 확인 전)")
-        self.detail_view = _CompactTextView()
+        detail_label = QLabel("구간 상세 (AI 분석 결과)")
+        self.detail_view = _CompactRichView()
         self.detail_view.setReadOnly(True)
         self.detail_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.detail_view.setAccessibleName("선택 구간 상세")
@@ -210,7 +212,7 @@ class CandidateReviewPanel(QWidget):
 
         # Wraps at large zoom; the window adds its playback help mark at the end.
         self.playback_row = FlowRow(spacing=8)
-        playback_label = QLabel("주변 구간 재생")
+        playback_label = QLabel("재생 범위")
         playback_label.setObjectName("fieldLabel")
         self.playback_row.flow.addWidget(playback_label)
         segments = QWidget()
@@ -246,17 +248,18 @@ class CandidateReviewPanel(QWidget):
         header_row.setContentsMargins(12, 4, 10, 4)
         header_title = QLabel("수사관 기록")
         header_title.setObjectName("reviewCardTitle")
-        header_note = QLabel("영상을 직접 본 뒤 기록 · 모델에 전송하지 않음")
+        header_note = QLabel("영상을 직접 본 뒤 기록")
         header_note.setObjectName("reviewCardNote")
         # Wraps instead of widening the panel when the UI is zoomed.
         header_note.setWordWrap(True)
         header_note.setMinimumWidth(1)
-        self.bookmark_check = QPushButton("☆ 북마크")
+        self.bookmark_check = QPushButton("북마크")
         self.bookmark_check.setCheckable(True)
         self.bookmark_check.setObjectName("bookmarkButton")
         self.bookmark_check.setAccessibleName("북마크")
+        theme.set_icon(self.bookmark_check, "bookmark", theme.GRAY_0)
         self.bookmark_check.toggled.connect(
-            lambda checked: self.bookmark_check.setText("★ 북마크" if checked else "☆ 북마크")
+            lambda checked: theme.set_icon(self.bookmark_check, "bookmark", theme.GRAY_0)
         )
         header_row.addWidget(header_title)
         header_row.addSpacing(6)
@@ -265,6 +268,7 @@ class CandidateReviewPanel(QWidget):
         card_layout.addWidget(header)
         body = QWidget()
         record_layout = QFormLayout(body)
+        theme.polish_form(record_layout)
         # Field labels move above their fields only when the row would not fit (large zoom).
         record_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         record_layout.setContentsMargins(12, 8, 12, 8)
@@ -291,7 +295,6 @@ class CandidateReviewPanel(QWidget):
         self.tags_edit.setPlaceholderText("쉼표로 구분 예: 손 접촉, 재확인")
         self.tags_edit.setAccessibleName("검토 태그")
         self.save_button = QPushButton("기록 저장")
-        theme.mark_primary(self.save_button)
         self.revert_button = QPushButton("되돌리기")
         self.revert_button.setToolTip("마지막으로 저장한 기록으로 되돌립니다")
         self.unsaved_label = QLabel("")
@@ -300,7 +303,11 @@ class CandidateReviewPanel(QWidget):
         self.save_status_label = QLabel("")
         self.save_status_label.setWordWrap(True)
         self.save_status_label.setAccessibleName("검토 기록 저장 상태")
+        # Tags are optional, so they stay folded until opened or already used.
+        self.tags_toggle = DisclosureButton("태그")
         button_row = QHBoxLayout()
+        button_row.addWidget(self.tags_toggle)
+        button_row.addSpacing(16)
         button_row.addWidget(self.save_status_label, 1)
         button_row.addWidget(self.revert_button)
         button_row.addWidget(self.save_button)
@@ -310,6 +317,7 @@ class CandidateReviewPanel(QWidget):
         record_layout.addRow("", button_row)
         record_layout.addRow("", self.unsaved_label)
         record_layout.setRowVisible(self.unsaved_label, False)
+        record_layout.setRowVisible(self.tags_edit, False)
         self.record_group = record_group
         layout.addWidget(record_group)
 
@@ -320,7 +328,6 @@ class CandidateReviewPanel(QWidget):
         )
         self.completion_label.setAccessibleName("분석 완료 상태")
         self.complete_button = QPushButton("분석 완료")
-        theme.mark_primary(self.complete_button)
         self.complete_button.setToolTip(
             "검토를 마친 시각과 확인 시간을 기록합니다. 완료 후에도 수정할 수 있습니다."
         )
@@ -337,7 +344,10 @@ class CandidateReviewPanel(QWidget):
 
     def _connect_signals(self) -> None:
         self.filter_group.buttonClicked.connect(lambda _button: self._rebuild_list())
-        self.sort_group.buttonClicked.connect(lambda _button: self._rebuild_list())
+        self.sort_combo.currentIndexChanged.connect(lambda _index: self._rebuild_list())
+        self.tags_toggle.toggled.connect(
+            lambda shown: self._record_layout.setRowVisible(self.tags_edit, shown)
+        )
         self.candidate_list.currentItemChanged.connect(self._current_item_changed)
         self.judgement_group.buttonToggled.connect(self._editor_changed)
         self.memo_edit.textChanged.connect(self._editor_changed)
@@ -452,7 +462,7 @@ class CandidateReviewPanel(QWidget):
         elif persist is not None:
             self._set_save_status("아직 파일에 저장한 기록 없음", "idle")
         else:
-            self._set_save_status("파일 저장 미연결 · 앱 실행 중에만 유지", "idle")
+            self._set_save_status("저장 위치 없음 (앱을 닫으면 사라짐)", "idle")
         if not job.segments:
             self.show_message(
                 "분석된 프레임에서 목적에 맞는 후보를 찾지 못했습니다. "
@@ -467,16 +477,16 @@ class CandidateReviewPanel(QWidget):
 
     def _set_origin(self, job: AnalysisJob) -> None:
         if job.origin is ResultOrigin.SAMPLE:
-            text = "출처: 샘플 결과 — 실제 AI 분석 아님"
+            text = "샘플 결과 (실제 AI 분석 아님)"
             style = theme.banner_style("sample")
         elif job.origin is ResultOrigin.TEST_DOUBLE:
-            text = "출처: 테스트용 가짜 모델 응답 — 실제 모델 검증 아님"
+            text = "테스트 응답 (실제 모델 검증 아님)"
             style = theme.banner_style("test_double")
         elif job.origin is ResultOrigin.REAL_MODEL:
-            text = f"출처: 실제 모델 응답 — {job.model_id} · 사람 확인 전 후보"
+            text = f"실제 모델 결과 · {job.model_id} (수사관 확인 전)"
             style = theme.banner_style("real_model")
         else:
-            text = "출처: 확인 안 됨"
+            text = "출처 확인 안 됨"
             style = theme.banner_style("neutral")
         self.origin_label.setText(text)
         self.origin_label.setStyleSheet(style + "padding:6px;border-radius:5px;font-weight:700;")
@@ -525,7 +535,7 @@ class CandidateReviewPanel(QWidget):
                 "ok",
             )
         else:
-            self._set_save_status("파일 저장 미연결 · 앱 실행 중에만 유지", "idle")
+            self._set_save_status("저장 위치 없음 (앱을 닫으면 사라짐)", "idle")
         self._refresh_item(index)
         self._refresh_status()
         self._update_buttons()
@@ -614,9 +624,11 @@ class CandidateReviewPanel(QWidget):
         session = self._session
         if session is None or session.completed_at is None:
             self.completion_label.setText("완료 기록 없음")
+            self._refresh_primary_action()
             return
         completed = datetime.fromisoformat(session.completed_at)
         self.completion_label.setText(f"완료 {completed:%m-%d %H:%M}")
+        self._refresh_primary_action()
 
     # ----- review time ----------------------------------------------------------
 
@@ -675,7 +687,7 @@ class CandidateReviewPanel(QWidget):
     def _visible_indexes(self) -> list[int]:
         segments = self._segments()
         indexes = list(range(len(segments)))
-        if self.sort_buttons[SORT_TIME].isChecked():
+        if self.sort_combo.currentData() == SORT_TIME:
             indexes.sort(key=lambda i: (segments[i].start_sec, segments[i].end_sec, i))
         selected = next(
             (key for key, button in self.filter_buttons.items() if button.isChecked()), FILTER_ALL
@@ -695,6 +707,7 @@ class CandidateReviewPanel(QWidget):
         current_row = -1
         for row, index in enumerate(self._visible_indexes()):
             item = QListWidgetItem(self._item_text(index))
+            item.setIcon(self._item_icon(index))
             item.setData(Qt.ItemDataRole.UserRole, self._segments()[index])
             item.setData(SEGMENT_INDEX_ROLE, index)
             self.candidate_list.addItem(item)
@@ -708,16 +721,20 @@ class CandidateReviewPanel(QWidget):
             self._sync_timing()
         self._refresh_status()
 
+    def _item_icon(self, index: int) -> QIcon:
+        """Bookmarked candidates carry the bookmark icon (no star glyph in the text)."""
+        if self.record_for(index).bookmarked:
+            return theme.icon("bookmark", theme.PRIMARY)
+        return QIcon()
+
     def _item_text(self, index: int) -> str:
         segment = self._segments()[index]
         record = self.record_for(index)
         start = format_milliseconds(seconds_to_milliseconds(segment.start_sec))
         end = format_milliseconds(seconds_to_milliseconds(segment.end_sec))
         marks = [f"[{JUDGEMENT_LABELS[record.judgement]}]"]
-        if record.bookmarked:
-            marks.append("★")
         if index in self._drafts:
-            marks.append("●저장 안 됨")
+            marks.append("(저장 안 됨)")
         return f"{' '.join(marks)} 후보 #{index + 1} · {start}–{end}\n{segment.summary}"
 
     def _refresh_item(self, index: int) -> None:
@@ -725,6 +742,7 @@ class CandidateReviewPanel(QWidget):
             item = self.candidate_list.item(row)
             if item.data(SEGMENT_INDEX_ROLE) == index:
                 item.setText(self._item_text(index))
+                item.setIcon(self._item_icon(index))
                 return
 
     def _current_item_changed(
@@ -752,6 +770,7 @@ class CandidateReviewPanel(QWidget):
         totals = {FILTER_ALL: len(segments), FILTER_BOOKMARKED: bookmarks}
         totals.update({judgement.value: counts[judgement] for judgement in ReviewJudgement})
         self._set_filter_counts(totals)
+        self._refresh_primary_action()
         unsaved = self.unsaved_indexes()
         self.unsaved_label.setText(
             "저장하지 않은 기록: " + ", ".join(f"후보 #{i + 1}" for i in unsaved)
@@ -792,7 +811,7 @@ class CandidateReviewPanel(QWidget):
                 widget.setEnabled(enabled)
             if index is None:
                 self.detail_view.setPlainText(
-                    "후보를 선택하면 요약·관찰 근거·불확실성·관찰 시각·확인용 범위가 표시됩니다."
+                    "후보를 고르면 상세 내용이 표시됩니다."
                     if self._segments()
                     else ""
                 )
@@ -800,8 +819,14 @@ class CandidateReviewPanel(QWidget):
             else:
                 segment = self._segments()[index]
                 purpose = self._job.purpose if self._job is not None else None
-                self.detail_view.setPlainText(
-                    f"후보 #{index + 1}\n" + self._detail_formatter(segment, purpose)
+                # The formatter gives "label: value" lines; they are shown as a grid.
+                rows = [
+                    tuple(line.partition(": ")[::2])
+                    for line in self._detail_formatter(segment, purpose).splitlines()
+                    if line
+                ]
+                self.detail_view.setHtml(
+                    f"<p><b>후보 #{index + 1}</b></p>" + theme.label_value_table(rows)
                 )
                 record = self.record_for(index)
             self.judgement_group.setExclusive(False)
@@ -810,6 +835,8 @@ class CandidateReviewPanel(QWidget):
             self.judgement_group.setExclusive(True)
             self.memo_edit.setPlainText(record.memo)
             self.tags_edit.setText(", ".join(record.tags))
+            if record.tags:
+                self.tags_toggle.setChecked(True)
             self.bookmark_check.setChecked(record.bookmarked)
             self._update_buttons()
         finally:
@@ -844,6 +871,26 @@ class CandidateReviewPanel(QWidget):
         dirty = self._current_index is not None and self._current_index in self._drafts
         self.save_button.setEnabled(dirty and not self._save_blocked)
         self.revert_button.setEnabled(dirty)
+        self._refresh_primary_action()
+
+    def _refresh_primary_action(self) -> None:
+        """One blue button, in order: save the record, then finish, then the summary."""
+        segments = self._segments()
+        completed = self._session is not None and self._session.completed_at is not None
+        all_reviewed = bool(segments) and all(
+            self.saved_record_for(index).judgement is not ReviewJudgement.UNREVIEWED
+            for index in range(len(segments))
+        )
+        if self.save_button.isEnabled():
+            primary = self.save_button
+        elif completed:
+            primary = self.summary_button
+        elif all_reviewed and self.complete_button.isEnabled():
+            primary = self.complete_button
+        else:
+            primary = None
+        for button in (self.save_button, self.complete_button, self.summary_button):
+            theme.set_primary(button, button is primary)
 
     # ----- playback -----------------------------------------------------------
 
