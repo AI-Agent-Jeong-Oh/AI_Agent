@@ -18,9 +18,17 @@ def create_analyzer(
     *,
     provider_id: str | None = None,
     provider_endpoint: str | None = None,
+    vision_capability_confirmed: bool | None = None,
+    api_key: str | None = None,
 ) -> Analyzer:
     if mode is AnalysisMode.SAMPLE:
         return SampleAnalyzer()
-    config = config_from_environment(mode, model_id, provider_id, provider_endpoint)
-    provider = HttpVisionProvider(config)
+    config = config_from_environment(
+        mode,
+        model_id,
+        provider_id,
+        provider_endpoint,
+        vision_capability_confirmed,
+    )
+    provider = HttpVisionProvider(config, api_key=api_key)
     return VisionAnalyzer(provider, work_dir_factory)

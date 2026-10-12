@@ -1,0 +1,63 @@
+{
+  "description": "영상 증거 처리 공통 규정 (사건 유형과 관계없이 참고). 팀 시연 자료(영상수사.html)에서 옮김. 제목·출처만 보관하며 본문은 넣지 않음.",
+  "source_name": "국가법령정보센터",
+  "checked_on": "2026-10-07",
+  "rules": [
+    {
+      "rule_id": "sj-3",
+      "law_name": "검사와 사법경찰관의 상호협력과 일반적 수사준칙에 관한 규정",
+      "article": "제3조(수사의 기본원칙) 제3항 제1호·제3호",
+      "category": "경찰 업무규정",
+      "source": "대통령령 제36704호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/검사와 사법경찰관의 상호협력과 일반적 수사준칙에 관한 규정/제3조"
+    },
+    {
+      "rule_id": "sj-42-3",
+      "law_name": "검사와 사법경찰관의 상호협력과 일반적 수사준칙에 관한 규정",
+      "article": "제42조(전자정보의 압수ㆍ수색 또는 검증 시 유의사항) 제3항",
+      "category": "경찰 업무규정",
+      "source": "대통령령 제36704호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/검사와 사법경찰관의 상호협력과 일반적 수사준칙에 관한 규정/제42조"
+    },
+    {
+      "rule_id": "dig-5",
+      "law_name": "디지털 증거의 처리 등에 관한 규칙",
+      "article": "제5조(디지털 증거 처리의 원칙) 제1호·제2호",
+      "category": "경찰 업무규정",
+      "source": "경찰청훈령 제1178호 (시행 2026. 1. 25.)",
+      "source_url": "https://www.law.go.kr/LSW/admRulLsInfoP.do?admRulId=48364&efYd=0"
+    },
+    {
+      "rule_id": "dig-9",
+      "law_name": "디지털 증거의 처리 등에 관한 규칙",
+      "article": "제9조(디지털 증거 수집 시 원칙)",
+      "category": "경찰 업무규정",
+      "source": "경찰청훈령 제1178호 (시행 2026. 1. 25.)",
+      "source_url": "https://www.law.go.kr/LSW/admRulLsInfoP.do?admRulId=48364&efYd=0"
+    },
+    {
+      "rule_id": "pipa-3",
+      "law_name": "개인정보 보호법",
+      "article": "제3조(개인정보 보호 원칙) 제1항·제2항",
+      "category": "법령",
+      "source": "법률 제21445호 (시행 2026. 9. 11.)",
+      "source_url": "https://www.law.go.kr/법령/개인정보 보호법/제3조"
+    },
+    {
+      "rule_id": "sj-5",
+      "law_name": "검사와 사법경찰관의 상호협력과 일반적 수사준칙에 관한 규정",
+      "article": "제5조(형사사건의 공개금지 등) 제1항·제2항",
+      "category": "경찰 업무규정",
+      "source": "대통령령 제36704호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/검사와 사법경찰관의 상호협력과 일반적 수사준칙에 관한 규정/제5조"
+    },
+    {
+      "rule_id": "psr-2",
+      "law_name": "경찰수사규칙",
+      "article": "제2조(인권 보호 및 적법절차의 준수) 제2항",
+      "category": "경찰 업무규정",
+      "source": "행정안전부령 제649호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/경찰수사규칙/제2조"
+    }
+  ]
+}

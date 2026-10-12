@@ -1,13 +1,34 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import time
 import unittest
 from pathlib import Path
 
-from video_agent.contracts import AnalysisJob, AnalysisMode, JobStatus, Segment
-from video_agent.storage.json_store import AppSettings, ResultStore, SettingsStore
+from video_agent.contracts import (
+    AnalysisClue,
+    AnalysisJob,
+    AnalysisMode,
+    CandidateReview,
+    CaseRecord,
+    CaseVideoLink,
+    JobStatus,
+    ModelExecutionInfo,
+    ResultOrigin,
+    ReviewJudgement,
+    ReviewSession,
+    SamplingStrategy,
+    Segment,
+)
+from video_agent.storage.json_store import (
+    AppSettings,
+    CaseStore,
+    ResultStore,
+    ReviewStore,
+    SettingsStore,
+)
 from video_agent.storage.paths import AppPaths, CacheManager
 
 
@@ -37,6 +58,12 @@ class JsonStorageTests(unittest.TestCase):
         self.assertIn("VIDEO_AGENT_EXTERNAL_API_KEY", text)
         self.assertNotIn("sk-secret", text)
 
+    def test_default_external_key_name_matches_openai_without_containing_a_secret(self) -> None:
+        settings = AppSettings()
+
+        self.assertEqual(settings.api_key_env_name, "OPENAI_API_KEY")
+        self.assertNotIn("sk-", json.dumps(settings.to_dict()))
+
     def test_analysis_result_round_trip_excludes_video_path(self) -> None:
         job = AnalysisJob(
             job_id="job-1",
@@ -44,6 +71,11 @@ class JsonStorageTests(unittest.TestCase):
             status=JobStatus.COMPLETED,
             progress=100,
             video_id="video-1",
+            origin=ResultOrigin.SAMPLE,
+            purpose="샘플 목적",
+            range_start_sec=0.0,
+            range_end_sec=3.0,
+            elapsed_seconds=1.25,
             segments=(
                 Segment(
                     video_id="video-1",
@@ -62,6 +94,176 @@ class JsonStorageTests(unittest.TestCase):
 
         self.assertEqual(restored, job)
         self.assertNotIn("video_path", json.loads(path.read_text(encoding="utf-8")))
+
+    def test_real_model_provenance_round_trip(self) -> None:
+        job = AnalysisJob(
+            job_id="job-real",
+            plan_id="plan-real",
+            status=JobStatus.COMPLETED,
+            progress=100,
+            video_id="video-1",
+            mode=AnalysisMode.LOCAL,
+            model_id="vision-model",
+            is_sample=False,
+            origin=ResultOrigin.REAL_MODEL,
+            purpose="사람의 발이 물체에 접촉하는 것으로 보이는 장면 후보",
+            range_start_sec=0.0,
+            range_end_sec=10.0,
+            sample_timestamps_sec=(2.0,),
+            elapsed_seconds=4.5,
+            requested_frame_count=1,
+            analyzed_frame_count=1,
+            sampling_strategy=SamplingStrategy.TEMPORAL_SEQUENCE,
+            observation_guidance=("머리 방향을 시간순으로 비교",),
+            case_id="case-1",
+            case_revision=2,
+            analysis_clues=(
+                AnalysisClue(
+                    clue_id="clue-1",
+                    text="신고자는 문 앞 물체가 이동했다고 설명함",
+                ),
+            ),
+            model_execution=ModelExecutionInfo(
+                provider_id="ollama-local",
+                context_window_tokens=16384,
+                max_output_tokens=800,
+                temperature=0.0,
+                provider_request_count=1,
+                completed_request_count=1,
+                input_frame_count=1,
+                input_frame_dimensions=("320x240",),
+                input_frame_ids=("video-1:2000",),
+                input_frame_timestamps_sec=(2.0,),
+                provider_image_count=1,
+                provider_image_dimensions=("960x540",),
+                input_representation="temporal_storyboard",
+                provider_total_seconds=4.0,
+                prompt_version="candidate-recall-v9-overview-detail-crop",
+                batch_candidate_counts=(1,),
+            ),
+        )
+        store = ResultStore(self.paths)
+
+        store.save(job)
+
+        self.assertEqual(store.load(job.job_id), job)
+
+    def test_case_store_round_trip_omits_original_video_path(self) -> None:
+        record = CaseRecord(
+            case_id="case-package",
+            revision=1,
+            title="문 앞 택배 이동 확인",
+            clues=(AnalysisClue(clue_id="clue-1", text="문 앞 상자 이동 신고"),),
+            video_links=(CaseVideoLink(video_id="video-hash", camera_location="현관"),),
+        )
+        store = CaseStore(self.paths)
+
+        path = store.save(record)
+
+        self.assertEqual(store.load(record.case_id), record)
+        self.assertEqual(store.list_records(), (record,))
+        text = path.read_text(encoding="utf-8")
+        self.assertNotIn("video_path", text)
+        self.assertNotIn("/Users/", text)
+
+    def test_review_store_round_trip_keeps_result_file_unchanged(self) -> None:
+        job = AnalysisJob(
+            job_id="job-review",
+            status=JobStatus.COMPLETED,
+            progress=100,
+            video_id="video-review",
+            origin=ResultOrigin.SAMPLE,
+        )
+        result_path = ResultStore(self.paths).save(job)
+        result_before = result_path.read_bytes()
+        store = ReviewStore(self.paths)
+        session = ReviewSession(
+            review_id="review-1",
+            job_id="job-review",
+            video_id="video-review",
+            started_at="2026-10-10T22:00:00+09:00",
+            reviews=(
+                CandidateReview(
+                    job_id="job-review",
+                    segment_index=0,
+                    judgement=ReviewJudgement.EXCLUDED,
+                    memo="상자가 아닌 그림자",
+                ),
+            ),
+        )
+
+        path = store.save(session)
+
+        self.assertEqual(path, self.paths.data_dir / "reviews" / "job-review.json")
+        self.assertEqual(store.load("job-review"), session)
+        self.assertEqual(result_path.read_bytes(), result_before)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_result_list_filters_by_video_and_status_newest_first(self) -> None:
+        store = ResultStore(self.paths)
+
+        def save(job_id: str, video_id: str, status: JobStatus, mtime: float) -> None:
+            if status is JobStatus.PARTIAL:
+                job = AnalysisJob(
+                    job_id=job_id,
+                    status=status,
+                    progress=None,
+                    video_id=video_id,
+                    error="일부 배치만 완료",
+                    mode=AnalysisMode.LOCAL,
+                    model_id="vision-model",
+                    is_sample=False,
+                    origin=ResultOrigin.REAL_MODEL,
+                )
+            else:
+                failed = status is JobStatus.FAILED
+                job = AnalysisJob(
+                    job_id=job_id,
+                    status=status,
+                    progress=None if failed else 100,
+                    video_id=video_id,
+                    error="실패" if failed else None,
+                    origin=ResultOrigin.NONE if failed else ResultOrigin.SAMPLE,
+                )
+            path = store.save(job)
+            os.utime(path, (mtime, mtime))
+
+        save("job-old", "video-a", JobStatus.COMPLETED, 1_000)
+        save("job-new", "video-a", JobStatus.COMPLETED, 2_000)
+        save("job-partial", "video-a", JobStatus.PARTIAL, 1_500)
+        save("job-failed", "video-a", JobStatus.FAILED, 3_000)
+        save("job-other", "video-b", JobStatus.COMPLETED, 4_000)
+        (self.paths.results_dir / "broken.json").write_text("{", encoding="utf-8")
+
+        results, unreadable = store.list_for_video("video-a")
+
+        self.assertEqual(
+            [item.job.job_id for item in results], ["job-new", "job-partial", "job-old"]
+        )
+        self.assertEqual(results[0].saved_at, 2_000)
+        self.assertEqual(unreadable, 1)
+
+    def test_result_list_without_results_directory(self) -> None:
+        self.assertEqual(ResultStore(self.paths).list_for_video("video-a"), ((), 0))
+
+    def test_review_store_missing_file_and_unsafe_ids(self) -> None:
+        store = ReviewStore(self.paths)
+        self.assertIsNone(store.load("job-none"))
+        with self.assertRaises(ValueError):
+            store.load("../job")
+
+    def test_review_store_rejects_file_for_another_job(self) -> None:
+        store = ReviewStore(self.paths)
+        session = ReviewSession(
+            review_id="review-1",
+            job_id="job-a",
+            video_id="video-review",
+            started_at="2026-10-10T22:00:00+09:00",
+        )
+        store.save(session)
+        (self.paths.reviews_dir / "job-a.json").rename(self.paths.reviews_dir / "job-b.json")
+        with self.assertRaises(ValueError):
+            store.load("job-b")
 
 
 class CacheManagerTests(unittest.TestCase):

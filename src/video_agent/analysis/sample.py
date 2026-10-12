@@ -5,7 +5,7 @@ from collections.abc import Callable
 from threading import Event
 
 from video_agent.analysis.base import ProgressCallback
-from video_agent.contracts import AnalysisJob, AnalysisRequest, JobStatus, Segment
+from video_agent.contracts import AnalysisJob, AnalysisRequest, JobStatus, ResultOrigin, Segment
 from video_agent.video.files import validate_video_path
 
 
@@ -39,19 +39,19 @@ class SampleAnalyzer:
 
         for progress, message in stages:
             if cancel_event.is_set():
-                return self._canceled(request, last_progress)
+                return self._canceled(request, last_progress, started)
             if time.monotonic() - started > request.limits.max_runtime_seconds:
                 raise TimeoutError("승인된 최대 분석 시간을 초과했습니다.")
             self._sleep(self._stage_delay_seconds)
             if cancel_event.is_set():
-                return self._canceled(request, last_progress)
+                return self._canceled(request, last_progress, started)
             if time.monotonic() - started > request.limits.max_runtime_seconds:
                 raise TimeoutError("승인된 최대 분석 시간을 초과했습니다.")
             last_progress = progress
             on_progress(last_progress, message)
 
         if cancel_event.is_set():
-            return self._canceled(request, last_progress)
+            return self._canceled(request, last_progress, started)
 
         segments = self._build_segments(
             request.video_id,
@@ -66,19 +66,39 @@ class SampleAnalyzer:
             video_id=request.video_id,
             segments=segments,
             plan_id=request.plan_id,
+            origin=ResultOrigin.SAMPLE,
+            purpose=request.purpose,
+            range_start_sec=request.range_start_sec,
+            range_end_sec=request.range_end_sec,
+            elapsed_seconds=time.monotonic() - started,
+            sampling_strategy=request.sampling_strategy,
+            observation_guidance=request.observation_guidance,
+            case_id=request.case_id,
+            case_revision=request.case_revision,
+            analysis_clues=request.analysis_clues,
         )
         result.validate_for_duration(request.duration_seconds)
         on_progress(100, "샘플 결과 준비 완료")
         return result
 
     @staticmethod
-    def _canceled(request: AnalysisRequest, progress: int) -> AnalysisJob:
+    def _canceled(request: AnalysisRequest, progress: int, started: float) -> AnalysisJob:
         return AnalysisJob(
             job_id=request.job_id,
             status=JobStatus.CANCELED,
             progress=progress,
             video_id=request.video_id,
             plan_id=request.plan_id,
+            origin=ResultOrigin.NONE,
+            purpose=request.purpose,
+            range_start_sec=request.range_start_sec,
+            range_end_sec=request.range_end_sec,
+            elapsed_seconds=time.monotonic() - started,
+            sampling_strategy=request.sampling_strategy,
+            observation_guidance=request.observation_guidance,
+            case_id=request.case_id,
+            case_revision=request.case_revision,
+            analysis_clues=request.analysis_clues,
         )
 
     @staticmethod
