@@ -10,8 +10,10 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -20,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from video_agent.contracts import ResultOrigin
-from video_agent.review.summary import ResultSummary, render_html
+from video_agent.review.summary import ResultSummary, meta_rows, render_html
 from video_agent.ui import theme
 from video_agent.ui.message import confirm
 
@@ -36,7 +38,7 @@ _BANNER_KINDS = {
 
 
 class ResultSummaryDialog(QDialog):
-    """Editable six-section summary draft with HTML export.
+    """Editable report draft ("CCTV 영상 검토 결과 보고") with HTML export.
 
     Edits live only in this window and in exported files; they are not stored by the app.
     With `case_build`, the window opens on the case-wide draft and can switch to the
@@ -51,7 +53,7 @@ class ResultSummaryDialog(QDialog):
         case_build: Callable[[], ResultSummary] | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("결과 요약 (초안)")
+        self.setWindowTitle("결과 보고 (초안)")
         self.setModal(True)
         self.resize(760, 820)
         self._builders = {SCOPE_CAMERA: build}
@@ -94,15 +96,28 @@ class ResultSummaryDialog(QDialog):
         self.warning_label.setStyleSheet(
             theme.banner_style("warning") + "padding:6px;border-radius:5px;"
         )
-        note = QLabel(
-            "저장된 분석 결과와 검토 기록으로 만든 초안입니다. 문구를 고칠 수 있으며, "
-            "고친 문구는 앱에 저장되지 않고 내보낸 파일에만 남습니다."
-        )
+        note = QLabel("고친 문구는 앱에 저장되지 않고 내보낸 파일에만 남습니다.")
         note.setWordWrap(True)
         note.setStyleSheet(f"color:{theme.TEXT_SUB};")
         layout.addWidget(self.banner_label)
         layout.addWidget(self.warning_label)
         layout.addWidget(note)
+        # The report's title and header table (사건명 · 사건 유형 · 작성일 · 작성자 · 검토 대상).
+        self.title_label = QLabel()
+        self.title_label.setObjectName("reportTitle")
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.title_label)
+        self.meta_box = QWidget()
+        self.meta_box.setObjectName("reportMeta")
+        self._meta_grid = QGridLayout(self.meta_box)
+        self._meta_grid.setContentsMargins(0, 0, 0, 0)
+        self._meta_grid.setHorizontalSpacing(0)
+        self._meta_grid.setVerticalSpacing(0)
+        self.author_edit = QLineEdit()
+        self.author_edit.setObjectName("reportAuthor")
+        self.author_edit.setPlaceholderText("수사관 성명")
+        self.author_edit.setAccessibleName("작성자")
+        layout.addWidget(self.meta_box)
 
         sections = QWidget()
         sections_layout = QVBoxLayout(sections)
@@ -151,8 +166,35 @@ class ResultSummaryDialog(QDialog):
         self.export_button.clicked.connect(self.export_html)
         self.close_button.clicked.connect(self.reject)
 
+    def _fill_meta(self, summary: ResultSummary) -> None:
+        while self._meta_grid.count():
+            widget = self._meta_grid.takeAt(0).widget()
+            if widget is not None and widget is not self.author_edit:
+                widget.deleteLater()
+        for row, pairs in enumerate(meta_rows(summary)):
+            column = 0
+            for key, value in pairs:
+                head = QLabel(key)
+                head.setObjectName("reportMetaHead")
+                head.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._meta_grid.addWidget(head, row, column)
+                if key == "작성자":
+                    cell = self.author_edit
+                else:
+                    cell = QLabel(value)
+                    cell.setObjectName("reportMetaCell")
+                    cell.setWordWrap(True)
+                span = 3 if len(pairs) == 1 else 1
+                self._meta_grid.addWidget(cell, row, column + 1, 1, span)
+                column += 2
+        for column, stretch in enumerate((0, 1, 0, 1)):
+            self._meta_grid.setColumnStretch(column, stretch)
+
     def _fill(self, summary: ResultSummary) -> None:
         self._summary = summary
+        self.title_label.setText(summary.title)
+        self._fill_meta(summary)
+        self.banner_label.setVisible(bool(summary.origin_notice))
         self.banner_label.setText(summary.origin_notice)
         self.banner_label.setStyleSheet(
             theme.banner_style(_BANNER_KINDS.get(summary.origin, "neutral"))
@@ -176,7 +218,7 @@ class ResultSummaryDialog(QDialog):
     def _fit_editor(editor: QPlainTextEdit) -> None:
         """Size each box to its text (one spare line) so short sections stay compact."""
         lines = max(2, editor.document().blockCount() + 1)
-        height = editor.fontMetrics().lineSpacing() * lines + 16
+        height = editor.fontMetrics().lineSpacing() * lines + 28
         editor.setFixedHeight(max(64, min(height, 320)))
 
     def bodies(self) -> dict[str, str]:
@@ -224,8 +266,8 @@ class ResultSummaryDialog(QDialog):
     def export_html(self) -> Path | None:
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            "결과 요약 HTML로 내보내기",
-            str(Path.home() / f"검토요약_{self._summary.file_stem}.html"),
+            "결과 보고 HTML로 내보내기",
+            str(Path.home() / f"검토결과보고_{self._summary.file_stem}.html"),
             "HTML 파일 (*.html)",
         )
         if not filename:
@@ -234,7 +276,10 @@ class ResultSummaryDialog(QDialog):
         if path.suffix.lower() not in {".html", ".htm"}:
             path = path.with_name(path.name + ".html")
         try:
-            path.write_text(render_html(self._summary, self.bodies()), encoding="utf-8")
+            path.write_text(
+                render_html(self._summary, self.bodies(), author=self.author_edit.text()),
+                encoding="utf-8",
+            )
         except OSError as exc:
             self.export_status_label.setText(f"내보내기 실패: {exc.strerror or exc}")
             self.export_status_label.setStyleSheet(f"color:{theme.status_color('error')};")

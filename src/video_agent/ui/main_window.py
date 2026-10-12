@@ -121,6 +121,7 @@ from video_agent.ui.popover import info_mark
 from video_agent.ui.step_section import StepSection
 from video_agent.ui import theme
 from video_agent.ui.video_list import CaseVideoList, VideoEntry
+from video_agent.knowledge.case_rules import CaseRules, load_case_rules
 from video_agent.knowledge.common_rules import CommonRules, load_common_rules
 from video_agent.review.summary import (
     CameraSummaryInput,
@@ -346,6 +347,12 @@ class MainWindow(QMainWindow):
             self._common_rules = load_common_rules()
         except (OSError, ValueError, TypeError) as exc:
             self._common_rules_error = str(exc)
+        # Laws per case type (폭행·아동학대·실종·절도) for the report's 참고 법령.
+        self._case_rules: CaseRules | None = None
+        try:
+            self._case_rules = load_case_rules()
+        except (OSError, ValueError, TypeError):
+            self._case_rules = None
         self._case_store = CaseStore(self._paths)
         self._cache_manager = CacheManager(self._paths.cache_dir)
         self._case_record = CaseRecord(
@@ -677,7 +684,8 @@ class MainWindow(QMainWindow):
         choice_row_layout = QHBoxLayout(choice_row)
         choice_row_layout.setContentsMargins(0, 0, 0, 0)
         choice_row_layout.addWidget(self._analysis_choice, 1)
-        choice_row_layout.addWidget(self._model_refresh_button)
+        # Programs are found when the app starts; no refresh mark beside the choice.
+        self._model_refresh_button.setVisible(False)
         self._external_model_edit = QLineEdit()
         self._external_model_edit.setPlaceholderText("예: gpt-4.1-mini")
         self._external_model_edit.setAccessibleName("외부 AI 이름")
@@ -1177,8 +1185,6 @@ class MainWindow(QMainWindow):
         # One table row stays visible; more rows scroll inside the list.
         self._case_panel.clue_list.setMinimumHeight(scaled(46))
         self._case_panel.notes_edit.setFixedHeight(scaled(64))
-        # Lines up with the 40px choices beside it in the wrapping row.
-        self._case_panel.clue_use.setMinimumHeight(scaled(40))
         self._plan_group.setMinimumHeight(scaled(480))
         self._top_row.setSpacing(scaled(12))
         self._review_panel.apply_scale(scaled)
@@ -2494,7 +2500,7 @@ class MainWindow(QMainWindow):
             if model_id:
                 self._show_error(
                     "선택한 분석 방식을 이 컴퓨터에서 쓸 수 없습니다. "
-                    "분석 방식 옆 새로고침 단추를 누르거나 다른 분석 방식을 고르세요."
+                    "앱을 다시 열거나 다른 분석 방식을 고르세요."
                 )
             else:
                 self._show_error(
@@ -2810,7 +2816,9 @@ class MainWindow(QMainWindow):
         self._batch_prepare_worker = worker
         self._batch_preparation = None
         self._batch_done = False
-        self._start_batch_progress(f"영상 {len(videos)}개 계획 준비 중")
+        self._start_batch_progress(f"영상 1/{len(videos)} 계획 준비 중")
+        self._progress_bar.setRange(0, len(videos))
+        self._progress_bar.setValue(0)
         worker.start()
 
     def _start_batch_progress(self, message: str) -> None:
@@ -2833,6 +2841,14 @@ class MainWindow(QMainWindow):
         self._refresh_video_list()
 
     def _on_batch_progress(self, _value: object, message: str) -> None:
+        """'일괄 분석 2/3 · 파일 · 모델 분석 …' becomes '영상 2/3 분석 중' and a bar of how many
+        videos are done (the file name is in the list beside, marked 분석 중)."""
+        match = re.match(r"일괄 (계획 준비|분석) (\d+)/(\d+)", message)
+        if match:
+            stage, index, total = match.group(1), int(match.group(2)), int(match.group(3))
+            self._progress_bar.setRange(0, total)
+            self._progress_bar.setValue(index - 1)
+            message = f"영상 {index}/{total} " + ("계획 준비 중" if stage == "계획 준비" else "분석 중")
         self._last_progress_message = message
         self._refresh_elapsed_status()
 
@@ -2926,7 +2942,9 @@ class MainWindow(QMainWindow):
         self._batch_run_worker = worker
         self._batch_pending = tuple(item.video.video_id for item in prepared)
         self._batch_results = []
-        self._start_batch_progress(f"영상 {len(prepared)}개 분석 중")
+        self._start_batch_progress(f"영상 1/{len(prepared)} 분석 중")
+        self._progress_bar.setRange(0, len(prepared))
+        self._progress_bar.setValue(0)
         self._refresh_video_list()
         worker.start()
 
@@ -2938,6 +2956,8 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(f"결과 저장 실패: {exc}", 8000)
         self._batch_pending = tuple(v for v in self._batch_pending if v != job.video_id)
         self._batch_results.append(job)
+        # The bar counts finished videos.
+        self._progress_bar.setValue(len(self._batch_results))
         self._record_run_outcome(job)
         # The open video's result shows right away, as after a single run.
         if job.video_id == self._video_id and job.status in (JobStatus.COMPLETED, JobStatus.PARTIAL):
@@ -3026,7 +3046,7 @@ class MainWindow(QMainWindow):
             return
         model_id = self._model_id()
         if not self._runtime_inventory.confirms_vision(model_id or None):
-            self._show_error("사용할 로컬 영상 모델을 확인할 수 없습니다. 모델 목록을 새로고침해 주세요.")
+            self._show_error("사용할 로컬 영상 모델을 확인할 수 없습니다. 앱을 다시 열어 주세요.")
             return
         provider_id = os.environ.get("VIDEO_AGENT_LOCAL_PROVIDER", "ollama-local")
         provider_endpoint = os.environ.get(
@@ -3895,6 +3915,7 @@ class MainWindow(QMainWindow):
                 case_load_error=case_error,
                 common_rules=self._common_rules,
                 common_rules_error=self._common_rules_error,
+                case_rules=self._case_rules,
             )
 
         cameras = self._case_summary_inputs()
@@ -3917,6 +3938,7 @@ class MainWindow(QMainWindow):
                     case_load_error=case_error,
                     common_rules=self._common_rules,
                     common_rules_error=self._common_rules_error,
+                    case_rules=self._case_rules,
                 )
 
         dialog = ResultSummaryDialog(build, self, case_build=case_build)

@@ -358,6 +358,16 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
                color: {TEXT}; }}
     QMainWindow, QDialog {{ background: {PAGE}; }}
     QDialog#messageDialog {{ background: {SURFACE}; }}
+    /* Report draft: centred title between double rules and a ruled header table. */
+    QLabel#reportTitle {{ font-size: {s(20)}px; font-weight: 700; color: {TEXT};
+        border-top: 3px double {GRAY_70}; border-bottom: 3px double {GRAY_70}; padding: {s(6)}px 0; }}
+    QWidget#reportMeta {{ background: {SURFACE}; border: 1px solid {GRAY_40}; }}
+    QLabel#reportMetaHead {{ background: {GRAY_5}; border: 1px solid {GRAY_20}; font-weight: 700;
+        font-size: {s(LABEL_PX)}px; padding: {s(4)}px {s(8)}px; min-width: {s(64)}px; }}
+    QLabel#reportMetaCell {{ background: {SURFACE}; border: 1px solid {GRAY_20};
+        font-size: {s(LABEL_PX)}px; padding: {s(4)}px {s(8)}px; }}
+    QLineEdit#reportAuthor {{ border: 1px solid {GRAY_20}; border-radius: 0; min-height: 0;
+        padding: {s(4)}px {s(8)}px; font-size: {s(LABEL_PX)}px; }}
     QTextEdit#plainTable {{ border: none; background: transparent; padding: 0; }}
     QLabel#messageTitle {{ font-size: {s(HEADING_PX)}px; font-weight: 700; color: {TEXT}; }}
     QLabel#messageText {{ color: {TEXT}; }}
@@ -423,8 +433,6 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
         color: {TEXT}; font-weight: 700; font-size: {s(BODY_PX)}px;
         padding: {field_pad}px {s(18)}px; min-height: {field_min}px; }}
     QPushButton#stepNav:hover {{ background: {GRAY_20}; }}
-    QPushButton#stepNav[nav="next"] {{ background: {SECONDARY_10}; color: {PRIMARY}; }}
-    QPushButton#stepNav[nav="next"]:hover {{ background: {SECONDARY_20}; }}
     QPushButton#stepNav[variant="primary"] {{ background: {PRIMARY_FILL}; color: {GRAY_0}; }}
     QPushButton#stepNav[variant="primary"]:hover {{ background: {PRIMARY_HOVER}; }}
     QPushButton#stepButton {{ border: none; background: transparent; color: {TEXT_SUB};
@@ -559,7 +567,13 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
                                                   border-color: {GRAY_30}; }}
     QComboBox[density="compact"], QLineEdit[density="compact"] {{ padding: {compact_pad}px {s(12)}px;
         min-height: {compact_min}px; font-size: {s(LABEL_PX)}px; }}
-    QComboBox::drop-down {{ border: none; width: {s(28)}px; subcontrol-origin: padding;
+    /* Choice boxes: soft grey frame, rounder corners, room for the chevron, navy when
+       open or focused. */
+    QComboBox {{ border-color: {GRAY_30}; border-radius: {s(8)}px; padding-right: {s(36)}px; }}
+    QComboBox:hover {{ border-color: {GRAY_50}; }}
+    QComboBox:on, QComboBox:focus {{ border-color: {PRIMARY_FILL}; }}
+    QComboBox:disabled {{ border-color: {GRAY_20}; }}
+    QComboBox::drop-down {{ border: none; width: {s(32)}px; subcontrol-origin: padding;
                             subcontrol-position: center right; }}
     QComboBox#speedCombo {{ border: 1px solid {GRAY_30}; border-radius: {s(4)}px;
         padding: {s(1)}px {s(8)}px; min-height: {s(20)}px; font-size: {s(CAPTION_PX)}px;
@@ -578,7 +592,7 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
         width: {s(10)}px; height: {s(10)}px; }}
     QComboBox {{ combobox-popup: 0; }}
     QComboBox QAbstractItemView {{ background: {SURFACE}; color: {TEXT};
-        border: 1px solid {GRAY_30}; padding: {s(4)}px; outline: 0; }}
+        border: 1px solid {GRAY_20}; border-radius: {s(8)}px; padding: {s(4)}px; outline: 0; }}
     QComboBox QAbstractItemView::item {{ min-height: {s(36)}px; padding: 0 {s(12)}px;
         border-radius: {s(4)}px; color: {TEXT}; }}
     QComboBox QAbstractItemView::item:hover {{ background: {GRAY_5}; }}
@@ -617,7 +631,22 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QListWidget::item:selected {{ background: {PRIMARY_SOFT}; color: {TEXT};
                                   border-left: {s(4)}px solid {PRIMARY_FILL}; }}
     QListWidget::item:hover:!selected {{ background: {GRAY_5}; }}
-    QListWidget#clueList {{ border: none; border-radius: 0; padding: 0; }}
+    QListWidget#clueList {{ border: none; border-top: 1px solid {BORDER}; border-radius: 0;
+        padding: 0; }}
+    /* Clue input bar: source (grey cell) · sentence · navy [+ 추가], one rounded box. */
+    QFrame#clueBar {{ background: {SURFACE}; border: 1px solid {GRAY_30}; border-radius: {s(8)}px; }}
+    QComboBox#clueBarSource {{ background: {GRAY_5}; border: none; border-right: 1px solid {GRAY_20};
+        border-top-left-radius: {s(7)}px; border-bottom-left-radius: {s(7)}px;
+        border-top-right-radius: 0; border-bottom-right-radius: 0;
+        color: {PRIMARY}; font-weight: 700; padding: {s(8)}px {s(10)}px; min-width: {s(84)}px; }}
+    QLineEdit#clueBarText {{ background: transparent; border: none; border-radius: 0;
+        padding: {s(8)}px {s(12)}px; }}
+    QLineEdit#clueBarText:disabled {{ background: transparent; }}
+    QPushButton#clueBarAdd {{ background: {PRIMARY_FILL}; color: {GRAY_0}; border: none;
+        border-radius: 0; border-top-right-radius: {s(7)}px; border-bottom-right-radius: {s(7)}px;
+        padding: 0 {s(14)}px; font-weight: 700; }}
+    QPushButton#clueBarAdd:hover {{ background: {PRIMARY_HOVER}; }}
+    QPushButton#clueBarAdd:disabled {{ background: {GRAY_20}; color: {GRAY_0}; }}
     QLabel#stepNumber {{ background: {NAVY}; color: {GRAY_0}; border-radius: {s(10)}px;
         min-width: {s(20)}px; max-width: {s(20)}px; min-height: {s(20)}px; max-height: {s(20)}px;
         font-size: {s(CAPTION_PX)}px; font-weight: 700; }}

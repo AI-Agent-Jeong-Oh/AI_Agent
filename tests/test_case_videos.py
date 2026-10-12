@@ -487,10 +487,9 @@ class CaseVideoListTests(unittest.TestCase):
 
         dialog = self.window._summary_dialog
         self.assertEqual(dialog.scope, "case")
-        scope = dialog.editors["scope"].toPlainText()
-        self.assertIn("[cam_a]", scope)
-        self.assertIn("[cam_b]", scope)
-        self.assertIn("영상: cam_a.mp4", scope)
+        scope = dialog.editors["appendix"].toPlainText()
+        self.assertIn("○ cam_a.mp4:", scope)
+        self.assertIn("○ cam_b.mp4:", scope)
         self.assertNotIn(str(self.root), scope)
         opinions = dialog.editors["opinions"].toPlainText()
         self.assertIn("A 카메라 저장 메모", opinions)
@@ -498,8 +497,8 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertIn("cam_b: 저장하지 않은 기록 1건", dialog.warning_label.text())
         with patch.object(dialog, "_confirm_regenerate", return_value=True):
             dialog.scope_buttons["camera"].click()
-        self.assertNotIn("[cam_a]", dialog.editors["scope"].toPlainText())
-        self.assertIn("결과 ID: job-b", dialog.editors["scope"].toPlainText())
+        self.assertNotIn("cam_a.mp4", dialog.editors["appendix"].toPlainText())
+        self.assertIn("결과 ID job-b", dialog.editors["appendix"].toPlainText())
         dialog.close()
 
     def test_summary_has_one_scope_when_only_one_camera_has_a_result(self) -> None:
@@ -692,6 +691,11 @@ class StepTwoVideoChoiceTests(unittest.TestCase):
             runner = window._batch_run_worker
             self.assertEqual(window._video_status_text(a)[0], "분석 중")
             self.assertEqual(window._video_status_text(b)[0], "분석 대기")
+            # Progress reads short ("영상 1/2 분석 중") with a bar counting videos.
+            window._on_batch_progress(None, f"일괄 분석 2/2 · cam_b.mp4 · 모델 분석 3/12 프레임")
+            self.assertTrue(window._progress_label.text().startswith("영상 2/2 분석 중"))
+            self.assertNotIn("cam_b", window._progress_label.text())
+            self.assertEqual((window._progress_bar.maximum(), window._progress_bar.value()), (2, 1))
             runner.run()
             runner.isRunning = lambda: False
             window._on_batch_run_finished()

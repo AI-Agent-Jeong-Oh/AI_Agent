@@ -442,15 +442,13 @@ class CandidateReviewPanel(QWidget):
         self.completion_label.setObjectName("subsectionHelp")
         # Wraps instead of widening the title line at large zoom.
         self.completion_label.setWordWrap(True)
-        self.complete_button = QPushButton("분석 완료")
-        self.complete_button.setToolTip(
-            "검토를 마친 시각과 확인 시간을 기록합니다. 완료 후에도 수정할 수 있습니다."
-        )
-        self.summary_button = QPushButton("결과 요약")
+        # The words say what happens (no tooltip box): mark the review done (it can still
+        # be changed), and open the summary draft from the saved records.
+        self.complete_button = QPushButton("검토 완료 기록")
+        self.summary_button = QPushButton("요약 초안 열기")
         # Dense review card: KRDS xsmall buttons keep the step on one screen.
         for button in (self.save_button, self.revert_button, self.complete_button, self.summary_button):
             theme.mark_compact(button)
-        self.summary_button.setToolTip("저장된 검토 기록으로 결과 요약 초안을 엽니다")
         completion_row.addStretch(1)
         completion_row.addWidget(self.completion_label)
         completion_row.addWidget(self.summary_button)
@@ -732,7 +730,7 @@ class CandidateReviewPanel(QWidget):
         return True
 
     def _confirm_completion(self, message: str) -> bool:
-        return confirm(self, "분석 완료", message, confirm_text="완료로 기록")
+        return confirm(self, "검토 완료 기록", message, confirm_text="완료로 기록")
 
     def _refresh_completion_label(self) -> None:
         session = self._session

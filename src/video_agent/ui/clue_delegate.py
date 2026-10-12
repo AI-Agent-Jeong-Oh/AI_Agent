@@ -131,22 +131,40 @@ class ClueItemDelegate(QStyledItemDelegate):
         style.drawPrimitive(
             QStyle.PrimitiveElement.PE_IndicatorItemViewItemCheck, check, painter, opt.widget
         )
-        pad = self._padding(opt)
+        # Everything in a row sits in the middle of its height (a wrapped clue too).
+        middle = opt.rect.center().y()
+        # 150% line height adds its space under each line; half of it is added back on top
+        # so the letters, not the line box, sit in the middle.
+        first_line = document.firstBlock().layout().lineAt(0)
+        leading = (
+            first_line.height() - first_line.ascent() - first_line.descent()
+            if first_line.isValid()
+            else 0
+        )
         painter.save()
-        painter.translate(cells.text.left(), cells.text.top() + pad)
+        painter.translate(cells.text.left(), middle - (document.size().height() - leading) / 2)
         document.drawContents(painter)
         painter.restore()
 
         painter.save()
-        first = QRect(0, cells.text.top() + pad, 0, line)
-        painter.setFont(opt.font)
-        painter.setPen(QColor(theme.TEXT))
-        source_rect = QRect(cells.source.left(), first.top(), cells.source.width(), line)
-        painter.drawText(
-            source_rect,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            self._source_labels[clue.source],
+        first = QRect(0, middle - line // 2, 0, line)
+        # The source as a small grey badge at the right of the first line.
+        small = QFont(opt.font)
+        small.setPixelSize(max(9, round(_px(opt.font) * theme.CAPTION_PX / theme.BODY_PX)))
+        label = self._source_labels[clue.source]
+        metrics = QFontMetrics(small)
+        badge_w = metrics.horizontalAdvance(label) + round(_px(opt.font) * 16 / 16)
+        badge_h = metrics.height() + 4
+        badge = QRect(
+            cells.source.right() - badge_w, first.top() + (line - badge_h) // 2, badge_w, badge_h
         )
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(theme.GRAY_10))
+        painter.drawRoundedRect(badge, badge_h / 2, badge_h / 2)
+        painter.setFont(small)
+        painter.setPen(QColor(theme.TEXT_SUB))
+        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, label)
         enabled = bool(opt.state & QStyle.StateFlag.State_Enabled)
         mode = QIcon.Mode.Normal if enabled else QIcon.Mode.Disabled
         size = round(_px(opt.font) * 18 / 16)
@@ -210,12 +228,15 @@ class ClueItemDelegate(QStyledItemDelegate):
         opt.text = ""
         style = opt.widget.style() if opt.widget is not None else QApplication.style()
         cells = self.columns(opt.rect, opt.font)
-        document = self.document(opt, clue, cells.text.width())
+        # A clue left out of the analysis reads grey.
+        state = index.data(Qt.ItemDataRole.CheckStateRole)
+        muted = state is not None and Qt.CheckState(state) == Qt.CheckState.Unchecked
+        document = self.document(opt, clue, cells.text.width(), muted=muted)
         document.size()  # lays the text out so the first line height is known
         first = document.firstBlock().layout()
         line = round(first.lineAt(0).height()) if first.lineCount() else QFontMetrics(opt.font).height()
         indicator = round(_px(opt.font) * 20 / 16)
-        top = cells.text.top() + self._padding(opt) + round((line - indicator) / 2)
+        top = opt.rect.center().y() - indicator // 2
         check_rect = QRect(cells.check.left(), top, indicator, indicator)
         return opt, style, cells, check_rect, document, line
 
@@ -240,13 +261,15 @@ class ClueItemDelegate(QStyledItemDelegate):
     def _padding(opt: QStyleOptionViewItem) -> int:
         return max(4, round(_px(opt.font) * 10 / 16))
 
-    def document(self, opt: QStyleOptionViewItem, clue: AnalysisClue, width: int) -> QTextDocument:
+    def document(
+        self, opt: QStyleOptionViewItem, clue: AnalysisClue, width: int, *, muted: bool = False
+    ) -> QTextDocument:
         # KRDS body-medium 17px for the clue sentence (relative to the 16px body).
         base = _px(opt.font)
         sentence_size = base * theme.CONTENT_PX / theme.BODY_PX
         markup = (
             f'<p style="margin:0; font-size:{sentence_size:.0f}px; line-height:150%; '
-            f'color:{theme.TEXT};">{html.escape(clue.text)}</p>'
+            f'color:{theme.TEXT_MUTED if muted else theme.TEXT};">{html.escape(clue.text)}</p>'
         )
         document = QTextDocument()
         document.setDocumentMargin(0)
@@ -308,8 +331,9 @@ class ClueHeader(QWidget):
 class ClueList(QListWidget):
     """The clue rows; says so when there are none yet.
 
-    Clicking the chosen row again, or an empty part of the table, lets go of it (the
-    edit above is left without saving).
+    A clue is edited only from its pencil mark: clicking the sentence does not pick it
+    (picking it by accident made the next new clue overwrite it). While one is being
+    edited, a click anywhere else in the table lets go of it (nothing is saved).
     """
 
     EMPTY_TEXT = "등록된 단서가 없습니다"
@@ -320,25 +344,41 @@ class ClueList(QListWidget):
         self.setObjectName("clueList")
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
+    def _on_marks(self, event: QMouseEvent) -> bool:
+        """Whether the click is on a row's check box or its edit/delete marks."""
         item = self.itemAt(event.position().toPoint())
-        chosen = self.currentItem()
-        if item is None or (item is chosen and item.isSelected()):
-            # Leave the check box and the row marks to the delegate.
+        if item is None:
+            return False
+        option = QStyleOptionViewItem()
+        self.initViewItemOption(option)
+        option.rect = self.visualItemRect(item)
+        cells = self.itemDelegate().columns(option.rect, option.font)
+        point = event.position().toPoint()
+        return any(cell.contains(point) for cell in (cells.check, cells.edit, cells.remove))
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
+        if self._on_marks(event):
+            # The delegate toggles the check box or opens the edit; no row is picked here.
             index = self.indexAt(event.position().toPoint())
-            option = QStyleOptionViewItem()
-            self.initViewItemOption(option)
-            if item is not None:
-                option.rect = self.visualItemRect(item)
-                cells = self.itemDelegate().columns(option.rect, option.font)
-                point = event.position().toPoint()
-                if any(cell.contains(point) for cell in (cells.check, cells.edit, cells.remove)):
-                    super().mousePressEvent(event)
-                    return
-            if index.isValid() or chosen is not None:
-                self.release_requested.emit()
-                return
-        super().mousePressEvent(event)
+            self.itemDelegate().editorEvent(event, self.model(), self.viewOptions(index), index)
+            return
+        chosen = self.currentItem()
+        if chosen is not None and chosen.isSelected():
+            self.release_requested.emit()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
+        if self._on_marks(event):
+            index = self.indexAt(event.position().toPoint())
+            self.itemDelegate().editorEvent(event, self.model(), self.viewOptions(index), index)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
+        return
+
+    def viewOptions(self, index) -> QStyleOptionViewItem:  # noqa: N802 - small helper
+        option = QStyleOptionViewItem()
+        self.initViewItemOption(option)
+        option.rect = self.visualRect(index)
+        return option
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 - Qt API
         super().paintEvent(event)

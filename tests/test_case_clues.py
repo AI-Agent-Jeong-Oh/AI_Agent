@@ -41,8 +41,11 @@ class CaseClueTests(unittest.TestCase):
         panel = self.panel
         panel.clue_text.setText(text)
         panel.clue_source.setCurrentIndex(panel.clue_source.findData(source))
-        panel.clue_use.setChecked(use)
         panel.add_clue_button.click()
+        if not use:
+            # New clues are used; the check in the list takes one out.
+            item = panel.clue_list.item(panel.clue_list.count() - 1)
+            item.setCheckState(Qt.CheckState.Unchecked)
 
     def test_new_clues_are_unconfirmed_and_use_is_the_check(self) -> None:
         self.add("신고 단서")
@@ -56,6 +59,18 @@ class CaseClueTests(unittest.TestCase):
         self.assertEqual(self.panel.clue_count_label.text(), "분석 사용 2 / 전체 3")
         self.assertFalse(hasattr(self.panel, "clue_certainty"))
 
+    def test_clicking_a_sentence_does_not_turn_the_next_clue_into_an_edit(self) -> None:
+        self.add("첫 단서")
+        self.panel.show()
+        self.app.processEvents()
+        clue_list = self.panel.clue_list
+        row = clue_list.visualItemRect(clue_list.item(0))
+        QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=row.center())
+        self.assertIsNone(self.panel._editing_clue_row())
+        self.assertEqual(self.panel.add_clue_button.text(), "추가")
+        self.add("둘째 단서")
+        self.assertEqual([clue.text for clue in self.panel.clues()], ["첫 단서", "둘째 단서"])
+
     def test_selected_clue_is_edited_in_place(self) -> None:
         self.add("처음 문장", ClueSource.REPORT)
         self.add("다른 단서", use=False)
@@ -66,7 +81,6 @@ class CaseClueTests(unittest.TestCase):
         self.assertEqual(self.panel.clue_text.text(), "처음 문장")
         self.assertEqual(self.panel.add_clue_button.text(), "변경 저장")
         self.assertFalse(hasattr(self.panel, "cancel_clue_edit_button"))  # no "선택 해제"
-        self.assertFalse(self.panel.clue_use.isEnabled())
 
         self.panel.clue_text.setText("고친 문장")
         self.panel.clue_source.setCurrentIndex(
@@ -83,8 +97,7 @@ class CaseClueTests(unittest.TestCase):
         self.assertFalse(other.use_for_analysis)
         self.assertEqual(len(self.panel.clues()), 2)
         self.assertGreater(self.changes, before)
-        self.assertEqual(self.panel.add_clue_button.text(), "단서 추가")
-        self.assertTrue(self.panel.clue_use.isEnabled())
+        self.assertEqual(self.panel.add_clue_button.text(), "추가")
         self.assertEqual(self.panel.clue_text.text(), "")
 
     def test_leaving_an_edit_changes_nothing(self) -> None:
@@ -100,7 +113,7 @@ class CaseClueTests(unittest.TestCase):
             self.panel.clue_text.setText("저장하지 않을 문장")
             action()
             self.assertEqual(self.panel.clues(), saved)
-            self.assertEqual(self.panel.add_clue_button.text(), "단서 추가")
+            self.assertEqual(self.panel.add_clue_button.text(), "추가")
             self.assertEqual(self.panel.clue_text.text(), "")
 
         # Esc in the sentence field.
@@ -166,7 +179,7 @@ class CaseClueTests(unittest.TestCase):
         self.assertGreater(long_height, short_height)
         self.assertEqual(clue_list.horizontalScrollBar().maximum(), 0)
 
-    def test_only_the_check_box_beside_the_first_line_toggles_analysis_use(self) -> None:
+    def test_only_the_check_box_in_the_middle_of_the_row_toggles_analysis_use(self) -> None:
         self.add(LONG_CLUE)
         self.panel.show()
         self.app.processEvents()
@@ -177,8 +190,8 @@ class CaseClueTests(unittest.TestCase):
         option.rect = clue_list.visualItemRect(item)
         delegate = clue_list.itemDelegate()
         check_rect = delegate._layout(option, clue_list.model().index(0, 0), item.data(Qt.ItemDataRole.UserRole))[3]
-        # Beside the first line, not centred on the wrapped row.
-        self.assertLess(check_rect.center().y(), option.rect.center().y())
+        # Centred on the row's height, like the sentence (a wrapped clue too).
+        self.assertLessEqual(abs(check_rect.center().y() - option.rect.center().y()), 1)
 
         QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=check_rect.center())
         self.assertFalse(self.panel.clues()[0].use_for_analysis)
@@ -206,7 +219,8 @@ class CaseClueTests(unittest.TestCase):
         self.assertLess(cells.source.right(), cells.edit.left())
         self.assertLess(cells.edit.right(), cells.remove.left())
         self.assertFalse(hasattr(cells, "certainty"))
-        self.assertFalse(self.panel.clue_header.isHidden())
+        # No header line: each row shows check, sentence, source badge and marks.
+        self.assertTrue(self.panel.clue_header.isHidden())
 
     def test_row_marks_edit_and_delete(self) -> None:
         self.add("첫 단서")

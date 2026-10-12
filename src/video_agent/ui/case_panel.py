@@ -5,7 +5,6 @@ from uuid import uuid4
 
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -35,7 +34,6 @@ from video_agent.ui.card import Card
 from video_agent.ui.clue_delegate import ClueHeader, ClueItemDelegate, ClueList
 from video_agent.ui.datetime_field import DateTimeField
 from video_agent.ui.disclosure import DisclosureButton
-from video_agent.ui.flow_layout import FlowRow
 from video_agent.ui.focus_panel import CaseTypeChooser
 from video_agent.ui.wrap_label import WrapLabel
 
@@ -181,43 +179,35 @@ class CaseContextPanel(Card):
         title_row.addWidget(self.clue_count_label, 0, Qt.AlignmentFlag.AlignBottom)
         layout.addLayout(title_row)
 
-        editor = QWidget()
-        editor.setObjectName("clueEditor")
-        editor_layout = QVBoxLayout(editor)
-        editor_layout.setContentsMargins(0, 0, 0, 0)
-        # The source is chosen first; the sentence field opens after it. Clues are not
-        # rated for certainty: none of them is checked against the video yet (미확인).
-        clue_row = FlowRow(spacing=16)
-        source_label = QLabel("출처")
-        source_label.setObjectName("fieldLabel")
+        # One input bar: source (grey cell) · sentence · [+ 추가]. Choosing the source moves
+        # straight to the sentence; Enter adds. New clues are used for analysis; the check
+        # in the list below takes one out or puts it back. Clues are not rated for
+        # certainty: none of them is checked against the video yet (미확인).
+        bar = QFrame()
+        bar.setObjectName("clueBar")
+        bar_layout = QHBoxLayout(bar)
+        bar_layout.setContentsMargins(0, 0, 0, 0)
+        bar_layout.setSpacing(0)
         self.clue_source = QComboBox()
+        self.clue_source.setObjectName("clueBarSource")
         self.clue_source.setAccessibleName("출처")
-        self.clue_source.setPlaceholderText("선택")
+        self.clue_source.setPlaceholderText("출처")
         for value, label in SOURCE_LABELS.items():
             self.clue_source.addItem(label, value)
         self._clear_clue_choices()
-        self.clue_use = QCheckBox("분석 사용")
-        self.clue_use.setChecked(True)
-        # Label and choice stay together; the groups wrap at large text sizes.
-        for parts in ((source_label, self.clue_source),):
-            group = QWidget()
-            group_layout = QHBoxLayout(group)
-            group_layout.setContentsMargins(0, 0, 0, 0)
-            for part in parts:
-                group_layout.addWidget(part)
-            clue_row.flow.addWidget(group)
-        clue_row.flow.addWidget(self.clue_use)
-        editor_layout.addWidget(clue_row)
-
         self.clue_text = QLineEdit()
+        self.clue_text.setObjectName("clueBarText")
         self.clue_text.setAccessibleName("단서 문장")
-        self.add_clue_button = QPushButton("단서 추가")
-        theme.set_icon(self.add_clue_button, "plus")
-        text_row = QHBoxLayout()
-        text_row.addWidget(self.clue_text, 1)
-        text_row.addWidget(self.add_clue_button)
-        editor_layout.addLayout(text_row)
-        layout.addWidget(editor)
+        self.add_clue_button = QPushButton("추가")
+        self.add_clue_button.setObjectName("clueBarAdd")
+        theme.set_icon(self.add_clue_button, "plus", theme.GRAY_0)
+        # Every part fills the bar's height, so it reads as one box.
+        for part in (self.clue_source, self.clue_text, self.add_clue_button):
+            part.setSizePolicy(part.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Expanding)
+        bar_layout.addWidget(self.clue_source)
+        bar_layout.addWidget(self.clue_text, 1)
+        bar_layout.addWidget(self.add_clue_button)
+        layout.addWidget(bar)
 
         # A table like the CCTV video list: grey header, one line per clue.
         self.clue_list = ClueList()
@@ -237,8 +227,11 @@ class CaseContextPanel(Card):
         self.clue_list.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self.clue_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.clue_header = ClueHeader(self.clue_list, self._clue_delegate)
+        # Rows speak for themselves (check · sentence · source badge · marks): no header.
+        self.clue_header.setVisible(False)
         table = QVBoxLayout()
         table.setSpacing(0)
+        table.addSpacing(8)
         table.addWidget(self.clue_header)
         table.addWidget(self.clue_list, 1)
         layout.addLayout(table, 1)
@@ -268,6 +261,8 @@ class CaseContextPanel(Card):
         self._clue_delegate.edit_requested.connect(self.clue_list.setCurrentRow)
         self._clue_delegate.remove_requested.connect(self._remove_clue_row)
         self.clue_source.currentIndexChanged.connect(lambda _index: self._update_clue_inputs())
+        # A source picked by hand goes straight on to the sentence.
+        self.clue_source.activated.connect(lambda _index: self.clue_text.setFocus())
         self.title_edit.textChanged.connect(lambda _text: self.title_error.setVisible(False))
         self.save_button.clicked.connect(self.save_requested.emit)
         self.load_button.clicked.connect(self._show_case_menu)
@@ -359,7 +354,7 @@ class CaseContextPanel(Card):
             text=text,
             source=self.clue_source.currentData(),
             certainty=InformationCertainty.UNKNOWN,
-            use_for_analysis=self.clue_use.isChecked(),
+            use_for_analysis=True,
         )
         self._append_clue(clue)
         self.clue_text.clear()
@@ -383,8 +378,7 @@ class CaseContextPanel(Card):
         else:
             self.clue_text.clear()
             self._restore_clue_choices()
-        self.add_clue_button.setText("변경 저장" if editing else "단서 추가")
-        self.clue_use.setEnabled(not editing and self._editing_enabled)
+        self.add_clue_button.setText("변경 저장" if editing else "추가")
         self._update_clue_inputs()
 
     def _clear_clue_choices(self) -> None:
@@ -407,9 +401,7 @@ class CaseContextPanel(Card):
         self.clue_text.setEnabled(ready)
         self.add_clue_button.setEnabled(ready)
         self.clue_text.setPlaceholderText(
-            "예: 신고자는 사람이 문 앞 상자를 들어 이동했다고 설명함"
-            if ready
-            else "출처를 먼저 선택하세요"
+            "단서 문장을 쓰고 Enter" if ready else "← 출처를 먼저 고르세요"
         )
 
     def require_title(self) -> bool:
@@ -566,10 +558,8 @@ class CaseContextPanel(Card):
             self.notes_edit,
             self.clue_text,
             self.clue_source,
-            self.clue_use,
             self.add_clue_button,
             self.clue_list,
         ):
             widget.setEnabled(enabled)
-        self.clue_use.setEnabled(enabled and self._editing_clue_row() is None)
         self._update_clue_inputs()

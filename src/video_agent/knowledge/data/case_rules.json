@@ -1,0 +1,283 @@
+{
+  "description": "사건 유형별 참고 법령. 폭행·아동학대·실종은 팀 시연 자료(영상수사.html)에서 옮겼고(origin=demo), 절도는 시연 자료에 없어 앱에서 형법 조문 이름으로 추가함(origin=app, 원문 확인 필요). 제목·출처·링크만 보관하며 본문은 넣지 않음.",
+  "source_name": "국가법령정보센터",
+  "checked_on": "2026-10-07",
+  "rules": [
+    {
+      "rule_id": "crim-260",
+      "law_name": "형법",
+      "article": "제260조(폭행, 존속폭행) 제1항·제3항",
+      "case_types": [
+        "폭행"
+      ],
+      "source": "형법 · 법률 제22007호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/형법/제260조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "crim-257",
+      "law_name": "형법",
+      "article": "제257조(상해, 존속상해) 제1항",
+      "case_types": [
+        "폭행"
+      ],
+      "source": "형법 · 법률 제22007호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/형법/제257조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "crim-261",
+      "law_name": "형법",
+      "article": "제261조(특수폭행)",
+      "case_types": [
+        "폭행"
+      ],
+      "source": "형법 · 법률 제22007호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/형법/제261조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "crim-262",
+      "law_name": "형법",
+      "article": "제262조(폭행치사상)",
+      "case_types": [
+        "폭행"
+      ],
+      "source": "형법 · 법률 제22007호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/형법/제262조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "crim-264",
+      "law_name": "형법",
+      "article": "제264조(상습범)",
+      "case_types": [
+        "폭행"
+      ],
+      "source": "형법 · 법률 제22007호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/형법/제264조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "cwa-3-7",
+      "law_name": "아동복지법",
+      "article": "제3조(정의) 제7호",
+      "case_types": [
+        "아동학대"
+      ],
+      "source": "아동복지법 · 법률 제22022호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/아동복지법/제3조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "cwa-3-3",
+      "law_name": "아동복지법",
+      "article": "제3조(정의) 제3호",
+      "case_types": [
+        "아동학대"
+      ],
+      "source": "아동복지법 · 법률 제22022호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/아동복지법/제3조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "cwa-17",
+      "law_name": "아동복지법",
+      "article": "제17조(금지행위) 제3호·제5호·제6호",
+      "case_types": [
+        "아동학대"
+      ],
+      "source": "아동복지법 · 법률 제22022호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/아동복지법/제17조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "acp-2-4",
+      "law_name": "아동학대범죄의 처벌 등에 관한 특례법",
+      "article": "제2조(정의) 제4호",
+      "case_types": [
+        "아동학대"
+      ],
+      "source": "아동학대범죄의 처벌 등에 관한 특례법 · 법률 제21999호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/아동학대범죄의 처벌 등에 관한 특례법/제2조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "acp-6",
+      "law_name": "아동학대범죄의 처벌 등에 관한 특례법",
+      "article": "제6조(상습범)",
+      "case_types": [
+        "아동학대"
+      ],
+      "source": "아동학대범죄의 처벌 등에 관한 특례법 · 법률 제21999호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/아동학대범죄의 처벌 등에 관한 특례법/제6조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "acp-7",
+      "law_name": "아동학대범죄의 처벌 등에 관한 특례법",
+      "article": "제7조(아동복지시설의 종사자 등에 대한 가중처벌)",
+      "case_types": [
+        "아동학대"
+      ],
+      "source": "아동학대범죄의 처벌 등에 관한 특례법 · 법률 제21999호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/아동학대범죄의 처벌 등에 관한 특례법/제7조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "acp-10-2-12",
+      "law_name": "아동학대범죄의 처벌 등에 관한 특례법",
+      "article": "제10조(아동학대범죄 신고의무와 절차) 제2항 제12호",
+      "case_types": [
+        "아동학대"
+      ],
+      "source": "아동학대범죄의 처벌 등에 관한 특례법 · 법률 제21999호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/아동학대범죄의 처벌 등에 관한 특례법/제10조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "mca-2",
+      "law_name": "실종아동등의 보호 및 지원에 관한 법률",
+      "article": "제2조(정의) 제1호·제2호",
+      "case_types": [
+        "실종"
+      ],
+      "source": "실종아동등의 보호 및 지원에 관한 법률 · 법률 제21108호 (시행 2026. 5. 12.)",
+      "source_url": "https://www.law.go.kr/법령/실종아동등의 보호 및 지원에 관한 법률/제2조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "mca-9-2-1",
+      "law_name": "실종아동등의 보호 및 지원에 관한 법률",
+      "article": "제9조의2(실종아동등 발견을 위한 정보 제공 요청 등) 제1항 제1호",
+      "case_types": [
+        "실종"
+      ],
+      "source": "실종아동등의 보호 및 지원에 관한 법률 · 법률 제21108호 (시행 2026. 5. 12.)",
+      "source_url": "https://www.law.go.kr/법령/실종아동등의 보호 및 지원에 관한 법률/제9조의2",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "mca-9-2-2",
+      "law_name": "실종아동등의 보호 및 지원에 관한 법률",
+      "article": "제9조의2 제2항",
+      "case_types": [
+        "실종"
+      ],
+      "source": "실종아동등의 보호 및 지원에 관한 법률 · 법률 제21108호 (시행 2026. 5. 12.)",
+      "source_url": "https://www.law.go.kr/법령/실종아동등의 보호 및 지원에 관한 법률/제9조의2",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "mcd-4-5",
+      "law_name": "실종아동등의 보호 및 지원에 관한 법률 시행령",
+      "article": "제4조의5 제2항",
+      "case_types": [
+        "실종"
+      ],
+      "source": "실종아동등의 보호 및 지원에 관한 법률 시행령 · 대통령령 제36301호 (시행 2026. 5. 12.)",
+      "source_url": "https://www.law.go.kr/법령/실종아동등의 보호 및 지원에 관한 법률 시행령/제4조의5",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "mrule-2",
+      "law_name": "실종아동등 및 가출인 업무처리 규칙",
+      "article": "제2조(정의) 제5호·제6호",
+      "case_types": [
+        "실종"
+      ],
+      "source": "실종아동등 및 가출인 업무처리 규칙 · 경찰청예규 제631호 (시행 2024. 9. 27.)",
+      "source_url": "https://www.law.go.kr/LSW/admRulLsInfoP.do?admRulId=20132&efYd=0",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "mrule-14-2",
+      "law_name": "실종아동등 및 가출인 업무처리 규칙",
+      "article": "제14조 제2항",
+      "case_types": [
+        "실종"
+      ],
+      "source": "실종아동등 및 가출인 업무처리 규칙 · 경찰청예규 제631호 (시행 2024. 9. 27.)",
+      "source_url": "https://www.law.go.kr/LSW/admRulLsInfoP.do?admRulId=20132&efYd=0",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "mrule-19-1",
+      "law_name": "실종아동등 및 가출인 업무처리 규칙",
+      "article": "제19조(추적 및 수사) 제1항",
+      "case_types": [
+        "실종"
+      ],
+      "source": "실종아동등 및 가출인 업무처리 규칙 · 경찰청예규 제631호 (시행 2024. 9. 27.)",
+      "source_url": "https://www.law.go.kr/LSW/admRulLsInfoP.do?admRulId=20132&efYd=0",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "mrule-19-2",
+      "law_name": "실종아동등 및 가출인 업무처리 규칙",
+      "article": "제19조(추적 및 수사) 제2항",
+      "case_types": [
+        "실종"
+      ],
+      "source": "실종아동등 및 가출인 업무처리 규칙 · 경찰청예규 제631호 (시행 2024. 9. 27.)",
+      "source_url": "https://www.law.go.kr/LSW/admRulLsInfoP.do?admRulId=20132&efYd=0",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "psr-79",
+      "law_name": "경찰수사규칙",
+      "article": "제79조(피해자 보호의 원칙) 제2항",
+      "case_types": [
+        "폭행",
+        "아동학대"
+      ],
+      "source": "경찰수사규칙 · 행정안전부령 제649호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/경찰수사규칙/제79조",
+      "origin": "demo"
+    },
+    {
+      "rule_id": "crim-329",
+      "law_name": "형법",
+      "article": "제329조(절도)",
+      "case_types": [
+        "절도"
+      ],
+      "source": "형법 · 법률 제22007호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/형법/제329조",
+      "origin": "app"
+    },
+    {
+      "rule_id": "crim-330",
+      "law_name": "형법",
+      "article": "제330조(야간주거침입절도)",
+      "case_types": [
+        "절도"
+      ],
+      "source": "형법 · 법률 제22007호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/형법/제330조",
+      "origin": "app"
+    },
+    {
+      "rule_id": "crim-331",
+      "law_name": "형법",
+      "article": "제331조(특수절도)",
+      "case_types": [
+        "절도"
+      ],
+      "source": "형법 · 법률 제22007호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/형법/제331조",
+      "origin": "app"
+    },
+    {
+      "rule_id": "crim-366",
+      "law_name": "형법",
+      "article": "제366조(재물손괴등)",
+      "case_types": [
+        "절도"
+      ],
+      "source": "형법 · 법률 제22007호 (시행 2026. 10. 2.)",
+      "source_url": "https://www.law.go.kr/법령/형법/제366조",
+      "origin": "app"
+    }
+  ]
+}
