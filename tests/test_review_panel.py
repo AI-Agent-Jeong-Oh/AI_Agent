@@ -673,13 +673,14 @@ class MainWindowReviewIntegrationTests(unittest.TestCase):
         combo.setCurrentIndex(combo.findText("0.5×"))
         self.window._player.setPlaybackRate.assert_called_with(0.5)
 
-    def test_play_button_keeps_its_width_when_playing(self) -> None:
+    def test_play_button_is_an_icon_that_switches_to_pause(self) -> None:
         button = self.window._play_button
-        width = button.width()
+        self.assertEqual(button.text(), "")
+        self.assertEqual(button.accessibleName(), "재생")
         self.window._on_playback_state_changed(QMediaPlayer.PlaybackState.PlayingState)
-        self.assertEqual(button.text(), "일시정지")
-        self.assertEqual(button.width(), width)
-        self.assertEqual(button.minimumWidth(), button.maximumWidth())
+        self.assertEqual(button.text(), "")
+        self.assertEqual(button.accessibleName(), "일시정지")
+        self.assertEqual(button.property("iconName"), "pause")
 
     def test_playback_range_is_clamped_to_video_and_stops_at_end(self) -> None:
         self.window._duration_ms = 30_000

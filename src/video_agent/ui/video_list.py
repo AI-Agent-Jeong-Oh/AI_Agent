@@ -194,8 +194,16 @@ class CaseVideoList(Card):
 
     def apply_scale(self, scaled) -> None:
         self.list.verticalHeader().setDefaultSectionSize(row_height(self.list.font()))
-        self.list.setMinimumHeight(scaled(96))
-        self.list.setMaximumHeight(scaled(190))
+        self._max_table_height = scaled(190)
+        self._fit_table_height()
+
+    def _fit_table_height(self) -> None:
+        """As tall as its rows (at least one, at most the old height, then it scrolls),
+        so the space goes to the video below."""
+        header = self.list.horizontalHeader().sizeHint().height()
+        rows = max(1, self.list.rowCount())
+        height = header + rows * self.list.verticalHeader().defaultSectionSize() + 2
+        self.list.setFixedHeight(min(height, getattr(self, "_max_table_height", 190)))
 
     @property
     def entries(self) -> tuple[VideoEntry, ...]:
@@ -243,6 +251,7 @@ class CaseVideoList(Card):
                 self.list.setCurrentCell(-1, -1)
         finally:
             self._refreshing = False
+        self._fit_table_height()
         description = self.summary_text()
         if self._select_only:
             description += " · 목록에서 고르면 그 영상을 엽니다"

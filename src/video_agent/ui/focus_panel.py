@@ -31,14 +31,8 @@ from video_agent.agent.situations import (
 )
 from video_agent.contracts import FocusSituation
 from video_agent.ui import theme
-from video_agent.ui.popover import info_mark
 
 OTHER_TYPE = "기타"
-FOCUS_HELP = (
-    "선택한 상황은 확인 순서에만 반영합니다. 선택하지 않은 상황도 분석합니다. "
-    "찾을 사람·물건의 특징은 ① 분석 단서에 출처와 함께 적어 주세요. "
-    "범죄 여부를 판단하는 기준이 아닙니다."
-)
 
 
 class CaseTypeChooser(QWidget):
@@ -171,7 +165,6 @@ class FocusSection(QWidget):
         self.count_label = QLabel("선택 없음")
         self.count_label.setObjectName("subsectionAside")
         title_row.addWidget(title)
-        title_row.addWidget(info_mark(FOCUS_HELP, "우선 확인할 상황 안내"))
         title_row.addStretch(1)
         title_row.addWidget(self.count_label)
         layout.addLayout(title_row)

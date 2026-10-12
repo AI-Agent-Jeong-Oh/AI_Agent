@@ -105,9 +105,8 @@ class CaseContextPanel(Card):
         # menu beside saving, at the right of the header.
         self.add_header_widget(
             info_mark(
-                "사건명·유형·관리 메모는 저장용이며 모델에 보내지 않습니다. "
-                "아래 단서 중 '분석 사용'으로 체크한 항목만 계획에 포함됩니다. "
-                "사전 정보는 영상에서 확인된 사실이 아닙니다.",
+                "사건명·관리 메모는 AI에 보내지 않습니다. 체크한 단서만 분석에 쓰며, "
+                "단서는 영상으로 확인한 사실이 아닙니다.",
                 "사건 정보 안내",
             ),
             after_title=True,

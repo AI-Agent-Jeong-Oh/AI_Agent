@@ -103,7 +103,7 @@ from video_agent.ui.motion_table import MotionHeader, MotionItemDelegate
 from video_agent.ui.judgement_marks import JUDGEMENT_MARKS
 from video_agent.ui.time_field import TimeSpinBox, format_time
 from video_agent.ui.timeline import TimelineLegend, TimelineMark, TimelineSlider
-from video_agent.ui.popover import InfoPopover, info_mark
+from video_agent.ui.popover import info_mark
 from video_agent.ui.step_section import StepSection
 from video_agent.ui import theme
 from video_agent.ui.video_list import CaseVideoList, VideoEntry
@@ -114,7 +114,7 @@ from video_agent.review.summary import (
     build_summary,
 )
 from video_agent.ui.case_overview import CaseCandidateOverview, OverviewRow
-from video_agent.ui.review_panel import JUDGEMENT_LABELS, SHORTCUT_HELP, CandidateReviewPanel
+from video_agent.ui.review_panel import JUDGEMENT_LABELS, CandidateReviewPanel
 from video_agent.ui.summary_dialog import ResultSummaryDialog
 from video_agent.ui.wrap_label import WrapLabel
 from video_agent.video.files import (
@@ -538,16 +538,14 @@ class MainWindow(QMainWindow):
         self._video_stack.addWidget(self._video_widget)
         layout.addWidget(self._video_stack, 1)
 
-        # Like the demo page: the playback bar takes a full line, the buttons sit below it.
-        # Also marks the analysed candidate segments once a result for this video is shown.
+        # One line under the video (buttons, playback bar, time, speed), so the picture
+        # keeps the height. The bar also marks the analysed candidate segments.
         self._timeline = TimelineSlider()
         self._timeline.setRange(0, 0)
         self._timeline.setAccessibleName("재생 위치")
-        layout.addWidget(self._timeline)
-        # Names the candidate marks; shown only while the bar has marks.
+        # Names the candidate marks; shown under the line only while the bar has marks.
         self._timeline_legend = TimelineLegend()
         self._timeline_legend.setVisible(False)
-        layout.addWidget(self._timeline_legend)
 
         controls = QHBoxLayout()
         controls.setSpacing(4)
@@ -564,18 +562,19 @@ class MainWindow(QMainWindow):
             button.setAccessibleName(name)
         # Only "처음으로" needs a hover note (it returns to the played range first).
         self._start_button.setToolTip("처음으로 (구간 재생 중이면 구간 처음)")
-        self._play_button = QPushButton("재생")
-        theme.set_icon(self._play_button, "play")
-        theme.mark_compact(self._play_button)
+        # Icon only, like the buttons beside it; the name stays for screen readers.
+        self._play_button = QPushButton()
+        self._play_button.setObjectName("playerIcon")
+        theme.set_icon(self._play_button, "play", theme.TEXT)
+        self._play_button.setAccessibleName("재생")
         self._time_label = QLabel("00:00 / 00:00")
         self._time_label.setObjectName("playerTime")
         self._time_label.setAccessibleName("재생 시각")
         time_font = self._time_label.font()
         time_font.setFeature(QFont.Tag("tnum"), 1)  # digits keep their width while playing
         self._time_label.setFont(time_font)
-        speed_label = QLabel("속도")
-        speed_label.setObjectName("fieldLabel")
         self._speed_combo = QComboBox()
+        self._speed_combo.setToolTip("재생 속도")
         self._speed_combo.setAccessibleName("재생 속도")
         for rate in PLAYBACK_RATES:
             self._speed_combo.addItem(f"{rate:g}×", rate)
@@ -585,11 +584,13 @@ class MainWindow(QMainWindow):
         controls.addWidget(self._back_button)
         controls.addWidget(self._play_button)
         controls.addWidget(self._forward_button)
+        controls.addSpacing(6)
+        controls.addWidget(self._timeline, 1)
+        controls.addSpacing(6)
         controls.addWidget(self._time_label)
-        controls.addStretch(1)
-        controls.addWidget(speed_label)
         controls.addWidget(self._speed_combo)
         layout.addLayout(controls)
+        layout.addWidget(self._timeline_legend)
         return panel
 
     def _build_analysis_panel(self) -> tuple[QWidget, QWidget, QWidget]:
@@ -731,12 +732,6 @@ class MainWindow(QMainWindow):
         # The explanation sits behind ⓘ; its text follows the purpose (see _motion_help).
         self._motion_help.setVisible(False)
         self._motion_note.setVisible(False)
-        self._motion_info_button = QPushButton("안내")
-        self._motion_info_button.setObjectName("infoMark")
-        theme.set_icon(self._motion_info_button, "info", theme.PRIMARY)
-        self._motion_info_button.setAccessibleName("움직임 구간 안내")
-        self._motion_info_button.clicked.connect(self._show_motion_help)
-        range_part.add_header_widget(self._motion_info_button)
         range_line = QHBoxLayout()
         range_line.addWidget(self._motion_scan_button)
         range_line.addSpacing(8)
@@ -835,14 +830,12 @@ class MainWindow(QMainWindow):
         result_group = Card("중요 구간 후보")
         result_layout = QVBoxLayout(result_group.body)
         result_layout.setContentsMargins(12, 8, 12, 8)
-        help_text = (
-            "후보를 선택하면 맥락 확인을 위해 원본 영상이 확인용 범위 시작의 최대 1초 전으로 이동하고, "
-            "표시된 근거 범위를 지나 계속 재생합니다. "
-            "입력한 분석 구간 수와 결과 후보 수는 같지 않을 수 있으며, 결과는 0개·1개·여러 개이거나 중복 정리로 합쳐질 수 있습니다.\n"
-            + SHORTCUT_HELP
+        # Only what helps the work: the review keys (behind a mark, so the step fits).
+        help_label = info_mark(
+            "후보 목록을 누른 뒤\n1 관련 있음 · 2 추가 확인 · 3 제외 · 0 미검토\nSpace 재생 · ↑↓ 다른 후보",
+            "검토 단축키",
+            "단축키",
         )
-        # Kept as a tooltip (like the demo's info marks) so the review step fits one screen.
-        help_label = info_mark(help_text, "후보 재생과 결과 수 안내", "재생 안내")
         saved_row = QHBoxLayout()
         self._saved_results_combo = QComboBox()
         self._saved_results_combo.setAccessibleName("이 영상의 저장된 분석 결과")
@@ -1098,8 +1091,6 @@ class MainWindow(QMainWindow):
             step_layout.setSpacing(scaled(16))
         # Two lines above the video; longer purposes scroll inside the box.
         self._purpose_edit.setFixedHeight(scaled(64))
-        # Fixed so "재생" and "일시정지" do not move the buttons beside it.
-        self._play_button.setFixedWidth(scaled(104))
         # Room above the bar for the small bookmark over a candidate mark.
         self._timeline.setMinimumHeight(scaled(38))
         self._motion_list.setMinimumHeight(scaled(128))
@@ -2060,8 +2051,8 @@ class MainWindow(QMainWindow):
 
     def _on_playback_state_changed(self, state: QMediaPlayer.PlaybackState) -> None:
         playing = state is QMediaPlayer.PlaybackState.PlayingState
-        self._play_button.setText("일시정지" if playing else "재생")
-        theme.set_icon(self._play_button, "pause" if playing else "play")
+        self._play_button.setAccessibleName("일시정지" if playing else "재생")
+        theme.set_icon(self._play_button, "pause" if playing else "play", theme.TEXT)
 
     def _skip_playback(self, seconds: int) -> None:
         position = self._player.position() + seconds * 1000
@@ -3049,20 +3040,6 @@ class MainWindow(QMainWindow):
             self._plan_parts[index].set_open(False)
         else:
             self._open_plan_part(index)
-
-    def _show_motion_help(self) -> None:
-        text = "\n".join(
-            item
-            for item in (
-                self._motion_help.text(),
-                self._motion_note.text(),
-                "직접 시작·종료를 입력해도 됩니다. 비워 두면 영상 전체를 봅니다.",
-            )
-            if item
-        )
-        InfoPopover("움직임 구간 안내", text, self._motion_info_button).show_below(
-            self._motion_info_button
-        )
 
     def _refresh_plan_parts(self, planned: bool) -> None:
         """One-line summaries for folded parts; the plan part opens when a plan is made."""
