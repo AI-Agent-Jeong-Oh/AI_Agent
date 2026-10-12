@@ -42,7 +42,7 @@ class ModelResponseError(ValueError):
     pass
 
 
-PROMPT_VERSION = "candidate-recall-v10-prior-context-separated"
+PROMPT_VERSION = "candidate-recall-v11-storyboard-short-fields"
 _DISPLAYED_TIMESTAMP_TOLERANCE_SECONDS = 0.001
 
 
@@ -109,10 +109,11 @@ class VisionAnalyzer:
                 raise OperationCanceled("분석이 취소되었습니다.")
 
             batches = _frame_batches(frames, request)
+            # On this computer every batch of up to four frames goes as one 2×2 board
+            # (960×540): about half the image tokens of four separate frames, so each
+            # request is read faster. Small-contact purposes keep their detail composite.
             use_temporal_storyboard = (
-                request.mode is AnalysisMode.LOCAL
-                and request.sampling_strategy is SamplingStrategy.TEMPORAL_SEQUENCE
-                and not fine_detail.required
+                request.mode is AnalysisMode.LOCAL and not fine_detail.required
             )
             use_fine_detail_composite = (
                 request.mode is AnalysisMode.LOCAL and fine_detail.required
@@ -426,13 +427,14 @@ def build_prompt(
     guidance = "\n".join(
         f"- 승인된 관찰 기준: {item}" for item in request.observation_guidance
     )
+    storyboard_instruction = (
+        "현재 모델 입력은 위 frame ID 순서를 행 우선(왼쪽 위, 오른쪽 위, 왼쪽 아래, 오른쪽 아래)으로 "
+        "배치한 최대 2×2 시간순 스토리보드 한 장입니다. 패널 위치와 frame ID·원본 시각을 이 순서로 대응하고, "
+        "source_frame_ids에는 근거가 된 패널의 frame ID를 넣으세요.\n"
+        if temporal_storyboard
+        else ""
+    )
     if temporal.required or request.sampling_strategy is SamplingStrategy.TEMPORAL_SEQUENCE:
-        storyboard_instruction = (
-            "현재 모델 입력은 위 frame ID 순서를 행 우선(왼쪽 위, 오른쪽 위, 왼쪽 아래, 오른쪽 아래)으로 "
-            "배치한 최대 2×2 시간순 스토리보드 한 장입니다. 패널 위치와 frame ID·원본 시각을 이 순서로 대응하세요.\n"
-            if temporal_storyboard
-            else ""
-        )
         comparison_unit = "각 패널" if temporal_storyboard else "각 입력 이미지"
         temporal_instruction = (
             f"{storyboard_instruction}"
@@ -481,12 +483,13 @@ def build_prompt(
         f"{frame_lines}\n"
         f"{guidance + chr(10) if guidance else ''}"
         f"{duration_instruction}"
-        f"{temporal_instruction}"
+        f"{temporal_instruction if temporal_instruction else storyboard_instruction}"
         f"{fine_detail_instruction}"
         "관찰한 시각 정보만 사용하고 보이지 않는 의도·신원·범죄 성립을 확정하지 마세요. "
         "각 입력 프레임을 시간순으로 모두 확인하세요. 목적과 관련될 가능성이 화면에 관찰되지만 확실하지 않다면 후보로 반환하고 한계를 uncertainty에 적으세요. "
-        "입력 프레임이 모두 목적과 명백히 무관할 때만 segments를 빈 배열로 반환하세요. 목적에 관련된 가장 강한 후보만 최대 5개 반환하세요. "
-        "각 후보의 관찰 요약, evidence, uncertainty는 각각 간결한 한 문장으로 쓰세요. "
+        "입력 프레임이 모두 목적과 명백히 무관할 때만 segments를 빈 배열로 반환하세요. 목적에 관련된 가장 강한 후보만 최대 3개 반환하세요. "
+        "각 후보의 관찰 요약, evidence, uncertainty는 각각 120자 이내의 간결한 한 문장으로 쓰고, "
+        "evidence는 최대 3개이며 같은 문장을 되풀이하지 마세요. "
         "evidence에는 화면에서 보이는 자세, 신체 부위, 물체와 그 변화를 적고 프레임 ID만 복사하지 마세요. "
         "프레임 ID는 source_frame_ids에만 실제 입력값을 넣으세요. "
         "start_sec~end_sec는 행동 경계를 정확히 측정한 값이 아니라, 근거 프레임 시각을 반드시 포함하는 사람 확인용 재생 범위입니다. "

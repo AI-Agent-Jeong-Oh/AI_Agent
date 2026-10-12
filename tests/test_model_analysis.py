@@ -161,6 +161,23 @@ class FakeStoryboardComposer:
         return self.storyboard
 
 
+class BoardFromFirstFrame:
+    """Local runs now send each batch as one 2×2 board; tests stand in with the first frame."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[tuple[ExtractedFrame, ...], int]] = []
+
+    def compose(self, frames, _output_dir, *, batch_index, timeout_seconds, cancel_event):
+        self.calls.append((frames, batch_index))
+        return replace(
+            frames[0],
+            frame_id=f"storyboard:{batch_index}",
+            timestamp_accuracy="storyboard_of_decoded_pts",
+            width=960,
+            height=540,
+        )
+
+
 class FakeFineDetailComposer:
     def __init__(self) -> None:
         self.calls: list[tuple[tuple[ExtractedFrame, ...], int]] = []
@@ -339,7 +356,7 @@ class ModelResponseTests(unittest.TestCase):
         self.assertIn("촘촘히 추출한 연속 순서 프레임", prompt)
         self.assertIn("인접 프레임", prompt)
         self.assertIn("프레임 ID만 복사하지 마세요", prompt)
-        self.assertIn("candidate-recall-v10-prior-context-separated", prompt)
+        self.assertIn("candidate-recall-v11-storyboard-short-fields", prompt)
         self.assertIn("명백히 무관할 때만", prompt)
         self.assertIn("지속 시간이 핵심", prompt)
         self.assertIn("서로 다른 원본 시각", prompt)
@@ -499,6 +516,15 @@ class ProviderAdapterTests(unittest.TestCase):
             self.assertFalse(payload["think"])
             self.assertEqual(payload["options"]["num_ctx"], 16384)
             self.assertEqual(payload["options"]["num_predict"], 800)
+            # Bounded answers: a looping sentence once ran into the token limit and cut the JSON.
+            self.assertEqual(payload["options"]["repeat_penalty"], 1.15)
+            segment = payload["format"]["properties"]["segments"]
+            self.assertEqual(segment["maxItems"], 3)
+            fields = segment["items"]["properties"]
+            self.assertEqual(fields["summary"]["maxLength"], 120)
+            self.assertEqual(fields["uncertainty"]["maxLength"], 120)
+            self.assertEqual(fields["evidence"]["maxItems"], 3)
+            self.assertEqual(fields["evidence"]["items"]["maxLength"], 120)
             self.assertEqual(response.metrics.total_seconds, 2.0)
             self.assertEqual(response.metrics.prompt_token_count, 123)
 
@@ -673,10 +699,12 @@ class VisionAnalyzerTests(unittest.TestCase):
             )
             provider = FakeVisionProvider(local_config(), content)
             progress_messages: list[str] = []
+            board = BoardFromFirstFrame()
             analyzer = VisionAnalyzer(
                 provider,
                 lambda _job: root / "cache",
                 probe=FakeProbe(),
+                storyboard_composer=board,
                 extractor=FakeExtractor(frame(image)),
             )
 
@@ -690,6 +718,9 @@ class VisionAnalyzerTests(unittest.TestCase):
             self.assertFalse(result.is_sample)
             self.assertEqual(result.origin, ResultOrigin.TEST_DOUBLE)
             self.assertEqual(provider.calls, 1)
+            # On this computer a batch goes to the model as one 2×2 board (fewer image tokens).
+            self.assertEqual(len(board.calls), 1)
+            self.assertEqual(result.model_execution.input_representation, "temporal_storyboard")
             self.assertEqual(result.model_id, "explicit-vision-model")
             self.assertEqual(progress_messages[-1], "테스트용 가짜 공급자 응답 검증 완료")
 
@@ -719,6 +750,7 @@ class VisionAnalyzerTests(unittest.TestCase):
                 provider,
                 lambda _job: root / "cache",
                 probe=FakeProbe(),
+                storyboard_composer=BoardFromFirstFrame(),
                 extractor=MultiFrameExtractor(frames),
             )
             batched_request = replace(
@@ -743,7 +775,7 @@ class VisionAnalyzerTests(unittest.TestCase):
             self.assertEqual(result.model_execution.batch_candidate_counts, (0, 0, 0))
             self.assertEqual(
                 result.model_execution.prompt_version,
-                "candidate-recall-v10-prior-context-separated",
+                "candidate-recall-v11-storyboard-short-fields",
             )
             self.assertEqual(result.model_execution.input_frame_dimensions, ("320x240",) * 5)
             self.assertEqual(result.model_execution.input_frame_timestamps_sec, (1.0, 2.0, 3.0, 4.0, 5.0))
@@ -800,6 +832,7 @@ class VisionAnalyzerTests(unittest.TestCase):
                 provider,
                 lambda _job: root / "cache",
                 probe=FakeProbe(),
+                storyboard_composer=BoardFromFirstFrame(),
                 extractor=MultiFrameExtractor(frames),
             )
             batched_request = replace(
@@ -863,6 +896,7 @@ class VisionAnalyzerTests(unittest.TestCase):
                 provider,
                 lambda _job: root / "cache",
                 probe=FakeProbe(),
+                storyboard_composer=BoardFromFirstFrame(),
                 extractor=MultiFrameExtractor(frames),
             )
             batched_request = replace(
@@ -972,7 +1006,7 @@ class VisionAnalyzerTests(unittest.TestCase):
             )
             self.assertEqual(
                 result.model_execution.prompt_version,
-                "candidate-recall-v10-prior-context-separated",
+                "candidate-recall-v11-storyboard-short-fields",
             )
 
     def test_local_fine_detail_request_uses_overview_and_center_crop_per_timestamp(self) -> None:
@@ -1072,6 +1106,7 @@ class VisionAnalyzerTests(unittest.TestCase):
                 provider,
                 lambda _job: root,
                 probe=FakeProbe(),
+                storyboard_composer=BoardFromFirstFrame(),
                 extractor=MultiFrameExtractor(frames),
             )
             temporal_request = replace(

@@ -136,6 +136,9 @@ class HttpVisionProvider:
                     "num_ctx": self.config.context_window_tokens,
                     "num_predict": self.config.max_output_tokens,
                     "temperature": self.config.temperature,
+                    # The 8B model looped on one evidence sentence until the output limit
+                    # cut the JSON; this discourages repeats (with the length limits below).
+                    "repeat_penalty": 1.15,
                 },
             }
 
@@ -235,7 +238,9 @@ def response_schema() -> dict[str, Any]:
         "properties": {
             "segments": {
                 "type": "array",
-                "maxItems": 5,
+                # Short, bounded answers: fewer candidates and capped sentences keep the
+                # output well inside the token limit (a cut answer is invalid JSON).
+                "maxItems": 3,
                 "items": {
                     "type": "object",
                     "properties": {
@@ -243,16 +248,18 @@ def response_schema() -> dict[str, Any]:
                         "end_sec": {"type": "number"},
                         "summary": {
                             "type": "string",
+                            "maxLength": 120,
                             "description": "화면에서 관찰한 행동이나 상태의 짧은 요약",
                         },
                         "evidence": {
                             "type": "array",
+                            "maxItems": 3,
                             "description": (
                                 "프레임 ID가 아닌, 화면에서 실제로 보이는 자세·신체 부위·물체·변화. "
                                 "지속 시간이 핵심인 목적은 복수 관찰 시각과 표본 사이 경과 시간을 포함. "
                                 "반복·방향 변화 목적은 서로 다른 시각에서 보이는 방향을 각각 포함"
                             ),
-                            "items": {"type": "string"},
+                            "items": {"type": "string", "maxLength": 120},
                         },
                         "source_frame_ids": {
                             "type": "array",
@@ -261,6 +268,7 @@ def response_schema() -> dict[str, Any]:
                         },
                         "uncertainty": {
                             "type": "string",
+                            "maxLength": 120,
                             "description": "희소 프레임과 가려짐 등 사람이 다시 확인할 한계",
                         },
                     },
