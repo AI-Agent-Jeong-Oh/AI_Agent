@@ -72,15 +72,23 @@ PRIMARY_60 = "#0b50d0"
 PRIMARY_70 = "#083891"
 SECONDARY_5 = "#eef2f7"
 SECONDARY_10 = "#d6e0eb"
+SECONDARY_20 = "#bacbde"
+SECONDARY_50 = "#346fb2"
+SECONDARY_60 = "#1c589c"
 SECONDARY_70 = "#063a74"
 SECONDARY_80 = "#052b57"
+SECONDARY_90 = "#031f3f"
 
 # Roles used by the screens.
-PRIMARY = PRIMARY_60  # KRDS text-primary: selected text and links
-PRIMARY_FILL = PRIMARY_50  # KRDS button-primary-fill
-PRIMARY_DARK = PRIMARY_70
-PRIMARY_SOFT = PRIMARY_5  # KRDS action-primary-selected
-PRIMARY_DISABLED = PRIMARY_20
+# Selection and emphasis use the KRDS secondary (navy) scale, the police colour of the
+# header, step numbers and box lines, instead of the bright primary blue.
+PRIMARY = SECONDARY_70  # selected text, tabs, links
+PRIMARY_FILL = SECONDARY_80  # main button, check boxes, radio buttons, checked tiles
+PRIMARY_HOVER = SECONDARY_70
+PRIMARY_DARK = SECONDARY_90
+PRIMARY_SOFT = SECONDARY_5  # selected rows, checked tiles and chips
+PRIMARY_DISABLED = SECONDARY_20
+PRIMARY_SELECTION = SECONDARY_10  # text selection in input fields
 TEXT = GRAY_90  # text-basic
 TEXT_BOLDER = "#131416"  # gray-95, text-bolder: table header
 TEXT_SUB = GRAY_70  # text-subtle
@@ -111,7 +119,7 @@ _BANNERS = {
     "warning": "background:#fff3db;color:#8a5c00;border:1px solid #ffe0a3;",
     "test_double": "background:#eef2f7;color:#052b57;border:1px solid #d6e0eb;",
     "real_model": "background:#eaf6ec;color:#267337;border:1px solid #d8eedd;",
-    "local": "background:#e7f4fe;color:#096ab3;border:1px solid #d3ebfd;",
+    "local": "background:#eef2f7;color:#052b57;border:1px solid #d6e0eb;",
     "running": "background:#e7f4fe;color:#096ab3;border:1px solid #d3ebfd;",
     "failed": "background:#fdefec;color:#bd2c0f;border:1px solid #fcdfd9;",
     "neutral": "background:#f4f5f6;color:#464c53;border:1px solid #e6e8ea;",
@@ -124,7 +132,7 @@ _STATUS = {
     "warning": ("#8a5c00", "#c78500"),
     "test_double": ("#052b57", "#346fb2"),
     "real_model": ("#267337", "#228738"),
-    "local": ("#096ab3", "#0b78cb"),
+    "local": (SECONDARY_80, SECONDARY_50),
     "running": ("#096ab3", "#0b78cb"),
     "failed": ("#bd2c0f", "#de3412"),
     "neutral": (GRAY_70, GRAY_50),
@@ -389,15 +397,16 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QPushButton:disabled {{ background: {GRAY_10}; color: {GRAY_50}; border-color: {GRAY_30}; }}
     QPushButton[variant="primary"] {{ background: {PRIMARY_FILL}; color: {GRAY_0};
                                       border-color: {PRIMARY_FILL}; font-weight: 700; }}
-    QPushButton[variant="primary"]:hover {{ background: {PRIMARY_60}; border-color: {PRIMARY_60}; }}
-    QPushButton[variant="primary"]:pressed {{ background: {PRIMARY_70}; border-color: {PRIMARY_70}; }}
+    QPushButton[variant="primary"]:hover {{ background: {PRIMARY_HOVER}; border-color: {PRIMARY_HOVER}; }}
+    QPushButton[variant="primary"]:pressed {{ background: {PRIMARY_DARK}; border-color: {PRIMARY_DARK}; }}
     QPushButton[variant="primary"]:disabled {{ background: {GRAY_20}; border-color: {GRAY_30};
                                                color: {GRAY_50}; }}
     QPushButton#stepButton {{ border: none; background: transparent; color: {TEXT_SUB};
-                              padding: {s(2)}px {s(8)}px {s(4)}px; min-height: 0;
-                              font-size: {s(LABEL_PX)}px; }}
+                              padding: {s(4)}px {s(4)}px {s(4)}px {s(26)}px; min-height: {s(28)}px;
+                              font-size: {s(CONTENT_PX)}px; font-weight: 400; }}
+    QPushButton#stepButton[stepState="done"] {{ color: {TEXT}; }}
     QPushButton#stepButton:hover {{ color: {TEXT}; background: transparent; }}
-    QPushButton#stepButton:checked {{ color: {PRIMARY}; font-weight: 700; background: transparent; }}
+    QPushButton#stepButton:checked {{ color: {PRIMARY}; background: transparent; font-weight: 700; }}
     QPushButton[variant="chip"], QPushButton[segment], QPushButton#overviewToggle,
     QPushButton#bookmarkButton, QPushButton#zoomButton, QPushButton[density="compact"] {{
         padding: {compact_pad}px {s(12)}px; min-height: {compact_min}px;
@@ -503,11 +512,11 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QLineEdit, QComboBox, QAbstractSpinBox {{
         background: {SURFACE}; color: {TEXT}; border: 1px solid {INPUT_BORDER};
         border-radius: {s(6)}px; padding: {field_pad}px {s(12)}px; min-height: {field_min}px;
-        selection-background-color: {PRIMARY_10}; selection-color: {TEXT}; }}
+        selection-background-color: {PRIMARY_SELECTION}; selection-color: {TEXT}; }}
     QPlainTextEdit, QTextEdit {{
         background: {SURFACE}; color: {TEXT}; border: 1px solid {INPUT_BORDER};
         border-radius: {s(6)}px; padding: {s(4)}px {s(8)}px;
-        selection-background-color: {PRIMARY_10}; selection-color: {TEXT}; }}
+        selection-background-color: {PRIMARY_SELECTION}; selection-color: {TEXT}; }}
     QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QComboBox:focus,
     QAbstractSpinBox:focus {{ border-color: {PRIMARY_FILL}; }}
     QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled,

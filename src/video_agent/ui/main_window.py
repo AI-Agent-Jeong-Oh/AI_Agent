@@ -14,6 +14,7 @@ from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QFont,
+    QFontInfo,
     QGuiApplication,
     QKeySequence,
     QPainter,
@@ -135,15 +136,15 @@ from video_agent.video.worker import MetadataWorker, MotionScanWorker
 PLAYBACK_RATES = (0.5, 1.0, 1.5, 2.0)
 
 class _StepIndicator(QWidget):
-    """Compact stepper like the demo page: a dot per step on a short line, name below.
+    """One-line step indicator: a small dot before each step name, steps joined by "›".
 
-    Steps before the current one are filled blue dots, the current one is a larger blue
-    dot with bold blue text, and later steps are hollow grey dots, so the state does not
-    rely on color alone. Steps are centered with a limited width so lines stay short.
+    Done steps have a navy dot, the current one a larger navy dot with a light ring and a
+    bold navy name, later steps a grey dot and grey name; the words say the state too, so
+    it does not rely on colour. The names are the clickable step buttons. The bar keeps a
+    short height so the step pages keep the room.
     """
 
-    DOT_Y = 8
-    STEP_WIDTH = 200
+    STEP_GAP = 44
 
     def __init__(self, buttons: list[QPushButton]) -> None:
         super().__init__()
@@ -151,11 +152,10 @@ class _StepIndicator(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._buttons = buttons
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(24, 16, 24, 4)
-        layout.setSpacing(0)
+        layout.setContentsMargins(24, 6, 24, 6)
+        layout.setSpacing(self.STEP_GAP)
         layout.addStretch(1)
         for button in buttons:
-            button.setMinimumWidth(self.STEP_WIDTH)
             button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             layout.addWidget(button)
             button.toggled.connect(self._state_changed)
@@ -171,6 +171,9 @@ class _StepIndicator(QWidget):
             button.setAccessibleDescription(
                 "현재 단계" if index == current else "지난 단계" if index < current else "다음 단계"
             )
+            button.setProperty("stepState", "current" if index == current else "done" if index < current else "next")
+            button.style().unpolish(button)
+            button.style().polish(button)
         self.update()
 
     def _current(self) -> int:
@@ -181,27 +184,33 @@ class _StepIndicator(QWidget):
         if not self._buttons:
             return
         current = self._current()
-        centers = [b.geometry().center().x() for b in self._buttons]
+        unit = QFontInfo(self.font()).pixelSize() / 16
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        y = self.DOT_Y
-        for index in range(len(centers) - 1):
-            reached = index < current
-            painter.setPen(QPen(QColor(theme.PRIMARY_FILL if reached else theme.BORDER), 2))
-            painter.drawLine(centers[index] + 9, y, centers[index + 1] - 9, y)
-        for index, x in enumerate(centers):
+        geometries = [button.geometry() for button in self._buttons]
+        y = geometries[0].center().y()
+        # "›" halfway between one name and the next dot.
+        chevron = QPen(QColor(theme.GRAY_50), 1.5 * unit)
+        chevron.setCapStyle(Qt.PenCapStyle.RoundCap)
+        chevron.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        for index in range(len(geometries) - 1):
+            x = (geometries[index].right() + geometries[index + 1].left()) / 2
+            painter.setPen(chevron)
+            painter.drawPolyline(
+                [QPointF(x - 2.5 * unit, y - 5 * unit), QPointF(x + 2.5 * unit, y), QPointF(x - 2.5 * unit, y + 5 * unit)]
+            )
+        painter.setPen(Qt.PenStyle.NoPen)
+        for index, g in enumerate(geometries):
+            # The dot sits in each button's left padding (see the style sheet).
+            center = QPointF(g.left() + 9 * unit, y)
             if index == current:
-                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(theme.PRIMARY_SELECTION))
+                painter.drawEllipse(center, 9 * unit, 9 * unit)
                 painter.setBrush(QColor(theme.PRIMARY_FILL))
-                painter.drawEllipse(QPointF(x, y), 5.5, 5.5)
-            elif index < current:
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QColor(theme.PRIMARY_FILL))
-                painter.drawEllipse(QPointF(x, y), 4, 4)
+                painter.drawEllipse(center, 6 * unit, 6 * unit)
             else:
-                painter.setPen(QPen(QColor(theme.GRAY_40), 1.5))
-                painter.setBrush(QColor(theme.SURFACE))
-                painter.drawEllipse(QPointF(x, y), 4, 4)
+                painter.setBrush(QColor(theme.PRIMARY_FILL if index < current else theme.GRAY_30))
+                painter.drawEllipse(center, 4.5 * unit, 4.5 * unit)
         painter.end()
 
 
@@ -212,7 +221,7 @@ class MainWindow(QMainWindow):
     RESULT_CONTEXT_PREROLL_SECONDS = 1.0
     APP_TITLE = "CCTV 영상수사 지원 Agent"
     ORGANIZATION = "대한민국 경찰청"
-    STEP_TITLES = ("사건·영상", "분석 계획·실행", "후보 검토")
+    STEP_TITLES = ("사건 등록", "영상 분석", "결과 검토")
     # One short line per detection profile; the muted note says it is not an AI judgement.
     MOTION_HELP_GENERAL = "영상 내 움직임이 큰 구간을 후보로 제안합니다. 최대 3개까지 선택할 수 있습니다."
     MOTION_HELP_REPEATED = (
@@ -511,6 +520,7 @@ class MainWindow(QMainWindow):
         # settings card is added in _build_analysis_panel and shown only on that step.
         self._top_row = QHBoxLayout()
         self._top_row.addWidget(self._video_list, 5)
+        # Step ③ shows its candidate list here instead (built in _build_analysis_panel).
         layout.addLayout(self._top_row)
 
         self._video_widget = QVideoWidget()
@@ -678,7 +688,7 @@ class MainWindow(QMainWindow):
         # Left-aligned labels and full-width fields on every platform (macOS centres forms).
         theme.polish_form(purpose_layout)
 
-        self._plan_group = Card("분석 계획")
+        self._plan_group = Card("분석 설정")
         plan_layout = QVBoxLayout(self._plan_group.body)
         plan_layout.setContentsMargins(12, 12, 12, 12)
         self._motion_help = WrapLabel(self.MOTION_HELP_GENERAL)
@@ -720,7 +730,7 @@ class MainWindow(QMainWindow):
 
         # Three numbered parts, one open at a time (the rest show a one-line summary):
         # 1 what to look for, 2 which part of the video, 3 the plan, approval and run.
-        find_part = StepSection(1, "무엇을 찾을지")
+        find_part = StepSection(1, "찾을 대상")
         purpose_label = QLabel("분석 목적")
         purpose_label.setObjectName("fieldLabel")
         find_part.body_layout.addWidget(purpose_label)
@@ -728,7 +738,7 @@ class MainWindow(QMainWindow):
         find_part.body_layout.addWidget(self._focus_section)
         find_part.body_layout.addStretch(1)
 
-        range_part = StepSection(2, "볼 구간")
+        range_part = StepSection(2, "확인 범위")
         # The explanation sits behind ⓘ; its text follows the purpose (see _motion_help).
         self._motion_help.setVisible(False)
         self._motion_note.setVisible(False)
@@ -749,7 +759,7 @@ class MainWindow(QMainWindow):
         range_part.body_layout.addWidget(motion_table, 1)
         range_part.body_layout.addWidget(self._motion_selection_label)
 
-        plan_part = StepSection(3, "계획 확인·실행")
+        plan_part = StepSection(3, "계획 확인")
         plan_part.body_layout.addWidget(method_form)
         plan_part.body_layout.addWidget(self._question_label)
         plan_part.body_layout.addWidget(self._clarification_edit)
@@ -827,7 +837,14 @@ class MainWindow(QMainWindow):
         plan_step_layout.addWidget(self._plan_scroll, 1)
         plan_step_layout.addWidget(run_bar)
 
-        result_group = Card("중요 구간 후보")
+        # Step ③: the candidate list sits above the video (where the video list is in
+        # the other steps), so the right side holds the AI result and the record.
+        candidate_card = Card("중요 구간 후보")
+        candidate_card.hide_header()
+        candidate_layout = QVBoxLayout(candidate_card.body)
+        candidate_layout.setContentsMargins(12, 6, 12, 8)
+        candidate_layout.setSpacing(6)
+        result_group = Card("AI 분석 결과")
         result_layout = QVBoxLayout(result_group.body)
         result_layout.setContentsMargins(12, 8, 12, 8)
         # Only what helps the work: the review keys (behind a mark, so the step fits).
@@ -870,9 +887,9 @@ class MainWindow(QMainWindow):
         camera_row.addStretch(1)
         camera_row.addWidget(self._case_overview.toggle_button)
         self._camera_row.setVisible(False)
-        result_layout.addWidget(self._camera_row)
-        result_layout.addWidget(self._case_overview)
-        result_layout.addWidget(self._saved_results_row)
+        candidate_layout.addWidget(self._camera_row)
+        candidate_layout.addWidget(self._case_overview)
+        candidate_layout.addWidget(self._saved_results_row)
         self._review_panel = CandidateReviewPanel(self._segment_text)
         result_group.add_header_widget(self._review_panel.completion_bar)
         self._review_panel.playback_row.flow.addWidget(help_label)
@@ -881,8 +898,12 @@ class MainWindow(QMainWindow):
         self._review_empty_label.setWordWrap(True)
         self._review_empty_label.setObjectName("placeholder")
         self._result_help_label = help_label
+        candidate_layout.addWidget(self._review_empty_label)
+        candidate_layout.addWidget(self._review_panel.list_section, 1)
+        self._candidate_card = candidate_card
+        candidate_card.setVisible(False)
+        self._top_row.addWidget(candidate_card, 5)
         result_layout.addWidget(self._build_expansion_proposal())
-        result_layout.addWidget(self._review_empty_label)
         result_layout.addWidget(self._review_panel, 1)
         result_layout.addStretch(1)
         self._result_layout = result_layout
@@ -2832,6 +2853,9 @@ class MainWindow(QMainWindow):
         self._step_buttons[index].setChecked(True)
         # Videos are added and linked in step ①; later steps only choose among them.
         self._video_list.set_select_only(index != 0)
+        # Step ③ shows its candidate list in the video list's place.
+        self._video_list.setVisible(index != 2)
+        self._candidate_card.setVisible(index == 2)
         self._case_panel.save_button.setVisible(index == 0)
         previous_exists = index > 0
         next_exists = index < len(self.STEP_TITLES) - 1
@@ -2853,12 +2877,15 @@ class MainWindow(QMainWindow):
     def _refresh_review_empty_state(self) -> None:
         has_job = self._review_panel.job is not None
         has_content = has_job or self._result_list.count() > 0
-        self._review_empty_label.setVisible(not has_job)
-        self._review_panel.setVisible(has_content)
+        # Left: the list (or a message row such as "후보를 찾지 못했습니다"), else a note.
+        self._review_empty_label.setVisible(not has_content)
+        self._review_panel.list_section.setVisible(has_content)
+        # Right: the AI result and the record need a result.
+        self._review_panel.setVisible(has_job)
         self._review_panel.completion_bar.setVisible(has_job)
         # The trailing stretch keeps the empty state at the top; with a result the
         # review panel takes the spare height instead.
-        self._result_layout.setStretch(self._result_layout.count() - 1, 0 if has_content else 1)
+        self._result_layout.setStretch(self._result_layout.count() - 1, 0 if has_job else 1)
 
     def _display_segments(self, job: AnalysisJob) -> None:
         self._hide_range_expansion()
@@ -3042,14 +3069,14 @@ class MainWindow(QMainWindow):
             self._open_plan_part(index)
 
     def _refresh_plan_parts(self, planned: bool) -> None:
-        """One-line summaries for folded parts; the plan part opens when a plan is made."""
+        """What each part holds (header tooltip); the plan part opens when a plan is made."""
         find_part, range_part, plan_part = self._plan_parts
         purpose = " ".join(self._purpose_edit.toPlainText().split())
         if len(purpose) > 28:
             purpose = purpose[:27] + "…"
         focus = len(self._focus_section.focus())
         find_part.set_summary(
-            f"{purpose or '목적 미입력'} · " + (f"상황 {focus}개" if focus else "상황 선택 없음")
+            f"{purpose or '목적 미입력'} · " + (f"관찰 항목 {focus}개" if focus else "관찰 항목 선택 없음")
         )
         checked = self._checked_motion_proposals()
         if checked:

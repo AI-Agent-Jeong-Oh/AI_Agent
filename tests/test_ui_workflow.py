@@ -11,6 +11,7 @@ from PySide6.QtGui import QFontInfo
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QLabel,
     QLineEdit,
     QListWidgetItem,
     QStyledItemDelegate,
@@ -297,26 +298,31 @@ class UiWorkflowTests(unittest.TestCase):
         self.window._select_mode(AnalysisMode.SAMPLE)
         self.assertEqual(banner.text(), "시연용 결과 (실제 AI 분석 아님)")
 
-    def test_step_indicator_is_compact_and_names_each_state(self) -> None:
+    def test_step_indicator_follows_krds_and_names_each_state(self) -> None:
         self.window.resize(1440, 900)
         self.window.show()
         self.window._show_step(1)
         self.app.processEvents()
         indicator = self.window._step_indicator
-        self.assertLessEqual(indicator.height(), 48)
+        # KRDS-style numbered circles and names on one short line.
+        self.assertLessEqual(indicator.height(), 52)
+        self.assertEqual(
+            [button.property("stepState") for button in self.window._step_buttons],
+            ["done", "current", "next"],
+        )
         self.assertEqual(
             [button.accessibleDescription() for button in self.window._step_buttons],
             ["지난 단계", "현재 단계", "다음 단계"],
         )
         centers = [button.geometry().center().x() for button in self.window._step_buttons]
-        self.assertLessEqual(centers[-1] - centers[0], 2 * 260)
+        self.assertLessEqual(centers[-1] - centers[0], 2 * 300)
 
     def test_step_two_is_one_card_in_three_numbered_parts(self) -> None:
         window = self.window
         find_part, range_part, plan_part = window._plan_parts
         self.assertEqual(
             [part.title_label.text() for part in window._plan_parts],
-            ["무엇을 찾을지", "볼 구간", "계획 확인·실행"],
+            ["찾을 대상", "확인 범위", "계획 확인"],
         )
         self.assertTrue(find_part.isAncestorOf(window._purpose_edit))
         self.assertTrue(find_part.isAncestorOf(window._focus_section))
@@ -326,7 +332,7 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertTrue(plan_part.isAncestorOf(window._plan_view))
         # The left side of step ② is the video list and player, as in steps ① and ③.
         self.assertFalse(window._video_stack.parentWidget().isAncestorOf(window._purpose_edit))
-        # One part open at a time; folded parts show what was chosen.
+        # One part open at a time; what was chosen is in the header tooltip, not beside the title.
         self.assertTrue(find_part.is_open())
         self.assertFalse(range_part.is_open())
         range_part.header.clicked.emit()
@@ -336,9 +342,11 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertFalse(range_part.is_open())
         range_part.header.clicked.emit()
         self.assertTrue(range_part.is_open())
-        self.assertIn("상황", find_part.summary_label.text())
-        self.assertEqual(range_part.summary_label.text(), "")
-        self.assertIn("계획 없음", plan_part.summary_label.text())
+        self.assertIn("관찰 항목", find_part.header.toolTip())
+        self.assertIn("영상 전체", range_part.header.toolTip())
+        self.assertIn("계획 없음", plan_part.header.toolTip())
+        header_texts = [label.text() for label in plan_part.header.findChildren(QLabel)]
+        self.assertNotIn("계획 없음 · 정확한 분석", header_texts)
         # No empty plan box and no idle progress line before there is a plan.
         self.assertTrue(window._plan_view.isHidden())
         self.assertTrue(window._progress_bar.isHidden())

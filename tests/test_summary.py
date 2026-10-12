@@ -159,7 +159,7 @@ class SummaryBuilderTests(unittest.TestCase):
 
     def test_case_section_shows_type_focus_and_hints_without_judgement(self) -> None:
         plain = reviewed_summary().section("case").body
-        self.assertIn("우선 확인할 상황: 선택 없음", plain)
+        self.assertIn("중점 관찰 항목: 선택 없음", plain)
         self.assertNotIn("추가 탐색 힌트", plain)
 
         focused = replace(
@@ -175,7 +175,7 @@ class SummaryBuilderTests(unittest.TestCase):
         ).section("case").body
         self.assertIn("사건 유형: 실종", text)
         self.assertNotIn("발생 시각", text)  # not asked, so not listed when empty
-        self.assertIn("우선 확인할 상황: 이동·동선, 체류·이탈", text)
+        self.assertIn("중점 관찰 항목: 이동·동선, 체류·이탈", text)
         self.assertIn("범죄 여부를 판단한 것이 아님", text)
         self.assertIn("추가 탐색 힌트: 보라색 조끼 (사용자 입력이며 영상으로 확인한 사실이 아님)", text)
 

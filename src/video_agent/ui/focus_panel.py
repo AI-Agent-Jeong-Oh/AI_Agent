@@ -1,4 +1,4 @@
-"""Case type choice (step ①) and the "우선 확인할 상황" checks (step ② settings), from the demo page.
+"""Case type choice (step ①) and the "중점 관찰 항목" checks (step ② settings), from the demo page.
 
 Choosing a case type marks the situation groups recommended for it and checks them, until
 the user changes the checks. Search details of one's own go in the case clues, with their
@@ -160,7 +160,7 @@ class FocusSection(QWidget):
         layout.setSpacing(8)
 
         title_row = QHBoxLayout()
-        title = QLabel("우선 확인할 상황")
+        title = QLabel("중점 관찰 항목")
         title.setObjectName("subsectionTitle")
         self.count_label = QLabel("선택 없음")
         self.count_label.setObjectName("subsectionAside")

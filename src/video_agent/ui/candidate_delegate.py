@@ -1,10 +1,10 @@
-"""Drawing of the step ③ candidate rows, like the demo page's list.
+"""Drawing of the step ③ candidate rows (the list above the video).
 
-A row shows the candidate number (with a bookmark under it when marked), then the time
-range and length, the summary (up to two lines) and the review state as a mark with its
-word, plus "저장 안 됨" while edits are unsaved. The selected row gets a 3px blue line on
-the left over the light blue selection. Message rows (no candidate) draw as plain text.
-The items keep a plain text for screen readers; this only changes how a row looks.
+A row is one line: the candidate number (and a bookmark when marked), the time range, the
+summary cut to fit, "저장 안 됨" while edits are unsaved, and the review state as a mark
+with its word. The selected row gets a 3px blue line on the left over the light blue
+selection. Message rows (no candidate) draw as plain text. The items keep a plain text
+for screen readers; this only changes how a row looks.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from video_agent.ui import theme
 from video_agent.ui.judgement_marks import JUDGEMENT_MARKS, paint_mark
 
 ROW_ROLE = Qt.ItemDataRole.UserRole + 10
-SUMMARY_LINES = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +45,11 @@ def _small(font: QFont) -> QFont:
 
 
 class CandidateDelegate(QStyledItemDelegate):
+    """One line per candidate: number, time, summary (cut to fit) and the review mark.
+
+    The full AI result shows beside the list, so a row only needs to tell candidates apart.
+    """
+
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         row = index.data(ROW_ROLE)
         if not isinstance(row, CandidateRow):
@@ -67,125 +71,64 @@ class CandidateDelegate(QStyledItemDelegate):
         metrics = QFontMetrics(font)
         small_metrics = QFontMetrics(small)
         pad = self._pad(font)
-        line = metrics.height()
-        number_width = metrics.horizontalAdvance("00")
-        left = opt.rect.left() + pad
-        top = opt.rect.top() + pad
+        top = opt.rect.top()
+        height = opt.rect.height() - 1
+        x = opt.rect.left() + pad
+        right = opt.rect.right() - pad
 
+        def text(rect: QRect, value: str, color: str, use: QFont, align=Qt.AlignmentFlag.AlignLeft) -> None:
+            painter.setFont(use)
+            painter.setPen(QColor(color))
+            painter.drawText(rect, align | Qt.AlignmentFlag.AlignVCenter, value)
+
+        # Number (bold), then a bookmark mark when set.
         bold = QFont(font)
         bold.setBold(True)
-        painter.setFont(bold)
-        painter.setPen(QColor(theme.TEXT))
-        painter.drawText(
-            QRect(left, top, number_width, line),
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-            str(row.number),
-        )
+        number_width = metrics.horizontalAdvance("00")
+        text(QRect(x, top, number_width, height), str(row.number), theme.TEXT, bold, Qt.AlignmentFlag.AlignHCenter)
+        x += number_width + 4
+        icon = round(_px(font) * 14 / 16)
         if row.bookmarked:
-            size = round(_px(font) * 14 / 16)
-            theme.icon("bookmark", theme.NAVY).paint(
-                painter,
-                QRect(left + (number_width - size) // 2, top + line + 2, size, size),
-            )
-
-        text_left = left + number_width + pad
-        width = opt.rect.right() - pad - text_left
-        painter.setFont(font)
-        painter.drawText(
-            QRect(text_left, top, width, line),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            row.time_text,
-        )
-        time_width = metrics.horizontalAdvance(row.time_text)
-        painter.setFont(small)
-        painter.setPen(QColor(theme.TEXT_SUB))
-        painter.drawText(
-            QRect(text_left + time_width + 6, top, max(0, width - time_width - 6), line),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            row.length_text,
-        )
-
-        y = top + line + 2
-        summary_lines = self._summary_lines(row.summary, font, width)
-        painter.setFont(font)
-        painter.setPen(QColor(theme.TEXT))
-        for text in summary_lines:
-            painter.drawText(
-                QRect(text_left, y, width, line),
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                text,
-            )
-            y += line
-        y += 2
-        state_line = small_metrics.height()
+            theme.icon("bookmark", theme.NAVY).paint(painter, QRect(x, top + (height - icon) // 2, icon, icon))
+        x += icon + pad // 2
+        # Time range.
+        time_width = metrics.horizontalAdvance("00:00–00:00")
+        text(QRect(x, top, time_width, height), row.time_text, theme.TEXT, font)
+        x += time_width + pad
+        # Review mark and word at the right end, "저장 안 됨" before it while unsaved.
         mark = round(_px(font) * 10 / 16)
+        label_width = max(small_metrics.horizontalAdvance(word) for word in ("관련 있음", "추가 확인", "미검토", "제외"))
+        state_left = right - label_width - mark - 6
         paint_mark(
             painter,
-            QRectF(text_left, y + (state_line - mark) / 2, mark, mark),
+            QRectF(state_left, top + (height - mark) / 2, mark, mark),
             JUDGEMENT_MARKS[row.judgement],
         )
-        painter.setFont(small)
-        painter.setPen(QColor(theme.TEXT))
-        label_left = text_left + mark + 6
-        painter.drawText(
-            QRect(label_left, y, width, state_line),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            row.judgement_label,
-        )
+        text(QRect(state_left + mark + 6, top, label_width, height), row.judgement_label, theme.TEXT, small)
+        summary_right = state_left - pad
         if row.unsaved:
-            painter.setPen(QColor(theme.WARNING_TEXT))
-            painter.drawText(
-                QRect(label_left + small_metrics.horizontalAdvance(row.judgement_label) + 12, y, width, state_line),
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                "저장 안 됨",
-            )
+            unsaved_width = small_metrics.horizontalAdvance("저장 안 됨")
+            summary_right -= unsaved_width + pad // 2
+            text(QRect(summary_right + pad // 2, top, unsaved_width, height), "저장 안 됨", theme.WARNING_TEXT, small)
+        # The summary takes what is left, cut with "…".
+        width = max(0, summary_right - x)
+        text(
+            QRect(x, top, width, height),
+            metrics.elidedText(row.summary, Qt.TextElideMode.ElideRight, width),
+            theme.TEXT,
+            font,
+        )
         painter.restore()
 
     def sizeHint(self, option: QStyleOptionViewItem, index: QModelIndex) -> QSize:
         row = index.data(ROW_ROLE)
         if not isinstance(row, CandidateRow):
             return super().sizeHint(option, index)
-        font = option.font
-        metrics = QFontMetrics(font)
-        pad = self._pad(font)
         widget = option.widget
         total = widget.viewport().width() if widget is not None else 320
-        width = total - pad * 3 - metrics.horizontalAdvance("00")
-        lines = len(self._summary_lines(row.summary, font, width))
-        height = (
-            pad * 2
-            + metrics.height() * (1 + lines)
-            + QFontMetrics(_small(font)).height()
-            + 4
-            + 1  # the row line from the style sheet
-        )
-        return QSize(total, height)
+        # One line with room above and below, plus the 1px row line.
+        return QSize(total, QFontMetrics(option.font).height() + 2 * self._pad(option.font) + 1)
 
     @staticmethod
     def _pad(font: QFont) -> int:
-        return max(6, round(_px(font) * 12 / 16))
-
-    @staticmethod
-    def _summary_lines(text: str, font: QFont, width: int) -> list[str]:
-        """Up to two lines, broken at spaces where possible; the rest is elided."""
-        metrics = QFontMetrics(font)
-        width = max(40, width)
-        words = text.split()
-        lines: list[str] = []
-        current = ""
-        for word in words:
-            trial = f"{current} {word}".strip()
-            if metrics.horizontalAdvance(trial) <= width or not current:
-                current = trial
-                continue
-            lines.append(current)
-            current = word
-            if len(lines) == SUMMARY_LINES:
-                break
-        if len(lines) < SUMMARY_LINES and current:
-            lines.append(current)
-            current = ""
-        rest = " ".join(words[len(" ".join(lines).split()):])
-        if rest and lines:
-            lines[-1] = metrics.elidedText(f"{lines[-1]} {rest}", Qt.TextElideMode.ElideRight, width)
-        return [metrics.elidedText(item, Qt.TextElideMode.ElideRight, width) for item in lines] or [""]
+        return max(6, round(_px(font) * 10 / 16))

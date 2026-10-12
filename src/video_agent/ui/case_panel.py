@@ -312,7 +312,7 @@ class CaseContextPanel(Card):
         self._occurrence_hint.setVisible(not show)
 
     def _case_type_changed(self, value: str) -> None:
-        # The "우선 확인할 상황" checks in step ② follow the type (see the main window).
+        # The "중점 관찰 항목" checks in step ② follow the type (see the main window).
         if not self._loading:
             self.case_type_chosen.emit(value)
 

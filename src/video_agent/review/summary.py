@@ -355,7 +355,7 @@ def _case_lines(case: CaseRecord) -> list[str]:
     lines = [
         f"사건명: {case.title}",
         f"사건 유형: {case.case_type or '미입력'}",
-        f"우선 확인할 상황: {focus}",
+        f"중점 관찰 항목: {focus}",
     ]
     # The occurrence time is no longer asked; an older case that has one still shows it.
     if case.occurrence_time_text:

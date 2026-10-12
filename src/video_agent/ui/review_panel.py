@@ -251,10 +251,17 @@ class CandidateReviewPanel(QWidget):
             self.sort_actions[key] = action
         self.sort_actions[SORT_TIME].setChecked(True)
         self.view_button.setMenu(self.view_menu)
+        # The progress line and the candidate list form their own part, which the window
+        # places beside the video (step ③); the rest of the panel is the AI result and
+        # the reviewer's record.
+        self.list_section = QWidget()
+        list_layout = QVBoxLayout(self.list_section)
+        list_layout.setContentsMargins(0, 0, 0, 0)
+        list_layout.setSpacing(6)
         list_bar = QHBoxLayout()
         list_bar.addWidget(self.progress_label, 1)
         list_bar.addWidget(self.view_button)
-        layout.addLayout(list_bar)
+        list_layout.addLayout(list_bar)
 
         self.candidate_list = _CompactListWidget()
         self.candidate_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -271,7 +278,7 @@ class CandidateReviewPanel(QWidget):
         self.candidate_list.setAccessibleName("중요 구간 후보 목록")
         self.candidate_list.setAccessibleDescription(SHORTCUT_HELP)
         self.candidate_list.setToolTip(SHORTCUT_HELP)
-        layout.addWidget(self.candidate_list, 1)
+        list_layout.addWidget(self.candidate_list, 1)
 
         self.detail_view = _CompactRichView()
         self.detail_view.setReadOnly(True)
@@ -440,7 +447,8 @@ class CandidateReviewPanel(QWidget):
         self.summary_button.clicked.connect(self.summary_requested.emit)
 
     def apply_scale(self, scaled: Callable[[int], int]) -> None:
-        self.candidate_list.setMinimumHeight(scaled(72))
+        # About three one-line rows above the video.
+        self.candidate_list.setMinimumHeight(scaled(126))
         self.detail_view.setMinimumHeight(scaled(72))
         self.memo_edit.setMinimumHeight(scaled(48))
         self.memo_edit.setMaximumHeight(scaled(110))

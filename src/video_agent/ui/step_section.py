@@ -1,7 +1,8 @@
-"""Numbered, foldable part of the step ② plan card ("1 무엇을 찾을지", "2 볼 구간", ...).
+"""Numbered, foldable part of the step ② settings card ("1 찾을 대상", "2 확인 범위", ...).
 
-Only one part is open at a time; a closed part shows a one-line summary of what was
-chosen, and clicking its header opens it again (to change it).
+Only one part is open at a time; clicking a header opens it (or folds it). What was
+chosen in a folded part is not repeated beside its title; it is in the header's
+tooltip and accessible description.
 """
 
 from __future__ import annotations
@@ -43,16 +44,13 @@ class StepSection(QWidget):
         self.number_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.title_label = QLabel(title)
         self.title_label.setObjectName("subsectionTitle")
-        self.summary_label = QLabel("")
-        self.summary_label.setObjectName("subsectionAside")
-        self.summary_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.chevron = QLabel()
         row.addWidget(self.number_label)
         row.addWidget(self.title_label)
         self._extra = QHBoxLayout()
         self._extra.setSpacing(4)
         row.addLayout(self._extra)
-        row.addWidget(self.summary_label, 1)
+        row.addStretch(1)
         row.addWidget(self.chevron)
         layout.addWidget(self.header)
         self.body = QWidget()
@@ -76,14 +74,15 @@ class StepSection(QWidget):
 
     def set_summary(self, text: str) -> None:
         self._summary = text
-        self.summary_label.setToolTip(text)
+        self.header.setToolTip(text)
         self._refresh()
+
+    def summary(self) -> str:
+        return getattr(self, "_summary", "")
 
     def _refresh(self) -> None:
         self.body.setVisible(self._open)
-        summary = getattr(self, "_summary", "")
-        # The summary is for a closed part; an open one shows its contents instead.
-        self.summary_label.setText("" if self._open else summary)
+        summary = self.summary()
         self.chevron.setPixmap(
             theme.icon("chevron-down" if self._open else "chevron-right").pixmap(16, 16)
         )
