@@ -28,7 +28,6 @@ from video_agent.contracts import (
     AnalysisClue,
     CaseRecord,
     ClueSource,
-    FocusSituation,
     InformationCertainty,
 )
 from video_agent.ui import theme
@@ -37,7 +36,7 @@ from video_agent.ui.clue_delegate import ClueHeader, ClueItemDelegate, ClueList
 from video_agent.ui.datetime_field import DateTimeField
 from video_agent.ui.disclosure import DisclosureButton
 from video_agent.ui.flow_layout import FlowRow
-from video_agent.ui.focus_panel import CaseTypeChooser, FocusSection
+from video_agent.ui.focus_panel import CaseTypeChooser
 from video_agent.ui.popover import info_mark
 from video_agent.ui.wrap_label import WrapLabel
 
@@ -59,6 +58,32 @@ CERTAINTY_HELP = (
     "'확인'도 영상이나 수사로 사실이 검증됐다는 뜻은 아닙니다."
 )
 
+
+
+def hint_clues(record: CaseRecord) -> tuple[AnalysisClue, ...]:
+    """Search hints saved by older versions, as clues with an unknown source and certainty.
+
+    Hints are no longer entered separately; a hint already written as a clue is skipped and
+    the 20-clue limit is kept.
+    """
+    known = {" ".join(clue.text.split()).casefold() for clue in record.clues}
+    room = max(0, 20 - len(record.clues))
+    clues = []
+    for hint in record.focus_hints:
+        key = " ".join(hint.split()).casefold()
+        if key in known or len(clues) >= room:
+            continue
+        known.add(key)
+        clues.append(
+            AnalysisClue(
+                clue_id=f"clue-{uuid4().hex[:12]}",
+                text=hint,
+                source=ClueSource.OTHER,
+                certainty=InformationCertainty.UNKNOWN,
+                use_for_analysis=True,
+            )
+        )
+    return tuple(clues)
 
 class CaseContextPanel(Card):
     """Minimal case/prior-information UI that a teammate can extend independently."""
@@ -119,7 +144,7 @@ class CaseContextPanel(Card):
         title_column.setSpacing(4)
         title_column.addWidget(self.title_edit)
         title_column.addWidget(self.title_error)
-        # Chosen type marks the situation groups to check first (FocusSection below).
+        # Chosen type marks the situation groups to check first (in step ② settings).
         self.case_type = CaseTypeChooser()
         occurrence_widget = QWidget()
         occurrence_row = QHBoxLayout(occurrence_widget)
@@ -154,12 +179,6 @@ class CaseContextPanel(Card):
         self._form = form
         layout.addLayout(form)
         self._update_admin_rows()
-
-        focus_divider = QFrame()
-        focus_divider.setObjectName("sectionDivider")
-        layout.addWidget(focus_divider)
-        self.focus = FocusSection()
-        layout.addWidget(self.focus)
 
         divider = QFrame()
         divider.setObjectName("sectionDivider")
@@ -294,7 +313,6 @@ class CaseContextPanel(Card):
         self.load_button.clicked.connect(self._show_case_menu)
         self.admin_toggle.toggled.connect(lambda _checked: self._update_admin_rows())
         self.case_type.changed.connect(self._case_type_changed)
-        self.focus.changed.connect(self._emit_changed)
 
     def _occurrence_certainty_changed(self, *_args: object) -> None:
         if self.occurrence_certainty.currentData() == InformationCertainty.UNKNOWN and not self._loading:
@@ -313,18 +331,12 @@ class CaseContextPanel(Card):
         self._occurrence_hint.setVisible(not show)
 
     def _case_type_changed(self, value: str) -> None:
-        self.focus.set_case_type(value)
+        # The "우선 확인할 상황" checks in step ② follow the type (see the main window).
         if not self._loading:
             self.case_type_chosen.emit(value)
 
     def case_type_text(self) -> str:
         return self.case_type.value()
-
-    def focus_situations(self) -> tuple[FocusSituation, ...]:
-        return self.focus.focus()
-
-    def focus_hints(self) -> tuple[str, ...]:
-        return self.focus.hints()
 
     def _update_admin_rows(self) -> None:
         self._form.setRowVisible(self.notes_edit, self.admin_toggle.isChecked())
@@ -536,7 +548,6 @@ class CaseContextPanel(Card):
         try:
             self.title_edit.setText(record.title)
             self.case_type.set_value(record.case_type)
-            self.focus.set_values(record.case_type, record.focus_situations, record.focus_hints)
             self.occurrence_edit.setText(record.occurrence_time_text)
             self._set_combo_value(
                 self.occurrence_certainty,
@@ -549,6 +560,8 @@ class CaseContextPanel(Card):
             self.clue_list.clear()
             self._cancel_clue_edit()
             for clue in record.clues:
+                self._append_clue(clue)
+            for clue in hint_clues(record):
                 self._append_clue(clue)
             self._update_clue_count()
         finally:
@@ -595,4 +608,3 @@ class CaseContextPanel(Card):
             widget.setEnabled(enabled)
         self.clue_use.setEnabled(enabled and self._editing_clue_row() is None)
         self._update_clue_inputs()
-        self.focus.set_editing_enabled(enabled)

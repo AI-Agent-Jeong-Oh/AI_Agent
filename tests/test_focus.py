@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
 from video_agent.agent.planning import AnalysisIntent, PlanBuilder
 from video_agent.agent.situations import (
@@ -110,16 +110,23 @@ class FocusSectionTests(unittest.TestCase):
         # The recommendation is still shown as a tag.
         self.assertFalse(section.tiles[FocusSituation.COMPANY].tag.isHidden())
 
-    def test_hints_are_short_unique_and_removable(self) -> None:
-        section = self.section
-        for text in ("가방을 든 사람", "가방을  든 사람", "", "자전거"):
-            section._start_hint()
-            section.hint_edit.setText(text)
-            section._add_hint()
-        self.assertEqual(section.hints(), ("가방을 든 사람", "자전거"))
-        self.assertEqual(section.hint_edit.maxLength(), 30)
-        section._remove_hint("가방을 든 사람")
-        self.assertEqual(section.hints(), ("자전거",))
+    def test_columns_follow_the_width(self) -> None:
+        # Placed in a card as in the window; the card's width decides the columns.
+        card = QWidget()
+        QVBoxLayout(card).addWidget(section := FocusSection(columns=3))
+        card.resize(1200, 300)
+        card.show()
+        self.app.processEvents()
+        self.assertEqual(section.columns(), 3)
+        card.resize(section.minimumSizeHint().width() + 30, 500)
+        self.app.processEvents()
+        self.assertEqual(section.columns(), 1)
+        card.close()
+
+    def test_only_checks_no_free_hints(self) -> None:
+        # Search details are entered as case clues (with source and certainty) instead.
+        self.assertFalse(hasattr(self.section, "hint_edit"))
+        self.assertEqual(len(self.section.tiles), 6)
 
     def test_theft_is_a_case_type_with_its_own_checks(self) -> None:
         section = self.section
@@ -144,7 +151,7 @@ class FocusSectionTests(unittest.TestCase):
         chooser.close()
 
     def test_loaded_case_keeps_its_saved_choice(self) -> None:
-        self.section.set_values("실종", (FocusSituation.ENVIRONMENT,), ("차량",))
+        self.section.set_values("실종", (FocusSituation.ENVIRONMENT,))
         self.assertEqual(self.section.focus(), (FocusSituation.ENVIRONMENT,))
         self.section.set_case_type("폭행")
         self.assertEqual(self.section.focus(), (FocusSituation.ENVIRONMENT,))

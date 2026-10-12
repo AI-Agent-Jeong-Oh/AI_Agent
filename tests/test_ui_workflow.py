@@ -20,6 +20,7 @@ from video_agent.agent.situations import RECOMMENDED
 from video_agent.contracts import (
     AnalysisJob,
     AnalysisMode,
+    CaseRecord,
     ClueSource,
     FocusSituation,
     InformationCertainty,
@@ -35,6 +36,7 @@ from video_agent.contracts import (
 from video_agent.agent.planning import WorkflowState
 from video_agent.models.config import RuntimeInventory
 from video_agent.storage.json_store import AppSettings, SettingsStore
+from video_agent.ui.judgement_marks import JUDGEMENT_MARKS
 from video_agent.ui.main_window import MainWindow
 from video_agent.video.probe import VideoMetadata
 
@@ -123,9 +125,13 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertEqual(
             window._purpose_edit.toPlainText(), "실종 대상자의 마지막 확인 위치와 이동 경로 파악"
         )
+        # The checks sit in step ② (the plan card) and follow the type chosen in step ①.
         self.assertEqual(
-            panel.focus_situations(), (FocusSituation.MOVEMENT, FocusSituation.STAY)
+            window._focus_section.focus(), (FocusSituation.MOVEMENT, FocusSituation.STAY)
         )
+        self.assertIs(window._focus_section.window(), window)
+        self.assertFalse(panel.isAncestorOf(window._focus_section))
+        self.assertTrue(window._plan_group.isAncestorOf(window._focus_section))
         window._purpose_edit.setPlainText("사람이 출입문을 지나가는 장면 후보 찾기")
         panel.case_type.buttons["폭행"].click()  # a written purpose is never replaced
         self.assertEqual(window._purpose_edit.toPlainText(), "사람이 출입문을 지나가는 장면 후보 찾기")
@@ -139,7 +145,7 @@ class UiWorkflowTests(unittest.TestCase):
         window._approve_plan()
         self.assertTrue(window._run_button.isEnabled())
 
-        panel.focus.tiles[FocusSituation.ENVIRONMENT].check.click()
+        window._focus_section.tiles[FocusSituation.ENVIRONMENT].check.click()
         self.assertFalse(window._run_button.isEnabled())
         self.assertIsNone(window._session.analysis_approval)
 
@@ -159,22 +165,44 @@ class UiWorkflowTests(unittest.TestCase):
         window = self.window
         panel = window._case_panel
         panel.case_type.buttons["아동학대"].click()
-        panel.focus._start_hint()
-        panel.focus.hint_edit.setText("노란색 상의 아동")
-        panel.focus._add_hint()
         panel.title_edit.setText("아동 확인")
         window._save_case()
         stored = window._case_store.load(window._case_record.case_id)
         self.assertEqual(stored.case_type, "아동학대")
         self.assertEqual(set(stored.focus_situations), set(RECOMMENDED["아동학대"]))
-        self.assertEqual(stored.focus_hints, ("노란색 상의 아동",))
+        self.assertEqual(stored.focus_hints, ())
 
         window._new_case()
-        self.assertEqual(panel.focus_situations(), ())
+        self.assertEqual(window._focus_section.focus(), ())
         panel.set_saved_cases((stored,), stored.case_id)
         window._load_case()
         self.assertEqual(panel.case_type_text(), "아동학대")
-        self.assertEqual(panel.focus_hints(), ("노란색 상의 아동",))
+        self.assertEqual(set(window._focus_section.focus()), set(RECOMMENDED["아동학대"]))
+
+    def test_older_search_hints_load_as_clues(self) -> None:
+        window = self.window
+        panel = window._case_panel
+        older = CaseRecord(
+            case_id="case-older",
+            revision=1,
+            title="예전 사건",
+            case_type="아동학대",
+            focus_situations=(FocusSituation.INTERACTION,),
+            focus_hints=("노란색 상의 아동",),
+        )
+        window._case_store.save(older)
+        panel.set_saved_cases((older,), older.case_id)
+        window._load_case()
+        (clue,) = panel.clues()
+        self.assertEqual(clue.text, "노란색 상의 아동")
+        self.assertIs(clue.source, ClueSource.OTHER)
+        self.assertIs(clue.certainty, InformationCertainty.UNKNOWN)
+        self.assertTrue(clue.use_for_analysis)
+        self.assertEqual(window._focus_section.focus(), (FocusSituation.INTERACTION,))
+        window._save_case()
+        resaved = window._case_store.load(older.case_id)
+        self.assertEqual(resaved.focus_hints, ())
+        self.assertEqual([item.text for item in resaved.clues], ["노란색 상의 아동"])
 
     def test_case_clue_is_saved_shown_in_plan_and_change_requires_reapproval(self) -> None:
         panel = self.window._case_panel
@@ -279,38 +307,39 @@ class UiWorkflowTests(unittest.TestCase):
         centers = [button.geometry().center().x() for button in self.window._step_buttons]
         self.assertLessEqual(centers[-1] - centers[0], 2 * 260)
 
-    def test_analysis_settings_sit_beside_the_video_list_on_step_two_only(self) -> None:
+    def test_step_two_is_one_card_in_three_numbered_parts(self) -> None:
         window = self.window
-        settings = window._purpose_group
-        self.assertEqual(settings.title(), "분석 설정")
-        for field in (
-            window._analysis_choice,
-            window._purpose_edit,
-            window._range_start,
-            window._range_end,
-        ):
-            self.assertTrue(settings.isAncestorOf(field))
-        # [CCTV 영상][분석 설정] in one row above the player; the plan side keeps no settings.
-        row = window._top_row
-        self.assertLess(row.indexOf(window._video_list), row.indexOf(settings))
-        left = window._video_stack.parentWidget()
-        self.assertTrue(left.isAncestorOf(settings))
-        self.assertFalse(window._step_stack.isAncestorOf(settings))
+        find_part, range_part, plan_part = window._plan_parts
+        self.assertEqual(
+            [part.title_label.text() for part in window._plan_parts],
+            ["무엇을 찾을지", "볼 구간", "계획 확인·실행"],
+        )
+        self.assertTrue(find_part.isAncestorOf(window._purpose_edit))
+        self.assertTrue(find_part.isAncestorOf(window._focus_section))
+        self.assertTrue(range_part.isAncestorOf(window._motion_scan_button))
+        self.assertTrue(range_part.isAncestorOf(window._range_start))
+        self.assertTrue(plan_part.isAncestorOf(window._analysis_choice))
+        self.assertTrue(plan_part.isAncestorOf(window._plan_view))
+        # The left side of step ② is the video list and player, as in steps ① and ③.
+        self.assertFalse(window._video_stack.parentWidget().isAncestorOf(window._purpose_edit))
+        # One part open at a time; folded parts show what was chosen.
+        self.assertTrue(find_part.is_open())
+        self.assertFalse(range_part.is_open())
+        range_part.header.clicked.emit()
+        self.assertTrue(range_part.is_open())
+        self.assertFalse(find_part.is_open())
+        self.assertIn("상황", find_part.summary_label.text())
+        self.assertEqual(range_part.summary_label.text(), "")
+        self.assertIn("계획 없음", plan_part.summary_label.text())
+        # No empty plan box and no idle progress line before there is a plan.
+        self.assertTrue(window._plan_view.isHidden())
+        self.assertTrue(window._progress_bar.isHidden())
+        self.assertTrue(window._progress_label.isHidden())
         window.resize(1440, 900)
         window.show()
         window._show_step(1)
         self.app.processEvents()
-        self.assertFalse(settings.isHidden())
-        list_box = window._video_list.geometry()
-        self.assertEqual(list_box.top(), settings.geometry().top())
-        self.assertEqual(list_box.bottom(), settings.geometry().bottom())
-        self.assertLess(settings.geometry().bottom(), window._video_stack.geometry().top())
         self.assertGreaterEqual(window._video_stack.height(), 288)
-        plan_top = window._plan_group.mapTo(window._plan_scroll.widget(), window._plan_group.rect().topLeft())
-        self.assertEqual(plan_top.y(), 0)
-        for step in (0, 2):
-            window._show_step(step)
-            self.assertTrue(settings.isHidden())
 
     def test_step_two_shows_one_next_action_at_a_time(self) -> None:
         window = self.window
@@ -409,9 +438,8 @@ class UiWorkflowTests(unittest.TestCase):
 
         window._case_videos[window._video_id] = self.video
         window._refresh_motion_empty_state()
-        self.assertEqual(
-            window._motion_empty_label.text(), "움직임 후보 찾기를 실행하면 분석할 구간이 표시됩니다."
-        )
+        # Before a scan nothing is said; the button is the next step.
+        self.assertTrue(window._motion_empty_label.isHidden())
         result = dict(
             video_id="video-ui", range_start_sec=0.0, range_end_sec=10.0,
             sample_interval_sec=0.5, sampled_frame_count=19,
@@ -438,9 +466,7 @@ class UiWorkflowTests(unittest.TestCase):
 
         window._range_changed()  # inputs changed: proposals cleared, back to "not scanned"
         self.assertTrue(window._motion_list.isHidden())
-        self.assertEqual(
-            window._motion_empty_label.text(), "움직임 후보 찾기를 실행하면 분석할 구간이 표시됩니다."
-        )
+        self.assertTrue(window._motion_empty_label.isHidden())
 
     def test_analysis_panel_preserves_readable_motion_and_plan_areas(self) -> None:
         self.assertGreaterEqual(self.window._motion_list.minimumHeight(), 120)
@@ -634,6 +660,10 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertEqual([(mark.start_ms, mark.end_ms) for mark in marks], [(2000, 3000), (6000, 7000)])
         self.assertIn("후보 #1", marks[0].label)
         self.assertIn("미검토", marks[0].label)
+        # Unreviewed AI candidates are outlines, as on the demo page, and the legend names them.
+        self.assertIs(marks[0].style, JUDGEMENT_MARKS[ReviewJudgement.UNREVIEWED])
+        self.assertTrue(marks[0].style.dashed)
+        self.assertFalse(window._timeline_legend.isHidden())
 
         with patch.object(window, "_seek_to_segment") as seek:
             window._timeline_mark_clicked(1)
@@ -643,13 +673,18 @@ class UiWorkflowTests(unittest.TestCase):
 
         # A reviewer's saved judgement recolours the mark.
         window._review_panel.judgement_buttons[ReviewJudgement.RELEVANT].setChecked(True)
+        window._review_panel.bookmark_check.setChecked(True)
         window._review_panel.save_current()
         self.assertIn("관련 있음", window._timeline.marks[1].label)
+        self.assertIs(window._timeline.marks[1].style, JUDGEMENT_MARKS[ReviewJudgement.RELEVANT])
+        self.assertTrue(window._timeline.marks[1].bookmarked)
+        self.assertIn("북마크", window._timeline.marks[1].label)
 
         # Another video's playback bar shows no marks for this result.
         window._video_id = "video-other"
         window._refresh_timeline_marks()
         self.assertEqual(window._timeline.marks, ())
+        self.assertTrue(window._timeline_legend.isHidden())
 
     def test_result_click_starts_one_second_before_review_range(self) -> None:
         segment = Segment(

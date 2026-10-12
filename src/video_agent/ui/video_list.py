@@ -309,7 +309,9 @@ class CaseVideoList(Card):
             theme.set_icon(button, icon)
             button.setToolTip(tip)
             button.setAccessibleName(tip)
-            button.setEnabled(enabled and not self._locked)
+            # Locking disables the whole list (and so these buttons); disabling them here
+            # too would leave them off after the list is unlocked.
+            button.setEnabled(enabled)
             button.clicked.connect(handler)
             row.addWidget(button)
         return box

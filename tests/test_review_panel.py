@@ -7,6 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from PySide6.QtMultimedia import QMediaPlayer
 from PySide6.QtWidgets import QApplication, QLabel
 
 from video_agent.contracts import (
@@ -22,6 +23,7 @@ from video_agent.contracts import (
 from video_agent.models.config import RuntimeInventory
 from video_agent.storage.json_store import ResultStore, ReviewStore
 from video_agent.storage.paths import AppPaths
+from video_agent.ui.candidate_delegate import ROW_ROLE
 from video_agent.ui.main_window import MainWindow
 from video_agent.ui.review_panel import (
     CandidateReviewPanel,
@@ -98,9 +100,10 @@ class CandidateReviewPanelTests(unittest.TestCase):
 
     def test_default_sort_is_time_and_model_order_is_available(self) -> None:
         self.assertEqual(self.visible_indexes(), [1, 2, 0])
-        self.assertEqual(self.panel.sort_combo.currentData(), "time")
-        self.panel.sort_combo.setCurrentIndex(self.panel.sort_combo.findData("model"))
+        self.assertTrue(self.panel.sort_actions["time"].isChecked())
+        self.panel.sort_actions["model"].trigger()
         self.assertEqual(self.visible_indexes(), [0, 1, 2])
+        self.assertTrue(self.panel.sort_actions["model"].isChecked())
 
     def test_tags_are_folded_unless_used(self) -> None:
         self.select(0)
@@ -133,15 +136,31 @@ class CandidateReviewPanelTests(unittest.TestCase):
             panel.judgement_buttons[ReviewJudgement.EXCLUDED].setChecked(True)
             panel.save_current()
         self.assertEqual(blue(), [panel.complete_button])
+        # Before finishing only [분석 완료] shows; the summary comes after it.
+        self.assertTrue(panel.summary_button.isHidden())
+        self.assertTrue(panel.completion_label.isHidden())
         with patch.object(panel, "_confirm_completion", return_value=True):
             panel.complete_review()
         self.assertEqual(blue(), [panel.summary_button])
+        self.assertFalse(panel.summary_button.isHidden())
+        self.assertFalse(panel.completion_label.isHidden())
 
     def test_items_start_unreviewed_and_show_badge(self) -> None:
-        text = self.panel.candidate_list.item(0).text()
-        self.assertIn("[미검토]", text)
+        item = self.panel.candidate_list.item(0)
+        text = item.text()
+        self.assertIn("미검토", text)
+        self.assertNotIn("[", text)  # no bracketed state words
         self.assertIn("후보 #2", text)
         self.assertIn("00:05–00:07", text)
+        row = item.data(ROW_ROLE)
+        self.assertEqual((row.number, row.time_text, row.length_text), (2, "00:05–00:07", "2초"))
+        self.assertIs(row.judgement, ReviewJudgement.UNREVIEWED)
+        self.assertFalse(row.unsaved)
+
+    def test_length_text(self) -> None:
+        from video_agent.ui.review_panel import length_text
+
+        self.assertEqual([length_text(v) for v in (2, 59.6, 60, 65)], ["2초", "1분", "1분", "1분 5초"])
 
     def test_selecting_candidate_shows_detail_and_enables_editor(self) -> None:
         self.assertFalse(self.panel.record_group.isEnabled())
@@ -183,7 +202,7 @@ class CandidateReviewPanelTests(unittest.TestCase):
 
         self.assertEqual(self.panel.memo_edit.toPlainText(), "상자 아님")
         self.assertEqual(self.panel.unsaved_indexes(), (0,))
-        self.assertIn("(저장 안 됨)", self.panel.candidate_list.currentItem().text())
+        self.assertTrue(self.panel.candidate_list.currentItem().data(ROW_ROLE).unsaved)
         self.assertIn("후보 #1", self.panel.unsaved_label.text())
         self.assertEqual(self.panel.saved_record_for(0), ReviewRecord())
 
@@ -192,7 +211,7 @@ class CandidateReviewPanelTests(unittest.TestCase):
         self.assertEqual(self.panel.memo_edit.toPlainText(), "")
         self.assertTrue(self.panel.judgement_buttons[ReviewJudgement.UNREVIEWED].isChecked())
         self.assertFalse(self.panel.has_unsaved_changes())
-        self.assertNotIn("(저장 안 됨)", self.panel.candidate_list.currentItem().text())
+        self.assertFalse(self.panel.candidate_list.currentItem().data(ROW_ROLE).unsaved)
 
     def test_editing_back_to_saved_value_clears_draft(self) -> None:
         self.select(0)
@@ -208,28 +227,31 @@ class CandidateReviewPanelTests(unittest.TestCase):
         self.panel.bookmark_check.setChecked(True)
         self.panel.save_current()
 
-        chips = self.panel.filter_buttons
-        chips[ReviewJudgement.NEEDS_CHECK.value].click()
+        actions = self.panel.filter_actions
+        actions[ReviewJudgement.NEEDS_CHECK.value].trigger()
         self.assertEqual(self.visible_indexes(), [0])
-        chips["bookmarked"].click()
+        actions["bookmarked"].trigger()
         self.assertEqual(self.visible_indexes(), [2])
-        chips[ReviewJudgement.UNREVIEWED.value].click()
+        actions[ReviewJudgement.UNREVIEWED.value].trigger()
         self.assertEqual(self.visible_indexes(), [1, 2])
-        self.assertEqual(chips[ReviewJudgement.UNREVIEWED.value].text(), "미검토 2")
-        self.assertEqual(chips[ReviewJudgement.NEEDS_CHECK.value].text(), "추가 확인 1")
-        self.assertEqual(chips["bookmarked"].text(), "북마크 1")
-        self.assertEqual(chips["all"].text(), "전체 3")
+        self.assertEqual(actions[ReviewJudgement.UNREVIEWED.value].text(), "미검토 2")
+        self.assertEqual(actions[ReviewJudgement.NEEDS_CHECK.value].text(), "추가 확인 1")
+        self.assertEqual(actions["bookmarked"].text(), "북마크 1")
+        self.assertEqual(actions["all"].text(), "전체 3")
+        # One "보기" button names the shown set; progress counts saved judgements.
+        self.assertEqual(self.panel.view_button.text(), "보기: 미검토 2")
+        self.assertEqual(self.panel.progress_label.text(), "확인 1/3 · 남은 후보 2")
 
-    def test_filter_chips_wrap_when_the_panel_is_narrow(self) -> None:
-        chips = self.panel.filter_chips
-        row_width = sum(button.sizeHint().width() for button in self.panel.filter_buttons.values())
-        self.assertLess(chips.minimumSizeHint().width(), row_width)
-        one_line = chips.layout().heightForWidth(row_width + 100)
-        self.assertGreater(chips.layout().heightForWidth(row_width // 2), one_line)
+    def test_view_menu_holds_filters_and_sort_in_one_button(self) -> None:
+        menu = self.panel.view_button.menu()
+        texts = [action.text() for action in menu.actions() if not action.isSeparator()]
+        self.assertEqual(texts, ["전체 3", "미검토 3", "관련 있음 0", "추가 확인 0", "제외 0", "북마크 0", "시간순", "모델 순서"])
+        self.assertEqual(self.panel.view_button.text(), "보기: 전체 3")
+        self.assertEqual(self.panel.progress_label.text(), "확인 0/3 · 남은 후보 3")
 
     def test_filter_hiding_selection_clears_editor(self) -> None:
         self.select(0)
-        self.panel.filter_buttons[ReviewJudgement.RELEVANT.value].click()
+        self.panel.filter_actions[ReviewJudgement.RELEVANT.value].trigger()
         self.assertEqual(self.panel.candidate_list.count(), 0)
         self.assertFalse(self.panel.record_group.isEnabled())
 
@@ -240,6 +262,9 @@ class CandidateReviewPanelTests(unittest.TestCase):
         for button in self.panel.playback_buttons:
             button.click()
         self.assertEqual(requested, [(5.0, 7.0), (0.0, 37.0), (0.0, 127.0)])
+        # The range last played stays marked.
+        self.assertTrue(self.panel.playback_buttons[2].isChecked())
+        self.assertFalse(self.panel.playback_buttons[0].isChecked())
 
     def test_origin_label_distinguishes_sample_and_real_model(self) -> None:
         self.panel.set_job(job(ResultOrigin.SAMPLE))
@@ -302,8 +327,8 @@ class CandidateReviewPersistenceTests(unittest.TestCase):
         self.assertEqual(session.reviews[0].memo, "저장할 메모")
         self.assertIsNotNone(session.reviews[0].reviewed_at)
         self.assertEqual(session.reviews[0].review_seconds, 0.0)
-        self.assertIn("마지막 저장", self.panel.save_status_label.text())
-        self.assertIn("reviews/job-review.json", self.panel.save_status_label.text())
+        self.assertRegex(self.panel.save_status_label.text(), r"^저장됨 \d\d:\d\d$")
+        self.assertIn("reviews/job-review.json", self.panel.save_status_label.toolTip())
 
     def test_failed_save_keeps_draft_and_shows_error(self) -> None:
         def failing(_session: ReviewSession) -> Path:
@@ -320,7 +345,7 @@ class CandidateReviewPersistenceTests(unittest.TestCase):
         self.assertEqual(self.panel.unsaved_indexes(), (1,))
         self.assertEqual(self.panel.saved_record_for(1), ReviewRecord())
         self.assertEqual(self.panel.memo_edit.toPlainText(), "실패해도 남아야 함")
-        self.assertIn("(저장 안 됨)", self.panel.candidate_list.currentItem().text())
+        self.assertTrue(self.panel.candidate_list.currentItem().data(ROW_ROLE).unsaved)
         self.assertTrue(self.panel.save_button.isEnabled())
 
     def test_invalid_record_is_reported_as_failure(self) -> None:
@@ -589,6 +614,42 @@ class MainWindowReviewIntegrationTests(unittest.TestCase):
 
         self.window._player.play.assert_not_called()
         self.assertIn("영상 파일이 열려 있지 않아", self.window.statusBar().currentMessage())
+
+    def test_start_button_returns_to_the_played_range_or_the_video_start(self) -> None:
+        self.window._duration_ms = 60_000
+        self.window._player = MagicMock()
+        self.window._set_player_controls_enabled(True)  # as once a video is loaded
+        self.window._play_review_range(10.0, 20.0)
+        self.window._on_position_changed(20_000)  # the range ended and paused
+        self.window._player.setPosition.reset_mock()
+
+        self.window._start_button.click()
+        self.window._player.setPosition.assert_called_once_with(10_000)
+        self.assertEqual(self.window._playback_stop_ms, 20_000)
+
+        self.window._slider_pressed()  # moving the bar leaves the range
+        self.window._slider_released()
+        self.window._player.setPosition.reset_mock()
+        self.window._start_button.click()
+        self.window._player.setPosition.assert_called_once_with(0)
+
+    def test_speed_choice_sets_the_player_rate(self) -> None:
+        combo = self.window._speed_combo
+        self.assertEqual([combo.itemText(i) for i in range(combo.count())], ["0.5×", "1×", "1.5×", "2×"])
+        self.assertEqual(combo.currentText(), "1×")
+        self.window._player = MagicMock()
+        combo.setCurrentIndex(combo.findText("2×"))
+        self.window._player.setPlaybackRate.assert_called_with(2.0)
+        combo.setCurrentIndex(combo.findText("0.5×"))
+        self.window._player.setPlaybackRate.assert_called_with(0.5)
+
+    def test_play_button_keeps_its_width_when_playing(self) -> None:
+        button = self.window._play_button
+        width = button.width()
+        self.window._on_playback_state_changed(QMediaPlayer.PlaybackState.PlayingState)
+        self.assertEqual(button.text(), "일시정지")
+        self.assertEqual(button.width(), width)
+        self.assertEqual(button.minimumWidth(), button.maximumWidth())
 
     def test_playback_range_is_clamped_to_video_and_stops_at_end(self) -> None:
         self.window._duration_ms = 30_000

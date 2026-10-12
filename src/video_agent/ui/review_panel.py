@@ -10,7 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QAction, QActionGroup, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -20,8 +20,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QTextEdit,
@@ -41,6 +43,7 @@ from video_agent.contracts import (
     Segment,
 )
 from video_agent.ui import theme
+from video_agent.ui.candidate_delegate import ROW_ROLE, CandidateDelegate, CandidateRow
 from video_agent.ui.disclosure import DisclosureButton
 from video_agent.ui.flow_layout import FlowLayout, FlowRow
 from video_agent.video.files import format_milliseconds, seconds_to_milliseconds
@@ -84,6 +87,15 @@ def parse_tags(text: str) -> tuple[str, ...]:
             tags.append(tag)
     return tuple(tags)
 
+
+
+def length_text(seconds: float) -> str:
+    """Length of a candidate range, e.g. "2초" or "1분 5초"."""
+    total = max(0, round(seconds))
+    minutes, rest = divmod(total, 60)
+    if minutes and rest:
+        return f"{minutes}분 {rest}초"
+    return f"{minutes}분" if minutes else f"{rest}초"
 
 class _CompactListWidget(QListWidget):
     """Prefers its minimum height and grows only into spare space."""
@@ -165,36 +177,50 @@ class CandidateReviewPanel(QWidget):
         self.origin_label.setObjectName("reviewOrigin")
         self.origin_label.setWordWrap(True)
         self.origin_label.setAccessibleName("검토 중인 결과의 출처")
+        # The window's banner at the top already says where the result came from (text
+        # and colour); this copy is kept for screen readers and tests, not shown twice.
+        self.origin_label.setVisible(False)
         layout.addWidget(self.origin_label)
 
-        # Sorting is a small choice at the end of the filter chips, not a row of its own.
-        self.sort_combo = QComboBox()
-        self.sort_combo.setAccessibleName("후보 정렬")
-        self.sort_combo.setToolTip("후보 정렬")
+        # One line above the list: how far the review is, and one "보기" menu holding the
+        # state filters and the sort order (instead of a row of chips).
+        self._filter_key = FILTER_ALL
+        self._sort_key = SORT_TIME
+        self._filter_labels = {FILTER_ALL: "전체"}
+        self._filter_labels.update({j.value: JUDGEMENT_LABELS[j] for j in ReviewJudgement})
+        self._filter_labels[FILTER_BOOKMARKED] = "북마크"
+        self.progress_label = QLabel("")
+        self.progress_label.setObjectName("reviewProgress")
+        self.progress_label.setAccessibleName("검토 진행")
+        self.view_button = QPushButton("보기: 전체")
+        self.view_button.setAccessibleName("후보 보기와 정렬")
+        self.view_button.setObjectName("viewButton")
+        theme.mark_compact(self.view_button)
+        self.view_menu = QMenu(self.view_button)
+        self.filter_actions: dict[str, QAction] = {}
+        filter_group = QActionGroup(self)
+        for key, label in self._filter_labels.items():
+            action = self.view_menu.addAction(label)
+            action.setCheckable(True)
+            action.triggered.connect(lambda _checked=False, value=key: self.set_filter(value))
+            filter_group.addAction(action)
+            self.filter_actions[key] = action
+        self.filter_actions[FILTER_ALL].setChecked(True)
+        self.view_menu.addSeparator()
+        self.sort_actions: dict[str, QAction] = {}
+        sort_group = QActionGroup(self)
         for label, key in (("시간순", SORT_TIME), ("모델 순서", SORT_MODEL)):
-            self.sort_combo.addItem(label, key)
-        theme.mark_compact(self.sort_combo)
-
-        # Chips wrap onto a second line when the panel is narrow or the UI is zoomed.
-        self.filter_chips = QWidget()
-        filter_row = FlowLayout(self.filter_chips, spacing=6)
-        self.filter_group = QButtonGroup(self)
-        self.filter_buttons: dict[str, QPushButton] = {}
-        filters = [("전체", FILTER_ALL)]
-        filters += [(JUDGEMENT_LABELS[j], j.value) for j in ReviewJudgement]
-        filters.append(("북마크", FILTER_BOOKMARKED))
-        self._filter_labels = {key: label for label, key in filters}
-        for label, key in filters:
-            button = QPushButton(label)
-            button.setCheckable(True)
-            button.setAccessibleName(f"검토 상태 필터: {label}")
-            theme.set_variant(button, "chip")
-            self.filter_group.addButton(button)
-            self.filter_buttons[key] = button
-            filter_row.addWidget(button)
-        self.filter_buttons[FILTER_ALL].setChecked(True)
-        filter_row.addWidget(self.sort_combo)
-        layout.addWidget(self.filter_chips)
+            action = self.view_menu.addAction(label)
+            action.setCheckable(True)
+            action.triggered.connect(lambda _checked=False, value=key: self.set_sort(value))
+            sort_group.addAction(action)
+            self.sort_actions[key] = action
+        self.sort_actions[SORT_TIME].setChecked(True)
+        self.view_button.setMenu(self.view_menu)
+        list_bar = QHBoxLayout()
+        list_bar.addWidget(self.progress_label, 1)
+        list_bar.addWidget(self.view_button)
+        layout.addLayout(list_bar)
 
         self.candidate_list = _CompactListWidget()
         self.candidate_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -202,7 +228,12 @@ class CandidateReviewPanel(QWidget):
         # Grow from the minimum height into spare space instead of claiming a fixed preferred
         # height, so the reviewer notes stay on screen in the step layout.
         self.candidate_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.candidate_list.setSpacing(3)
+        # Rows drawn like the demo list: number, time, summary and review mark.
+        self.candidate_list.setObjectName("candidateList")
+        self.candidate_list.setItemDelegate(CandidateDelegate(self.candidate_list))
+        self.candidate_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.candidate_list.setResizeMode(QListView.ResizeMode.Adjust)
+        self.candidate_list.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self.candidate_list.setAccessibleName("중요 구간 후보 목록")
         layout.addWidget(self.candidate_list, 1)
 
@@ -222,8 +253,15 @@ class CandidateReviewPanel(QWidget):
         segment_layout.setContentsMargins(0, 0, 0, 0)
         segment_layout.setSpacing(0)
         self.playback_buttons: list[QPushButton] = []
+        # The range last played stays marked, so the next candidate plays the same way.
+        self._playback_group = QButtonGroup(self)
+        self._playback_group.setExclusive(True)
         for position, (label, padding) in enumerate(PLAYBACK_RANGES):
             button = QPushButton(label)
+            button.setCheckable(True)
+            theme.set_icon(button, "play")
+            theme.mark_compact(button)
+            self._playback_group.addButton(button)
             button.setToolTip(
                 "선택 후보의 확인용 범위만 재생"
                 if padding == 0
@@ -350,8 +388,6 @@ class CandidateReviewPanel(QWidget):
         completion_row.addWidget(self.complete_button)
 
     def _connect_signals(self) -> None:
-        self.filter_group.buttonClicked.connect(lambda _button: self._rebuild_list())
-        self.sort_combo.currentIndexChanged.connect(lambda _index: self._rebuild_list())
         self.tags_toggle.toggled.connect(
             lambda shown: self._record_layout.setRowVisible(self.tags_edit, shown)
         )
@@ -538,10 +574,9 @@ class CandidateReviewPanel(QWidget):
         self._saved = saved
         self._session = session
         if path is not None:
-            self._set_save_status(
-                f"마지막 저장 {datetime.now():%H:%M:%S} · {path.parent.name}/{path.name}",
-                "ok",
-            )
+            # The time is enough on screen; the file stays in the hover note.
+            self._set_save_status(f"저장됨 {datetime.now():%H:%M}", "ok")
+            self.save_status_label.setToolTip(f"저장 파일: {path.parent.name}/{path.name}")
         else:
             self._set_save_status("저장 위치 없음 (앱을 닫으면 사라짐)", "idle")
         self._refresh_item(index)
@@ -630,12 +665,17 @@ class CandidateReviewPanel(QWidget):
 
     def _refresh_completion_label(self) -> None:
         session = self._session
+        # Before finishing only [분석 완료] shows; the time and [결과 요약] come after.
         if session is None or session.completed_at is None:
             self.completion_label.setText("완료 기록 없음")
+            self.completion_label.setVisible(False)
+            self.summary_button.setVisible(False)
             self._refresh_primary_action()
             return
         completed = datetime.fromisoformat(session.completed_at)
         self.completion_label.setText(f"완료 {completed:%m-%d %H:%M}")
+        self.completion_label.setVisible(True)
+        self.summary_button.setVisible(True)
         self._refresh_primary_action()
 
     # ----- review time ----------------------------------------------------------
@@ -695,11 +735,9 @@ class CandidateReviewPanel(QWidget):
     def _visible_indexes(self) -> list[int]:
         segments = self._segments()
         indexes = list(range(len(segments)))
-        if self.sort_combo.currentData() == SORT_TIME:
+        if self._sort_key == SORT_TIME:
             indexes.sort(key=lambda i: (segments[i].start_sec, segments[i].end_sec, i))
-        selected = next(
-            (key for key, button in self.filter_buttons.items() if button.isChecked()), FILTER_ALL
-        )
+        selected = self._filter_key
         if selected == FILTER_BOOKMARKED:
             return [i for i in indexes if self.record_for(i).bookmarked]
         if selected != FILTER_ALL:
@@ -716,6 +754,7 @@ class CandidateReviewPanel(QWidget):
         for row, index in enumerate(self._visible_indexes()):
             item = QListWidgetItem(self._item_text(index))
             item.setIcon(self._item_icon(index))
+            item.setData(ROW_ROLE, self._item_row(index))
             item.setData(Qt.ItemDataRole.UserRole, self._segments()[index])
             item.setData(SEGMENT_INDEX_ROLE, index)
             self.candidate_list.addItem(item)
@@ -735,15 +774,31 @@ class CandidateReviewPanel(QWidget):
             return theme.icon("bookmark", theme.PRIMARY)
         return QIcon()
 
-    def _item_text(self, index: int) -> str:
+    def _item_row(self, index: int) -> CandidateRow:
         segment = self._segments()[index]
         record = self.record_for(index)
         start = format_milliseconds(seconds_to_milliseconds(segment.start_sec))
         end = format_milliseconds(seconds_to_milliseconds(segment.end_sec))
-        marks = [f"[{JUDGEMENT_LABELS[record.judgement]}]"]
-        if index in self._drafts:
-            marks.append("(저장 안 됨)")
-        return f"{' '.join(marks)} 후보 #{index + 1} · {start}–{end}\n{segment.summary}"
+        return CandidateRow(
+            number=index + 1,
+            time_text=f"{start}–{end}",
+            length_text=length_text(segment.end_sec - segment.start_sec),
+            summary=segment.summary,
+            judgement=record.judgement,
+            judgement_label=JUDGEMENT_LABELS[record.judgement],
+            bookmarked=record.bookmarked,
+            unsaved=index in self._drafts,
+        )
+
+    def _item_text(self, index: int) -> str:
+        """Plain text for screen readers; the list draws the row itself."""
+        row = self._item_row(index)
+        parts = [f"후보 #{row.number}", row.time_text, row.judgement_label]
+        if row.unsaved:
+            parts.append("저장 안 됨")
+        if row.bookmarked:
+            parts.append("북마크")
+        return f"{' · '.join(parts)}\n{row.summary}"
 
     def _refresh_item(self, index: int) -> None:
         for row in range(self.candidate_list.count()):
@@ -751,6 +806,7 @@ class CandidateReviewPanel(QWidget):
             if item.data(SEGMENT_INDEX_ROLE) == index:
                 item.setText(self._item_text(index))
                 item.setIcon(self._item_icon(index))
+                item.setData(ROW_ROLE, self._item_row(index))
                 return
 
     def _current_item_changed(
@@ -797,19 +853,50 @@ class CandidateReviewPanel(QWidget):
         if self._job is None or not 0 <= index < len(self._job.segments):
             return False
         if index not in self._visible_indexes():
-            self.filter_buttons[FILTER_ALL].setChecked(True)
-            self._rebuild_list()
+            self.set_filter(FILTER_ALL)
         for row in range(self.candidate_list.count()):
             if self.candidate_list.item(row).data(SEGMENT_INDEX_ROLE) == index:
                 self.candidate_list.setCurrentRow(row)
                 return True
         return False
 
+    def set_filter(self, key: str) -> None:
+        """Show only the candidates in one review state (or bookmarked, or all)."""
+        self._filter_key = key
+        self.filter_actions[key].setChecked(True)
+        self._rebuild_list()
+        self._refresh_view_button()
+
+    def set_sort(self, key: str) -> None:
+        self._sort_key = key
+        self.sort_actions[key].setChecked(True)
+        self._rebuild_list()
+        self._refresh_view_button()
+
     def _set_filter_counts(self, totals: dict[str, int] | None) -> None:
-        """Show each filter's candidate count on its chip (labels only without a result)."""
-        for key, button in self.filter_buttons.items():
+        """Counts in the "보기" menu, and the review progress above the list."""
+        self._totals = totals
+        for key, action in self.filter_actions.items():
             label = self._filter_labels[key]
-            button.setText(label if totals is None else f"{label} {totals[key]}")
+            action.setText(label if totals is None else f"{label} {totals[key]}")
+        if totals is None:
+            self.progress_label.setText("")
+        else:
+            total = totals[FILTER_ALL]
+            done = sum(
+                self.saved_record_for(index).judgement is not ReviewJudgement.UNREVIEWED
+                for index in range(total)
+            )
+            self.progress_label.setText(
+                f"확인 {done}/{total} · 남은 후보 {total - done}" if done < total else f"확인 {done}/{total} · 모두 확인"
+            )
+        self._refresh_view_button()
+
+    def _refresh_view_button(self) -> None:
+        totals = getattr(self, "_totals", None)
+        label = self._filter_labels[self._filter_key]
+        count = f" {totals[self._filter_key]}" if totals else ""
+        self.view_button.setText(f"보기: {label}{count}")
 
     # ----- editor -------------------------------------------------------------
 

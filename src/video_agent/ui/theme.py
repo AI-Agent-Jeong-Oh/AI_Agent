@@ -439,6 +439,12 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
         padding: {s(6)}px; border-radius: {s(4)}px; }}
     QPushButton#rowAction:hover {{ background: {GRAY_10}; }}
     QPushButton#rowAction:disabled {{ background: transparent; }}
+    QPushButton#playerIcon {{ border: none; background: transparent; padding: 0;
+        min-width: {s(32)}px; max-width: {s(32)}px; min-height: {s(32)}px; max-height: {s(32)}px;
+        border-radius: {s(4)}px; icon-size: {s(20)}px; }}
+    QPushButton#playerIcon:hover {{ background: {GRAY_10}; }}
+    QPushButton#playerIcon:pressed {{ background: {GRAY_20}; }}
+    QPushButton#playerIcon:disabled {{ background: transparent; }}
     QFrame#cardDivider {{ background: {LINE}; border: none; min-height: 1px; max-height: 1px; }}
     QWidget#videoPlaceholder {{ background: {VIDEO_BACKGROUND}; }}
     QLabel#videoPlaceholderText {{ color: {GRAY_20}; }}
@@ -563,6 +569,18 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
                                   border-left: {s(4)}px solid {PRIMARY_FILL}; }}
     QListWidget::item:hover:!selected {{ background: {GRAY_5}; }}
     QListWidget#clueList {{ border: none; border-radius: 0; padding: 0; }}
+    QLabel#stepNumber {{ background: {NAVY}; color: {GRAY_0}; border-radius: {s(10)}px;
+        min-width: {s(20)}px; max-width: {s(20)}px; min-height: {s(20)}px; max-height: {s(20)}px;
+        font-size: {s(CAPTION_PX)}px; font-weight: 700; }}
+    QFrame#stepSectionHeader {{ background: transparent; }}
+    QPushButton#viewButton {{ padding-right: {s(28)}px; }}
+    QPushButton#viewButton::menu-indicator {{ image: url("{down}"); width: {s(12)}px;
+        height: {s(12)}px; subcontrol-origin: padding; subcontrol-position: center right;
+        right: {s(10)}px; }}
+    QListWidget#candidateList {{ padding: 0; }}
+    QListWidget#candidateList::item {{ padding: 0; border-bottom: 1px solid {LINE}; }}
+    QListWidget#candidateList::item:selected {{ background: {PRIMARY_SOFT}; color: {TEXT};
+                                                border-left: none; }}
     QListWidget#clueList::item {{ padding: 0; border-bottom: 1px solid {LINE}; }}
     QListWidget#clueList::item:selected {{ background: {PRIMARY_SOFT}; color: {TEXT};
                                            border-left: none; }}

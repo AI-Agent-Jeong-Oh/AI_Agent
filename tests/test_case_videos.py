@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtGui import QKeySequence
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QPushButton
 
 from dataclasses import replace
 from unittest.mock import MagicMock
@@ -104,6 +104,31 @@ class CaseVideoListTests(unittest.TestCase):
                 video_list.setCurrentCell(row, 0)
                 return
         self.fail(f"{video_id} not listed")
+
+    def test_row_buttons_work_again_after_the_list_unlocks(self) -> None:
+        # Rows drawn while the list is locked (a video being checked) must not stay off.
+        card = self.window._video_list
+        card.set_locked(True)
+        self.add(self.cam_a, self.cam_b)
+        card.set_entries(card.entries, build_video_id(self.cam_a))
+        card.set_locked(False)
+
+        def buttons(video_id: str) -> list[QPushButton]:
+            row = next(i for i, entry in enumerate(card.entries) if entry.video_id == video_id)
+            return card.list.cellWidget(row, 3).findChildren(QPushButton)
+
+        pencil, remove = buttons(build_video_id(self.cam_b))
+        self.assertTrue(pencil.isEnabled())
+        self.assertTrue(remove.isEnabled())
+        current_pencil, current_remove = buttons(build_video_id(self.cam_a))
+        self.assertTrue(current_pencil.isEnabled())
+        self.assertFalse(current_remove.isEnabled())  # the open video cannot be removed
+
+        pencil.click()
+        self.assertTrue(card._clock_editor.isVisible())
+        card._clock_editor.close()
+        remove.click()
+        self.assertEqual([entry.video_id for entry in card.entries], [build_video_id(self.cam_a)])
 
     def test_adding_videos_lists_each_once_and_opens_the_first(self) -> None:
         self.add(self.cam_a, self.cam_b)
@@ -348,6 +373,10 @@ class CaseVideoListTests(unittest.TestCase):
         self.add(self.cam_b)
         self.assertFalse(self.window._camera_row.isHidden())
         self.assertEqual(self.tab_ids(), [build_video_id(self.cam_a), build_video_id(self.cam_b)])
+        # Short names in list order; the file name is in the hover note.
+        tabs = self.window._camera_tabs
+        self.assertEqual([tabs.tabText(i) for i in range(tabs.count())], ["영상 1 (결과 없음)", "영상 2 (결과 없음)"])
+        self.assertIn("cam_b", tabs.tabToolTip(1))
 
     def test_camera_tab_opens_that_video_and_its_newest_result(self) -> None:
         self.store(self.cam_b, "job-b")
@@ -357,6 +386,9 @@ class CaseVideoListTests(unittest.TestCase):
 
         self.assertEqual(self.window._video_id, build_video_id(self.cam_b))
         self.assertEqual(self.window._review_panel.job.job_id, "job-b")
+        # The only result is already shown, so no "이전 결과" row.
+        self.assertTrue(self.window._saved_results_row.isHidden())
+        self.assertEqual(self.window._camera_tabs.tabText(1), "영상 2 (3)")
 
     def test_canceling_unsaved_review_keeps_the_camera_tab(self) -> None:
         self.store(self.cam_a, "job-a")
