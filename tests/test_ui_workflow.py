@@ -277,8 +277,10 @@ class UiWorkflowTests(unittest.TestCase):
         )
         self.window._select_mode(AnalysisMode.LOCAL)
         self.window._set_model_id("qwen3-vl:8b-instruct")
+        self.window._update_selected_model_label()
+        self.assertEqual(self.window._selected_model_label.text(), "qwen3-vl:8b-instruct")
         banner = self.window._mode_banner
-        # Plain words on the line; program and model names only in the tooltip.
+        # The banner stays short; the explicit model ID is shown in the setting row.
         self.assertEqual(banner.text(), "정확한 분석 · 이 컴퓨터에서 처리")
         self.assertIn("qwen3-vl:8b-instruct", banner.toolTip())
         self.assertIn("자동 전환하지 않습니다", banner.toolTip())

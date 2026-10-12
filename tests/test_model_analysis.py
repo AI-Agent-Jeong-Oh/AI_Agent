@@ -502,6 +502,25 @@ class ProviderAdapterTests(unittest.TestCase):
             self.assertEqual(response.metrics.total_seconds, 2.0)
             self.assertEqual(response.metrics.prompt_token_count, 123)
 
+    def test_ollama_payload_can_use_an_explicit_comparison_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "frame.jpg"
+            image.write_bytes(b"jpeg-bytes")
+            schema = {
+                "type": "object",
+                "properties": {"decision": {"type": "string"}},
+                "required": ["decision"],
+            }
+            provider = HttpVisionProvider(local_config())
+
+            payload = provider.build_payload(
+                "compare",
+                (frame(image),),
+                response_format=schema,
+            )
+
+            self.assertEqual(payload["format"], schema)
+
     def test_openai_compatible_request_uses_memory_key_without_putting_it_in_payload(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             image = Path(directory) / "frame.jpg"

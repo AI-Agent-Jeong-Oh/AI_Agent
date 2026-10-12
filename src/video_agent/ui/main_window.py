@@ -65,6 +65,12 @@ from video_agent.analysis.evidence import (
     temporal_motion_requirement,
 )
 from video_agent.analysis.factory import create_analyzer
+from video_agent.analysis.batch import (
+    BatchExecutionWorker,
+    BatchPreparationWorker,
+    BatchVideoInput,
+    PreparedBatchVideo,
+)
 from video_agent.analysis.worker import AnalysisWorker
 from video_agent.contracts import (
     AnalysisClue,
@@ -84,22 +90,32 @@ from video_agent.contracts import (
     SamplingStrategy,
     Segment,
 )
-from video_agent.models.config import RuntimeInventory
+from video_agent.identity.comparison import (
+    PersonCandidateInput,
+    PersonComparisonAnalyzer,
+    PersonComparisonReport,
+)
+from video_agent.identity.worker import PersonComparisonWorker
+from video_agent.models.config import RuntimeInventory, config_from_environment
+from video_agent.models.provider import HttpVisionProvider
 from video_agent.storage.json_store import (
     AppSettings,
     CaseStore,
     ResultStore,
     ReviewStore,
+    PersonComparisonStore,
     SettingsStore,
     StoredResult,
 )
 from video_agent.storage.paths import AppPaths, CacheManager
 from video_agent.ui.analysis_choice import SAMPLE_LABEL, AnalysisChoice
+from video_agent.ui.batch_dialog import BatchDialogConfig, CaseBatchDialog
 from video_agent.ui.card import Card
 from video_agent.ui.case_panel import SOURCE_LABELS, CaseContextPanel
 from video_agent.ui.disclosure import DisclosureButton
 from video_agent.ui.focus_panel import FocusSection
 from video_agent.ui.motion_table import MotionHeader, MotionItemDelegate
+from video_agent.ui.person_comparison_dialog import PersonComparisonDialog
 from video_agent.ui.judgement_marks import JUDGEMENT_MARKS
 from video_agent.ui.time_field import TimeSpinBox, format_time
 from video_agent.ui.timeline import TimelineLegend, TimelineMark, TimelineSlider
@@ -267,6 +283,8 @@ class MainWindow(QMainWindow):
         self._worker: AnalysisWorker | None = None
         self._metadata_worker: MetadataWorker | None = None
         self._motion_worker: MotionScanWorker | None = None
+        self._batch_dialog: CaseBatchDialog | None = None
+        self._person_comparison_dialog: PersonComparisonDialog | None = None
         self._active_motion_scan_id: str | None = None
         self._sampling_interval_override: float | None = None
         self._sampling_timestamps_override: tuple[float, ...] = ()
@@ -293,6 +311,7 @@ class MainWindow(QMainWindow):
         self._settings_store = SettingsStore(self._paths.settings_file)
         self._result_store = ResultStore(self._paths)
         self._review_store = ReviewStore(self._paths)
+        self._person_comparison_store = PersonComparisonStore(self._paths)
         self._saved_results: dict[str, StoredResult] = {}
         self._common_rules: CommonRules | None = None
         self._common_rules_error: str | None = None
@@ -667,6 +686,13 @@ class MainWindow(QMainWindow):
         self._range_end.setAccessibleName("분석 구간 종료")
         # The external rows appear only for the external choice.
         purpose_layout.addRow("분석 방식", choice_row)
+        self._selected_model_label = QLabel()
+        self._selected_model_label.setObjectName("subsectionHelp")
+        self._selected_model_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self._selected_model_label.setAccessibleName("실제 사용 모델")
+        purpose_layout.addRow("사용 모델", self._selected_model_label)
         purpose_layout.addRow("외부 AI", self._external_model_edit)
         purpose_layout.addRow("인증키", self._external_api_key_edit)
         purpose_layout.addRow("사진 입력", self._external_vision_confirm)
@@ -808,6 +834,12 @@ class MainWindow(QMainWindow):
         approve_row.addWidget(self._approve_button, 1)
         approve_row.addWidget(self._run_button, 1)
         run_layout.addLayout(approve_row)
+        self._batch_button = QPushButton("여러 영상 일괄 분석")
+        self._batch_button.setToolTip(
+            "연결된 여러 영상을 준비한 뒤 표시된 구간과 모델을 한 번에 승인해 순차 분석합니다"
+        )
+        self._batch_button.setVisible(False)
+        run_layout.addWidget(self._batch_button)
         # Only external mode needs the separate transfer approval.
         run_layout.addWidget(self._transfer_button)
         self._progress_bar = QProgressBar()
@@ -881,6 +913,12 @@ class MainWindow(QMainWindow):
         result_layout.addWidget(self._case_overview)
         result_layout.addWidget(self._saved_results_row)
         self._review_panel = CandidateReviewPanel(self._segment_text)
+        self._person_compare_button = QPushButton("영상 간 인물 비교")
+        self._person_compare_button.setToolTip(
+            "서로 다른 영상의 실제 AI 분석 후보를 골라 외형 유사성을 비교합니다"
+        )
+        theme.mark_compact(self._person_compare_button)
+        result_group.add_header_widget(self._person_compare_button)
         result_group.add_header_widget(self._review_panel.completion_bar)
         self._review_panel.playback_row.flow.addWidget(help_label)
         self._result_list = self._review_panel.candidate_list
@@ -983,6 +1021,8 @@ class MainWindow(QMainWindow):
         self._approve_button.clicked.connect(self._approve_and_run)
         self._transfer_button.clicked.connect(self._approve_transfer)
         self._run_button.clicked.connect(self._start_analysis)
+        self._batch_button.clicked.connect(self._open_batch_analysis)
+        self._person_compare_button.clicked.connect(self._open_person_comparison)
         self._cancel_button.clicked.connect(self._cancel_analysis)
         # Every enable/disable of a step ② action re-picks the one blue "next" button.
         self._next_action_buttons = (
@@ -1141,6 +1181,7 @@ class MainWindow(QMainWindow):
         self._analysis_choice.blockSignals(False)
         self._last_mode = self._current_mode()
         self._update_external_controls()
+        self._update_selected_model_label()
         self._update_mode_banner()
         if self._settings_error:
             self.statusBar().showMessage(f"설정 파일을 읽지 못해 기본값을 사용합니다: {self._settings_error}")
@@ -1487,6 +1528,10 @@ class MainWindow(QMainWindow):
         self._refresh_attention()
         self._refresh_case_header()
         self._refresh_timeline_marks()
+        linked_count = sum(path is not None for path in self._case_videos.values())
+        self._batch_button.setVisible(linked_count >= 2)
+        self._batch_button.setEnabled(linked_count >= 2 and not self._background_work_running())
+        self._refresh_person_compare_button()
 
     def _review_target(self) -> str | None:
         return self._review_video_id or self._video_id
@@ -2134,6 +2179,8 @@ class MainWindow(QMainWindow):
             self._external_vision_confirm.setChecked(False)
             self._last_mode = mode
         self._update_external_controls()
+        self._update_selected_model_label()
+        self._refresh_person_compare_button()
         self._apply_ui_zoom()
         self._update_mode_banner()
         self._inputs_changed()
@@ -2167,7 +2214,19 @@ class MainWindow(QMainWindow):
     def _model_changed(self, *_args: object) -> None:
         if self._current_mode() is AnalysisMode.EXTERNAL:
             self._external_vision_confirm.setChecked(False)
+        self._update_selected_model_label()
+        self._refresh_person_compare_button()
         self._inputs_changed()
+
+    def _update_selected_model_label(self) -> None:
+        mode = self._current_mode()
+        if mode is AnalysisMode.SAMPLE:
+            text = "사용하지 않음 · 실제 AI 분석 아님"
+        elif mode is AnalysisMode.LOCAL:
+            text = self._model_id() or "확인된 로컬 영상 모델 없음"
+        else:
+            text = self._model_id() or "외부 AI 모델 ID를 입력하세요"
+        self._selected_model_label.setText(text)
 
     def _external_credential_changed(self, *_args: object) -> None:
         self._update_mode_banner()
@@ -2644,6 +2703,248 @@ class MainWindow(QMainWindow):
             else "외부 전송 내용을 승인했습니다. 실행하려면 OpenAI API 키를 입력해 주세요.",
             7000,
         )
+
+    def _open_batch_analysis(self) -> None:
+        """Prepare and execute one approved local plan per linked case video."""
+        if self._background_work_running():
+            self._show_error("이미 백그라운드 작업이 실행 중입니다.")
+            return
+        videos = tuple(
+            BatchVideoInput(video_id, path, path.name)
+            for video_id, path in self._case_videos.items()
+            if path is not None
+        )
+        if len(videos) < 2:
+            self._show_error("일괄 분석하려면 파일이 연결된 영상을 두 개 이상 등록해 주세요.")
+            return
+        purpose = self._purpose_edit.toPlainText().strip()
+        if not purpose:
+            self._show_error("여러 영상에 공통으로 적용할 분석 목적을 먼저 입력해 주세요.")
+            return
+        mode = self._current_mode()
+        if mode is AnalysisMode.EXTERNAL:
+            self._show_error(
+                "외부 AI는 영상별 전송 범위 승인이 필요해 일괄 분석에서 자동 실행하지 않습니다. "
+                "이 컴퓨터 분석 또는 시연용을 선택해 주세요."
+            )
+            return
+        model_id = self._model_id() or None
+        if mode is AnalysisMode.LOCAL and not self._runtime_inventory.confirms_vision(model_id):
+            self._show_error("사용할 로컬 영상 모델을 확인할 수 없습니다. 모델 목록을 새로고침해 주세요.")
+            return
+        limits = (
+            AnalysisLimits(
+                max_runtime_seconds=300.0,
+                max_provider_requests=3,
+                max_frames_per_request=4,
+            )
+            if mode is AnalysisMode.LOCAL
+            else AnalysisLimits()
+        )
+        provider_id = (
+            os.environ.get("VIDEO_AGENT_LOCAL_PROVIDER", "ollama-local")
+            if mode is AnalysisMode.LOCAL
+            else None
+        )
+        provider_endpoint = (
+            os.environ.get("VIDEO_AGENT_LOCAL_ENDPOINT", "http://127.0.0.1:11434/api/chat")
+            if mode is AnalysisMode.LOCAL
+            else None
+        )
+
+        def make_preparation(selected: tuple[BatchVideoInput, ...]) -> BatchPreparationWorker:
+            return BatchPreparationWorker(
+                selected,
+                purpose=purpose,
+                mode=mode,
+                model_id=model_id,
+                provider_id=provider_id,
+                provider_endpoint=provider_endpoint,
+                case_id=self._case_record.case_id,
+                case_revision=self._case_record.revision,
+                analysis_clues=self._current_case_clues(for_analysis=True),
+                focus_situations=self._focus_section.focus(),
+                limits=limits,
+            )
+
+        def make_execution(
+            prepared: tuple[PreparedBatchVideo, ...],
+        ) -> BatchExecutionWorker:
+            return BatchExecutionWorker(
+                prepared,
+                self._cache_manager.create_job_dir,
+                vision_capability_confirmed=(
+                    self._runtime_inventory.confirms_vision(model_id)
+                    if mode is AnalysisMode.LOCAL
+                    else False
+                ),
+            )
+
+        if mode is AnalysisMode.LOCAL:
+            model_label = f"{self._choice_label(model_id)} · {model_id}"
+        else:
+            model_label = SAMPLE_LABEL
+        dialog = CaseBatchDialog(
+            videos,
+            BatchDialogConfig(
+                purpose=purpose,
+                model_label=model_label,
+                make_preparation_worker=make_preparation,
+                make_execution_worker=make_execution,
+            ),
+            self,
+        )
+        dialog.result_ready.connect(self._on_batch_result)
+        dialog.running_changed.connect(self._on_batch_running_changed)
+        dialog.finished.connect(lambda _result: self._batch_dialog_closed(dialog))
+        self._batch_dialog = dialog
+        dialog.open()
+
+    def _on_batch_result(self, job: AnalysisJob) -> None:
+        if job.status is not JobStatus.CANCELED:
+            try:
+                self._result_store.save(job)
+            except OSError as exc:
+                self.statusBar().showMessage(f"일괄 분석 결과 저장 실패: {exc}", 8000)
+        self._record_run_outcome(job)
+
+    def _on_batch_running_changed(self, running: bool) -> None:
+        self._batch_button.setEnabled(not running)
+        self._refresh_video_list()
+        if running:
+            self.statusBar().showMessage("여러 영상 일괄 작업이 실행 중입니다.")
+        else:
+            self.statusBar().showMessage("여러 영상 일괄 작업 상태를 확인했습니다.", 5000)
+
+    def _batch_dialog_closed(self, dialog: CaseBatchDialog) -> None:
+        if self._batch_dialog is dialog:
+            self._batch_dialog = None
+        self._refresh_video_statuses()
+        self._refresh_video_list()
+
+    def _person_comparison_candidates(self) -> tuple[PersonCandidateInput, ...]:
+        candidates: list[PersonCandidateInput] = []
+        for video_id, path in self._case_videos.items():
+            job = self._newest_jobs.get(video_id)
+            if (
+                path is None
+                or job is None
+                or job.origin is not ResultOrigin.REAL_MODEL
+                or job.status not in {JobStatus.COMPLETED, JobStatus.PARTIAL}
+            ):
+                continue
+            for segment_index, segment in enumerate(job.segments):
+                candidates.append(
+                    PersonCandidateInput(
+                        video_id=video_id,
+                        video_name=self._camera_name(video_id),
+                        video_path=path,
+                        job_id=job.job_id,
+                        segment_index=segment_index,
+                        segment=segment,
+                    )
+                )
+        return tuple(candidates)
+
+    def _refresh_person_compare_button(self) -> None:
+        several = len(self._case_videos) >= 2
+        candidates = self._person_comparison_candidates()
+        candidate_videos = {item.video_id for item in candidates}
+        local_model = self._model_id() if self._current_mode() is AnalysisMode.LOCAL else ""
+        model_ready = self._runtime_inventory.confirms_vision(local_model or None)
+        ready = (
+            len(candidate_videos) >= 2
+            and model_ready
+            and not self._background_work_running()
+            and self._person_comparison_dialog is None
+        )
+        self._person_compare_button.setVisible(several)
+        self._person_compare_button.setEnabled(ready)
+        if len(candidate_videos) < 2:
+            tooltip = "서로 다른 영상 두 개 이상에서 실제 AI 분석 후보가 필요합니다"
+        elif not model_ready:
+            tooltip = "이 컴퓨터 분석에서 사용할 영상 모델을 선택해 주세요"
+        else:
+            tooltip = "영상마다 사건 후보 하나를 골라 외형 유사성을 로컬 모델로 비교합니다"
+        self._person_compare_button.setToolTip(tooltip)
+
+    def _open_person_comparison(self) -> None:
+        if self._background_work_running():
+            self._show_error("이미 백그라운드 작업이 실행 중입니다.")
+            return
+        candidates = self._person_comparison_candidates()
+        if len({item.video_id for item in candidates}) < 2:
+            self._show_error(
+                "인물 비교 전에 서로 다른 영상 두 개 이상을 실제 AI로 분석해 후보를 만들어 주세요."
+            )
+            return
+        if self._current_mode() is not AnalysisMode.LOCAL:
+            self._show_error("인물 비교는 현재 이 컴퓨터 분석 모델에서만 실행할 수 있습니다.")
+            return
+        model_id = self._model_id()
+        if not self._runtime_inventory.confirms_vision(model_id or None):
+            self._show_error("사용할 로컬 영상 모델을 확인할 수 없습니다. 모델 목록을 새로고침해 주세요.")
+            return
+        provider_id = os.environ.get("VIDEO_AGENT_LOCAL_PROVIDER", "ollama-local")
+        provider_endpoint = os.environ.get(
+            "VIDEO_AGENT_LOCAL_ENDPOINT", "http://127.0.0.1:11434/api/chat"
+        )
+
+        def make_worker(
+            selected: tuple[PersonCandidateInput, ...],
+        ) -> PersonComparisonWorker:
+            config = config_from_environment(
+                AnalysisMode.LOCAL,
+                model_override=model_id,
+                provider_override=provider_id,
+                endpoint_override=provider_endpoint,
+                vision_capability_confirmed=True,
+            )
+            analyzer = PersonComparisonAnalyzer(
+                HttpVisionProvider(config),
+                self._cache_manager.create_job_dir,
+            )
+            return PersonComparisonWorker(
+                analyzer,
+                self._case_record.case_id,
+                selected,
+            )
+
+        dialog = PersonComparisonDialog(
+            candidates,
+            f"{self._choice_label(model_id)} · {model_id}",
+            make_worker,
+            self,
+        )
+        dialog.report_ready.connect(self._on_person_comparison_report)
+        dialog.running_changed.connect(self._on_person_comparison_running_changed)
+        dialog.finished.connect(
+            lambda _result: self._person_comparison_dialog_closed(dialog)
+        )
+        self._person_comparison_dialog = dialog
+        self._refresh_person_compare_button()
+        dialog.open()
+
+    def _on_person_comparison_report(self, report: PersonComparisonReport) -> None:
+        try:
+            self._person_comparison_store.save(report)
+        except (OSError, ValueError) as exc:
+            self.statusBar().showMessage(f"인물 비교 결과 저장 실패: {exc}", 8000)
+            return
+        self.statusBar().showMessage(
+            f"인물 후보 비교 {report.completed_pair_count}/{report.attempted_pair_count}쌍 저장 완료",
+            8000,
+        )
+
+    def _on_person_comparison_running_changed(self, running: bool) -> None:
+        self._refresh_video_list()
+        if running:
+            self.statusBar().showMessage("영상 간 인물 후보 비교가 실행 중입니다.")
+
+    def _person_comparison_dialog_closed(self, dialog: PersonComparisonDialog) -> None:
+        if self._person_comparison_dialog is dialog:
+            self._person_comparison_dialog = None
+        self._refresh_person_compare_button()
 
     def _start_analysis(self) -> None:
         if self._background_work_running():
@@ -3588,7 +3889,13 @@ class MainWindow(QMainWindow):
         return self._metadata_worker is not None and self._metadata_worker.isRunning()
 
     def _background_work_running(self) -> bool:
-        return any(
+        return (
+            self._batch_dialog is not None
+            and self._batch_dialog.is_running
+        ) or (
+            self._person_comparison_dialog is not None
+            and self._person_comparison_dialog.is_running
+        ) or any(
             worker is not None and worker.isRunning()
             for worker in (self._worker, self._motion_worker)
         )
@@ -3601,6 +3908,13 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard_unsaved_reviews():
             event.ignore()
             return
+        dialogs = tuple(
+            dialog
+            for dialog in (self._batch_dialog, self._person_comparison_dialog)
+            if dialog is not None and dialog.is_running
+        )
+        for dialog in dialogs:
+            dialog.request_cancel()
         workers = [
             item
             for item in (self._worker, self._motion_worker, self._metadata_worker)
@@ -3608,7 +3922,9 @@ class MainWindow(QMainWindow):
         ]
         for worker in workers:
             worker.request_cancel()
-        if any(not worker.wait(2000) for worker in workers):
+        dialogs_finished = all(dialog.wait_for_finished(2000) for dialog in dialogs)
+        workers_finished = all(worker.wait(2000) for worker in workers)
+        if not dialogs_finished or not workers_finished:
             event.ignore()
             QMessageBox.warning(self, "종료 대기", "작업을 정리하고 있습니다. 잠시 후 다시 종료해 주세요.")
             return

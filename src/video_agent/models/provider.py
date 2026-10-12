@@ -48,6 +48,7 @@ class VisionProvider(Protocol):
         *,
         timeout_seconds: float,
         cancel_event: Event,
+        response_format: dict[str, Any] | None = None,
     ) -> ProviderResponse: ...
 
 
@@ -83,6 +84,7 @@ class HttpVisionProvider:
         *,
         timeout_seconds: float,
         cancel_event: Event,
+        response_format: dict[str, Any] | None = None,
     ) -> ProviderResponse:
         if cancel_event.is_set():
             raise OperationCanceled("모델 호출이 취소되었습니다.")
@@ -98,7 +100,7 @@ class HttpVisionProvider:
                 )
             headers["Authorization"] = f"Bearer {api_key}"
 
-        payload = self.build_payload(prompt, frames)
+        payload = self.build_payload(prompt, frames, response_format=response_format)
         try:
             response = self._transport(self.config.endpoint, headers, payload, timeout_seconds)
         except urllib.error.HTTPError as exc:
@@ -123,13 +125,15 @@ class HttpVisionProvider:
         self,
         prompt: str,
         frames: tuple[ExtractedFrame, ...],
+        *,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         encoded = [base64.b64encode(frame.path.read_bytes()).decode("ascii") for frame in frames]
         if self.config.protocol == "ollama_native":
             return {
                 "model": self.config.model_id,
                 "messages": [{"role": "user", "content": prompt, "images": encoded}],
-                "format": response_schema(),
+                "format": response_format or response_schema(),
                 "stream": False,
                 "think": False,
                 "options": {
@@ -216,7 +220,9 @@ class FakeVisionProvider:
         *,
         timeout_seconds: float,
         cancel_event: Event,
+        response_format: dict[str, Any] | None = None,
     ) -> ProviderResponse:
+        del response_format
         if cancel_event.is_set():
             raise OperationCanceled("가짜 공급자 호출이 취소되었습니다.")
         self.calls += 1

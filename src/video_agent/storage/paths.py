@@ -49,6 +49,10 @@ class AppPaths:
     def reviews_dir(self) -> Path:
         return self.data_dir / "reviews"
 
+    @property
+    def comparisons_dir(self) -> Path:
+        return self.data_dir / "person_comparisons"
+
 
 class CacheManager:
     ROOT_MARKER = ".video-agent-cache-root"

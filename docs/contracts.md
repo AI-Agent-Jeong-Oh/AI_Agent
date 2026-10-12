@@ -23,6 +23,7 @@ Python 기준 정의는 `src/video_agent/contracts.py`, Agent 계획은 `agent/p
 - `AnalysisPlan.analysis_clues`: 승인한 단서 스냅샷을 fingerprint에 포함해 변경 후 재승인
 - `TransferManifest.analysis_clues`: 외부로 전송할 사전 정보 문구를 프레임과 함께 명시
 - `ReviewSession`, `CandidateReview`, `ReviewJudgement`: 모델 후보에 대한 사람의 검토 판단·메모를 모델 결과와 분리해 저장
+- `PersonComparisonReport`, `PersonPairComparison`: 서로 다른 영상의 사용자 선택 후보를 쌍별로 비교한 외형 유사성 검토 자료를 사건 분석 결과와 분리해 저장
 - `CaseRecord.focus_situations`, `CaseRecord.focus_hints`, `FocusSituation`: 사건 유형별로 제안된 "우선 확인할 상황"과 사용자가 직접 입력한 짧은 탐색 힌트를 사건과 함께 저장
 
 모든 시간은 원본 시작 기준 초입니다. Qt UI 밀리초는 UI 경계에서만 변환합니다.
@@ -393,6 +394,56 @@ def analyze(request, cancel_event, on_progress) -> AnalysisJob: ...
 - 시간은 [기록 저장]과 [분석 완료]를 누를 때만 파일에 기록합니다. 보기만 하고 버튼 없이 닫으면 그 사이 시간은 저장되지 않습니다. `review_seconds`는 기록을 저장한 후보에만 남고, 저장한 기록이 없는 후보를 본 시간은 `total_review_seconds`에만 포함됩니다.
 - `completed_at`은 마지막으로 [분석 완료]를 누른 시각입니다. 완료 후에도 기록을 수정할 수 있고 시간 측정도 계속됩니다.
 - 사람 확인 시간은 AI 처리 시간(`AnalysisJob.elapsed_seconds`)과 분리해 저장합니다. 발표·평가용 지표이므로 앱 화면과 결과 요약에는 표시하지 않습니다.
+
+## 영상 간 인물 후보 비교 보고서
+
+이 형식은 `contracts.py`의 이벤트 분석 결과를 바꾸지 않는 보조 저장 계약이며 `identity/comparison.py`에 정의합니다.
+
+```json
+{
+  "report_id": "person-compare-a1b2c3",
+  "case_id": "case-a1b2c3",
+  "model_id": "qwen3-vl:8b-instruct",
+  "origin": "real_model",
+  "candidates": [{
+    "candidate_id": "job-1:0",
+    "video_id": "video-hash-a",
+    "video_name": "영상 1",
+    "job_id": "job-1",
+    "segment_index": 0,
+    "start_sec": 10.0,
+    "end_sec": 14.0,
+    "summary": "사람이 물체를 들고 이동하는 장면 후보",
+    "source_frame_ids": ["video-hash-a:11000", "video-hash-a:13000"],
+    "source_timestamps_sec": [11.0, 13.0]
+  }],
+  "comparisons": [{
+    "left_candidate_id": "job-1:0",
+    "right_candidate_id": "job-2:1",
+    "decision": "inconclusive",
+    "observable_similarities": ["어두운 상의와 밝은 신발이 관찰됨"],
+    "observable_differences": [],
+    "limitations": ["얼굴이 작고 카메라 각도와 조명이 다름"],
+    "appearance_similarity_score": 58,
+    "evidence_quality": "limited",
+    "left_frame_ids": ["video-hash-a:11000", "video-hash-a:13000"],
+    "right_frame_ids": ["video-hash-b:9000", "video-hash-b:12000"]
+  }],
+  "attempted_pair_count": 1,
+  "completed_pair_count": 1,
+  "elapsed_seconds": 8.4,
+  "error": null
+}
+```
+
+- 한 실행은 서로 다른 영상에서 고른 후보를 하나씩만 받으며 가능한 모든 영상 쌍을 비교합니다. 영상 수는 고정하지 않지만 쌍 수는 `n(n-1)/2`로 늘어나므로 실행 전 UI에 표시합니다.
+- `decision`은 `similar_candidate`, `different_candidate`, `inconclusive` 중 하나입니다. 어떤 값도 신원 확인, 동일 범죄자 확정, 범죄 성립, 의도 또는 법적 책임 판단이 아닙니다.
+- `appearance_similarity_score`는 0~100 정수인 외형 유사도 검토 참고값입니다. 학습 데이터로 보정된 신원 일치 확률이나 정확도 지표가 아니며, `evidence_quality`의 `good`, `limited`, `poor`와 한계를 항상 함께 표시합니다.
+- 모델은 복장·신발·소지품·보이는 비민감 외형을 비교할 수 있지만 인종·민족·성별 같은 민감 속성을 추정하지 않습니다. 중심 인물이 모호하거나 품질·각도·가림·시간차가 크면 `inconclusive`를 사용합니다.
+- `limitations`는 비어 있을 수 없습니다. 저장 보고서에는 원본 영상 경로나 추출 프레임 경로를 넣지 않고 후보·프레임 ID와 원본 시각만 보존합니다.
+- UI의 A/B 사진은 실행 중 추출한 전체 근거 프레임을 캐시에서 읽어 표시할 뿐 보고서에 이미지나 경로를 넣지 않습니다. 자동 인물 검출·잘라내기 결과로 표현하지 않습니다.
+- `origin`은 `real_model`, `test_double`, `none`으로 실제 모델 비교, 자동 테스트, 유효 비교 없음 상태를 구분합니다. 보고서는 사용자 데이터 폴더의 `person_comparisons/<report_id>.json`에 결과·검토 기록과 별도로 저장합니다.
+- 이 기능은 최신 `origin=real_model` 이벤트 후보만 UI 선택지로 노출합니다. 시연용·테스트 결과를 실제 사람 비교처럼 제시하지 않습니다.
 
 ## PDF 검색 계약
 
