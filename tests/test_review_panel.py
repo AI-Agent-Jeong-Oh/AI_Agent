@@ -335,7 +335,7 @@ class CandidateReviewPersistenceTests(unittest.TestCase):
 
     def test_save_passes_only_saved_records_to_persist(self) -> None:
         self.panel.set_job(job(), persist=self.persist)
-        self.assertIn("아직 파일에 저장한 기록 없음", self.panel.save_status_label.text())
+        self.assertEqual(self.panel.save_status_label.text(), "")  # nothing to say before a save
         self.edit(0, ReviewJudgement.RELEVANT, "저장할 메모")
         self.panel.save_current()
         saved_so_far = len(self.written)

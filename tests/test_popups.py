@@ -71,6 +71,14 @@ class PopupTests(unittest.TestCase):
         self.assertIsInstance(panel.occurrence_edit, DateTimeField)
         panel.close()
 
+    def test_occurrence_time_row_is_not_shown(self) -> None:
+        panel = CaseContextPanel()
+        panel.show()
+        self.app.processEvents()
+        self.assertFalse(panel.occurrence_edit.isVisible())
+        self.assertFalse(panel.occurrence_certainty.isVisible())
+        panel.close()
+
     def test_unknown_occurrence_time_needs_no_date(self) -> None:
         panel = CaseContextPanel()
         certainty = panel.occurrence_certainty

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from uuid import uuid4
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -52,8 +52,6 @@ SOURCE_LABELS = {
     ClueSource.DOCUMENT: "문서",
     ClueSource.OTHER: "기타",
 }
-# Nothing beside the title; it says "단서 수정 중" only while a clue is being edited.
-CLUE_ASIDE = ""
 
 
 
@@ -158,7 +156,8 @@ class CaseContextPanel(Card):
         # How sure comes first; with "미확인" there is no date to enter, so the field hides.
         occurrence_row.addWidget(self.occurrence_certainty)
         occurrence_row.addWidget(self.occurrence_edit, 1)
-        self._occurrence_hint = QLabel("발생 시각을 모르면 입력하지 않습니다")
+        # Holds the row's spare width while the date field is hidden ("미확인"); no text.
+        self._occurrence_hint = QLabel("")
         self._occurrence_hint.setObjectName("subsectionHelp")
         occurrence_row.addWidget(self._occurrence_hint, 1)
         self.notes_edit = QPlainTextEdit()
@@ -171,6 +170,9 @@ class CaseContextPanel(Card):
         form.addRow("사건 유형", self.case_type)
         form.addRow("사건명", title_widget)
         form.addRow("발생 시각", occurrence_widget)
+        # Not asked any more (the user's call); the fields stay hidden so an older case's
+        # time is kept as it was when the case is saved again.
+        form.setRowVisible(occurrence_widget, False)
         form.addRow(self.admin_toggle)
         form.addRow("관리 메모", self.notes_edit)
         self._form = form
@@ -183,13 +185,8 @@ class CaseContextPanel(Card):
         title_row = QHBoxLayout()
         clue_title = QLabel("분석 단서")
         clue_title.setObjectName("subsectionTitle")
-        clue_aside = WrapLabel(CLUE_ASIDE)
-        clue_aside.setObjectName("subsectionAside")
-        # While a clue is being edited this says so, instead of a line that pushes the list.
-        self.clue_aside = clue_aside
         title_row.addWidget(clue_title)
-        title_row.addSpacing(8)
-        title_row.addWidget(clue_aside, 1, Qt.AlignmentFlag.AlignBottom)
+        title_row.addStretch(1)
         self.clue_count_label = QLabel("분석 사용 0 / 전체 0")
         self.clue_count_label.setObjectName("subsectionAside")
         title_row.addWidget(self.clue_count_label, 0, Qt.AlignmentFlag.AlignBottom)
@@ -225,19 +222,10 @@ class CaseContextPanel(Card):
 
         self.clue_text = QLineEdit()
         self.clue_text.setAccessibleName("단서 문장")
-        self.cancel_clue_edit_button = QPushButton("선택 해제")
-        self.cancel_clue_edit_button.setVisible(False)
-        # Like the demo page: deleting is offered while a clue is selected for editing.
-        self.remove_clue_button = QPushButton("삭제")
-        self.remove_clue_button.setAccessibleName("선택 단서 삭제")
-        self.remove_clue_button.setVisible(False)
         self.add_clue_button = QPushButton("단서 추가")
         theme.set_icon(self.add_clue_button, "plus")
-        theme.set_icon(self.remove_clue_button, "trash-2")
         text_row = QHBoxLayout()
         text_row.addWidget(self.clue_text, 1)
-        text_row.addWidget(self.remove_clue_button)
-        text_row.addWidget(self.cancel_clue_edit_button)
         text_row.addWidget(self.add_clue_button)
         editor_layout.addLayout(text_row)
         layout.addWidget(editor)
@@ -282,8 +270,10 @@ class CaseContextPanel(Card):
         self.occurrence_certainty.currentIndexChanged.connect(self._occurrence_certainty_changed)
         self.add_clue_button.clicked.connect(self._add_clue)
         self.clue_text.returnPressed.connect(self._add_clue)
-        self.cancel_clue_edit_button.clicked.connect(self._cancel_clue_edit)
-        self.remove_clue_button.clicked.connect(self._remove_selected_clue)
+        # Leaving an edit without saving: Esc in the sentence field, the chosen row
+        # again, or an empty part of the table (see ClueList).
+        self.clue_text.installEventFilter(self)
+        self.clue_list.release_requested.connect(self._cancel_clue_edit)
         self.clue_list.itemChanged.connect(self._clue_item_changed)
         self.clue_list.currentRowChanged.connect(self._select_clue)
         self._clue_delegate.edit_requested.connect(self.clue_list.setCurrentRow)
@@ -294,6 +284,17 @@ class CaseContextPanel(Card):
         self.load_button.clicked.connect(self._show_case_menu)
         self.admin_toggle.toggled.connect(lambda _checked: self._update_admin_rows())
         self.case_type.changed.connect(self._case_type_changed)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt API
+        if (
+            watched is self.clue_text
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() == Qt.Key.Key_Escape
+            and self._editing_clue_row() is not None
+        ):
+            self._cancel_clue_edit()
+            return True
+        return super().eventFilter(watched, event)
 
     def _occurrence_certainty_changed(self, *_args: object) -> None:
         if self.occurrence_certainty.currentData() == InformationCertainty.UNKNOWN and not self._loading:
@@ -394,9 +395,6 @@ class CaseContextPanel(Card):
             self.clue_text.clear()
             self._restore_clue_choices()
         self.add_clue_button.setText("변경 저장" if editing else "단서 추가")
-        self.cancel_clue_edit_button.setVisible(editing)
-        self.remove_clue_button.setVisible(editing)
-        self.clue_aside.setText("단서 수정 중 · 표에서 고른 줄을 위에서 고칩니다" if editing else CLUE_ASIDE)
         self.clue_use.setEnabled(not editing and self._editing_enabled)
         self._update_clue_inputs()
 
@@ -470,9 +468,6 @@ class CaseContextPanel(Card):
         )
         item.setData(Qt.ItemDataRole.UserRole, clue)
         self.clue_list.addItem(item)
-
-    def _remove_selected_clue(self) -> None:
-        self._remove_clue_row(self.clue_list.currentRow())
 
     def _remove_clue_row(self, row: int) -> None:
         if row < 0 or row >= self.clue_list.count() or not self._editing_enabled:
@@ -584,8 +579,6 @@ class CaseContextPanel(Card):
             self.clue_source,
             self.clue_use,
             self.add_clue_button,
-            self.cancel_clue_edit_button,
-            self.remove_clue_button,
             self.clue_list,
         ):
             widget.setEnabled(enabled)

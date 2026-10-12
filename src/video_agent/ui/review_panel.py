@@ -541,7 +541,7 @@ class CandidateReviewPanel(QWidget):
                 f"저장된 검토 기록 {len(session.reviews)}건을 불러왔습니다.", "ok"
             )
         elif persist is not None:
-            self._set_save_status("아직 파일에 저장한 기록 없음", "idle")
+            self._set_save_status("", "idle")
         else:
             self._set_save_status("저장 위치 없음 (앱을 닫으면 사라짐)", "idle")
         if not job.segments:
@@ -957,7 +957,7 @@ class CandidateReviewPanel(QWidget):
                 widget.setEnabled(enabled)
             if index is None:
                 self.detail_view.setPlainText(
-                    "후보를 고르면 AI 분석 결과가 표시됩니다."
+                    ""
                     if self._segments()
                     else ""
                 )

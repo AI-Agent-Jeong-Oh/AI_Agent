@@ -65,7 +65,7 @@ class CaseClueTests(unittest.TestCase):
         self.panel.clue_list.setCurrentRow(0)
         self.assertEqual(self.panel.clue_text.text(), "처음 문장")
         self.assertEqual(self.panel.add_clue_button.text(), "변경 저장")
-        self.assertFalse(self.panel.cancel_clue_edit_button.isHidden())
+        self.assertFalse(hasattr(self.panel, "cancel_clue_edit_button"))  # no "선택 해제"
         self.assertFalse(self.panel.clue_use.isEnabled())
 
         self.panel.clue_text.setText("고친 문장")
@@ -87,16 +87,34 @@ class CaseClueTests(unittest.TestCase):
         self.assertTrue(self.panel.clue_use.isEnabled())
         self.assertEqual(self.panel.clue_text.text(), "")
 
-    def test_cancel_edit_changes_nothing(self) -> None:
+    def test_leaving_an_edit_changes_nothing(self) -> None:
         self.add("그대로 둘 단서")
+        self.add("다른 단서")
         saved = self.panel.clues()
-        self.panel.clue_list.setCurrentRow(0)
-        self.panel.clue_text.setText("저장하지 않을 문장")
-        self.panel.cancel_clue_edit_button.click()
+        clue_list = self.panel.clue_list
+        self.panel.show()
+        self.app.processEvents()
 
-        self.assertEqual(self.panel.clues(), saved)
-        self.assertEqual(self.panel.add_clue_button.text(), "단서 추가")
-        self.assertEqual(self.panel.clue_text.text(), "")
+        def leaves(action) -> None:
+            clue_list.setCurrentRow(0)
+            self.panel.clue_text.setText("저장하지 않을 문장")
+            action()
+            self.assertEqual(self.panel.clues(), saved)
+            self.assertEqual(self.panel.add_clue_button.text(), "단서 추가")
+            self.assertEqual(self.panel.clue_text.text(), "")
+
+        # Esc in the sentence field.
+        leaves(lambda: QTest.keyClick(self.panel.clue_text, Qt.Key.Key_Escape))
+        # The chosen row again (on its sentence, not on the check box or marks).
+        def same_row() -> None:
+            rect = clue_list.visualItemRect(clue_list.item(0))
+            QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=rect.center())
+        leaves(same_row)
+        # An empty part of the table.
+        def empty_space() -> None:
+            bottom = clue_list.viewport().rect().bottomLeft() + QPoint(40, -3)
+            QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=bottom)
+        leaves(empty_space)
 
     def test_edit_keeps_unchecked_state_from_the_list(self) -> None:
         self.add("체크 해제할 단서")
@@ -204,7 +222,6 @@ class CaseClueTests(unittest.TestCase):
         QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(cells.edit.center().x(), y))
         self.assertEqual(self.panel.clue_text.text(), "둘째 단서")
         self.assertEqual(self.panel.add_clue_button.text(), "변경 저장")
-        self.assertIn("단서 수정 중", self.panel.clue_aside.text())
         QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(cells.remove.center().x(), y))
         self.assertEqual([clue.text for clue in self.panel.clues()], ["첫 단서"])
 
@@ -226,7 +243,7 @@ class CaseClueTests(unittest.TestCase):
         # Editing a clue and leaving it returns to that choice, not to blank.
         panel.clue_list.setCurrentRow(0)
         panel.clue_source.setCurrentIndex(panel.clue_source.findData(ClueSource.DOCUMENT))
-        panel.cancel_clue_edit_button.click()
+        QTest.keyClick(panel.clue_text, Qt.Key.Key_Escape)
         self.assertEqual(panel.clue_source.currentData(), ClueSource.REPORT)
 
     def test_empty_case_name_is_asked_for(self) -> None:
@@ -250,7 +267,6 @@ class CaseClueTests(unittest.TestCase):
         self.panel.clue_list.setCurrentRow(0)
         self.panel.set_editing_enabled(False)
         self.assertFalse(self.panel.add_clue_button.isEnabled())
-        self.assertFalse(self.panel.cancel_clue_edit_button.isEnabled())
         self.assertFalse(self.panel.clue_list.isEnabled())
 
 

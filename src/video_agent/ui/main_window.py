@@ -224,9 +224,9 @@ class MainWindow(QMainWindow):
     )
     MOTION_EMPTY_NO_VIDEO = "등록된 CCTV 영상이 없습니다."
     MOTION_EMPTY_NOT_SCANNED = ""
-    MOTION_EMPTY_RANGE_CHANGED = "범위가 바뀌어 움직임 구간을 다시 찾아야 합니다."
-    MOTION_EMPTY_SCANNING = "움직임 구간을 찾는 중입니다."
-    MOTION_EMPTY_NONE_FOUND = "현재 분석 범위에서 발견된 움직임 구간이 없습니다."
+    MOTION_EMPTY_RANGE_CHANGED = "범위가 바뀌었습니다. 움직임 구간을 다시 찾아 주세요."
+    MOTION_EMPTY_SCANNING = ""  # the progress line below says it
+    MOTION_EMPTY_NONE_FOUND = "이 범위에는 움직임 구간이 없습니다."
     OPENAI_PROVIDER_ID = "openai"
     OPENAI_CHAT_COMPLETIONS_ENDPOINT = "https://api.openai.com/v1/chat/completions"
     OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
@@ -884,9 +884,7 @@ class MainWindow(QMainWindow):
         result_group.add_header_widget(self._review_panel.completion_bar)
         self._review_panel.playback_row.flow.addWidget(help_label)
         self._result_list = self._review_panel.candidate_list
-        self._review_empty_label = QLabel(
-            "표시할 결과가 없습니다. ② 분석 계획·실행에서 분석하거나 저장된 결과를 여세요."
-        )
+        self._review_empty_label = QLabel("아직 분석 결과가 없습니다.")
         self._review_empty_label.setWordWrap(True)
         self._review_empty_label.setObjectName("placeholder")
         self._result_help_label = help_label

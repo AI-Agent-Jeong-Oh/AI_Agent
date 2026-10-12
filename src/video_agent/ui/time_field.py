@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import re
 
-from PySide6.QtGui import QValidator
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QFocusEvent, QKeyEvent, QMouseEvent, QValidator
 from PySide6.QtWidgets import QDoubleSpinBox
 
 _PARTIAL = re.compile(r"^\d{0,3}(:\d{0,2}){0,2}(\.\d{0,3})?$")
@@ -46,10 +47,39 @@ def parse_time(text: str) -> float | None:
 
 
 class TimeSpinBox(QDoubleSpinBox):
+    """Typing replaces the time shown: a click selects it all, and "영상 끝" gives way."""
+
     def __init__(self) -> None:
         super().__init__()
         self.setDecimals(3)
         self.setSingleStep(1.0)
+        self.lineEdit().installEventFilter(self)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt API
+        # A click (which would place the cursor inside "0:30" or after "영상 끝")
+        # selects the whole time, so what is typed next replaces it.
+        if watched is self.lineEdit() and event.type() == QMouseEvent.Type.MouseButtonRelease:
+            if not self.lineEdit().hasSelectedText():
+                QTimer.singleShot(0, self.selectAll)
+        return super().eventFilter(watched, event)
+
+    def focusInEvent(self, event: QFocusEvent) -> None:  # noqa: N802 - Qt API
+        super().focusInEvent(event)
+        QTimer.singleShot(0, self.selectAll)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt API
+        special = self.specialValueText()
+        typed = event.text()
+        if special and self.lineEdit().text() == special and typed and typed[0].isdigit():
+            self.lineEdit().clear()
+        super().keyPressEvent(event)
+
+    def fixup(self, text: str) -> str:
+        """A time past the end becomes the end; anything else unreadable keeps the old value."""
+        value = parse_time(text)
+        if value is not None and value > self.maximum():
+            return self.textFromValue(self.maximum())
+        return text
 
     def textFromValue(self, value: float) -> str:  # noqa: N802 - Qt API
         return format_time(value)

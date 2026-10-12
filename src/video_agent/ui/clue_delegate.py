@@ -306,14 +306,39 @@ class ClueHeader(QWidget):
 
 
 class ClueList(QListWidget):
-    """The clue rows; says so when there are none yet."""
+    """The clue rows; says so when there are none yet.
+
+    Clicking the chosen row again, or an empty part of the table, lets go of it (the
+    edit above is left without saving).
+    """
 
     EMPTY_TEXT = "등록된 단서가 없습니다"
+    release_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
         self.setObjectName("clueList")
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802 - Qt API
+        item = self.itemAt(event.position().toPoint())
+        chosen = self.currentItem()
+        if item is None or (item is chosen and item.isSelected()):
+            # Leave the check box and the row marks to the delegate.
+            index = self.indexAt(event.position().toPoint())
+            option = QStyleOptionViewItem()
+            self.initViewItemOption(option)
+            if item is not None:
+                option.rect = self.visualItemRect(item)
+                cells = self.itemDelegate().columns(option.rect, option.font)
+                point = event.position().toPoint()
+                if any(cell.contains(point) for cell in (cells.check, cells.edit, cells.remove)):
+                    super().mousePressEvent(event)
+                    return
+            if index.isValid() or chosen is not None:
+                self.release_requested.emit()
+                return
+        super().mousePressEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 - Qt API
         super().paintEvent(event)

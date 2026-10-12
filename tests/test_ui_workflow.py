@@ -473,7 +473,7 @@ class UiWorkflowTests(unittest.TestCase):
         window._active_motion_scan_id = "scan-empty"
         window._on_motion_scan_result(MotionScanResult(scan_id="scan-empty", proposals=(), **result))
         self.assertEqual(
-            window._motion_empty_label.text(), "현재 분석 범위에서 발견된 움직임 구간이 없습니다."
+            window._motion_empty_label.text(), "이 범위에는 움직임 구간이 없습니다."
         )
         self.assertTrue(window._motion_list.isHidden())
 
@@ -493,7 +493,7 @@ class UiWorkflowTests(unittest.TestCase):
         window._range_changed()  # inputs changed: proposals cleared, to be found again
         self.assertTrue(window._motion_list.isHidden())
         self.assertEqual(
-            window._motion_empty_label.text(), "범위가 바뀌어 움직임 구간을 다시 찾아야 합니다."
+            window._motion_empty_label.text(), "범위가 바뀌었습니다. 움직임 구간을 다시 찾아 주세요."
         )
 
     def test_analysis_panel_preserves_readable_motion_and_plan_areas(self) -> None:

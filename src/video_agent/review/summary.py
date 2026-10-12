@@ -346,10 +346,6 @@ def _case_text(job: AnalysisJob, case: CaseRecord | None) -> str:
 
 
 def _case_lines(case: CaseRecord) -> list[str]:
-    certainty = _CERTAINTY_LABELS[case.occurrence_time_certainty]
-    occurrence = (
-        f"{case.occurrence_time_text} ({certainty})" if case.occurrence_time_text else certainty
-    )
     focus = (
         ", ".join(SITUATION_LABELS[item] for item in case.focus_situations)
         + " (확인 순서에만 반영, 범죄 여부를 판단한 것이 아님)"
@@ -359,9 +355,12 @@ def _case_lines(case: CaseRecord) -> list[str]:
     lines = [
         f"사건명: {case.title}",
         f"사건 유형: {case.case_type or '미입력'}",
-        f"발생 시각: {occurrence}",
         f"우선 확인할 상황: {focus}",
     ]
+    # The occurrence time is no longer asked; an older case that has one still shows it.
+    if case.occurrence_time_text:
+        certainty = _CERTAINTY_LABELS[case.occurrence_time_certainty]
+        lines.insert(2, f"발생 시각: {case.occurrence_time_text} ({certainty})")
     if case.focus_hints:
         lines.append(
             f"추가 탐색 힌트: {', '.join(case.focus_hints)} (사용자 입력이며 영상으로 확인한 사실이 아님)"

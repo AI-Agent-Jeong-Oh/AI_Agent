@@ -174,7 +174,7 @@ class SummaryBuilderTests(unittest.TestCase):
             job(), session(), focused, video_file_name="front_door.mp4", generated_at=GENERATED
         ).section("case").body
         self.assertIn("사건 유형: 실종", text)
-        self.assertIn("발생 시각: 미확인", text)
+        self.assertNotIn("발생 시각", text)  # not asked, so not listed when empty
         self.assertIn("우선 확인할 상황: 이동·동선, 체류·이탈", text)
         self.assertIn("범죄 여부를 판단한 것이 아님", text)
         self.assertIn("추가 탐색 힌트: 보라색 조끼 (사용자 입력이며 영상으로 확인한 사실이 아님)", text)
