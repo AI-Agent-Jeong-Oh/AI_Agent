@@ -377,8 +377,9 @@ def _clue_lines(clues: Sequence[AnalysisClue], *, heading: bool = True) -> list[
     if clues:
         for clue in clues:
             lines.append(
+                # Every clue is prior information: none is confirmed by the video.
                 f"- {clue.text} (출처: {_SOURCE_LABELS[clue.source]} · "
-                f"확실성: {_CERTAINTY_LABELS[clue.certainty]})"
+                "확인 상태: 미확인(영상 확인 전))"
             )
     else:
         lines.append("- 없음")

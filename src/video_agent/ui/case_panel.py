@@ -52,11 +52,8 @@ SOURCE_LABELS = {
     ClueSource.DOCUMENT: "문서",
     ClueSource.OTHER: "기타",
 }
-CLUE_ASIDE = "체크한 단서만 분석에 사용"
-CERTAINTY_HELP = (
-    "확실성은 정보를 준 사람이나 자료가 얼마나 분명하게 말했는지입니다. "
-    "'확인'도 영상이나 수사로 사실이 검증됐다는 뜻은 아닙니다."
-)
+# Nothing beside the title; it says "단서 수정 중" only while a clue is being edited.
+CLUE_ASIDE = ""
 
 
 
@@ -193,14 +190,6 @@ class CaseContextPanel(Card):
         title_row.addWidget(clue_title)
         title_row.addSpacing(8)
         title_row.addWidget(clue_aside, 1, Qt.AlignmentFlag.AlignBottom)
-        title_row.addWidget(
-            info_mark(
-                "데이터셋 폴더명·라벨 정답을 복사하지 말고, 사용자가 실제로 제공한 정보만 등록하세요.",
-                "분석 단서 안내",
-            ),
-            0,
-            Qt.AlignmentFlag.AlignBottom,
-        )
         self.clue_count_label = QLabel("분석 사용 0 / 전체 0")
         self.clue_count_label.setObjectName("subsectionAside")
         title_row.addWidget(self.clue_count_label, 0, Qt.AlignmentFlag.AlignBottom)
@@ -210,7 +199,8 @@ class CaseContextPanel(Card):
         editor.setObjectName("clueEditor")
         editor_layout = QVBoxLayout(editor)
         editor_layout.setContentsMargins(0, 0, 0, 0)
-        # Source and certainty are chosen first; the sentence field opens after both.
+        # The source is chosen first; the sentence field opens after it. Clues are not
+        # rated for certainty: none of them is checked against the video yet (미확인).
         clue_row = FlowRow(spacing=16)
         source_label = QLabel("출처")
         source_label.setObjectName("fieldLabel")
@@ -219,19 +209,11 @@ class CaseContextPanel(Card):
         self.clue_source.setPlaceholderText("선택")
         for value, label in SOURCE_LABELS.items():
             self.clue_source.addItem(label, value)
-        certainty_label = QLabel("확실성")
-        certainty_label.setObjectName("fieldLabel")
-        certainty_label.setToolTip(CERTAINTY_HELP)
-        self.clue_certainty = QComboBox()
-        self.clue_certainty.setAccessibleName("확실성")
-        self.clue_certainty.setToolTip(CERTAINTY_HELP)
-        self.clue_certainty.setPlaceholderText("선택")
-        self._add_certainty_items(self.clue_certainty)
         self._clear_clue_choices()
         self.clue_use = QCheckBox("분석 사용")
         self.clue_use.setChecked(True)
         # Label and choice stay together; the groups wrap at large text sizes.
-        for parts in ((source_label, self.clue_source), (certainty_label, self.clue_certainty)):
+        for parts in ((source_label, self.clue_source),):
             group = QWidget()
             group_layout = QHBoxLayout(group)
             group_layout.setContentsMargins(0, 0, 0, 0)
@@ -270,7 +252,7 @@ class CaseContextPanel(Card):
             "체크된 항목만 분석 계획과 모델 입력에 포함됩니다. 단서를 고르면 위에서 고칠 수 있습니다."
         )
         self.clue_list.setAccessibleName("분석 단서 목록")
-        self._clue_delegate = ClueItemDelegate(SOURCE_LABELS, CERTAINTY_LABELS, self.clue_list)
+        self._clue_delegate = ClueItemDelegate(SOURCE_LABELS, self.clue_list)
         self.clue_list.setItemDelegate(self._clue_delegate)
         self.clue_list.setFrameShape(QFrame.Shape.NoFrame)
         # Rows wrap to the list width, so their heights follow it.
@@ -307,7 +289,6 @@ class CaseContextPanel(Card):
         self._clue_delegate.edit_requested.connect(self.clue_list.setCurrentRow)
         self._clue_delegate.remove_requested.connect(self._remove_clue_row)
         self.clue_source.currentIndexChanged.connect(lambda _index: self._update_clue_inputs())
-        self.clue_certainty.currentIndexChanged.connect(lambda _index: self._update_clue_inputs())
         self.title_edit.textChanged.connect(lambda _text: self.title_error.setVisible(False))
         self.save_button.clicked.connect(self.save_requested.emit)
         self.load_button.clicked.connect(self._show_case_menu)
@@ -387,13 +368,13 @@ class CaseContextPanel(Card):
             clue_id=f"clue-{uuid4().hex[:12]}",
             text=text,
             source=self.clue_source.currentData(),
-            certainty=self.clue_certainty.currentData(),
+            certainty=InformationCertainty.UNKNOWN,
             use_for_analysis=self.clue_use.isChecked(),
         )
         self._append_clue(clue)
         self.clue_text.clear()
         # The next clue usually comes from the same report, so the choice stays.
-        self._last_clue_choice = (clue.source, clue.certainty)
+        self._last_clue_choice = clue.source
         self._update_clue_count()
         self.changed.emit()
 
@@ -409,7 +390,6 @@ class CaseContextPanel(Card):
         if editing:
             self.clue_text.setText(clue.text)
             self._set_combo_value(self.clue_source, clue.source)
-            self._set_combo_value(self.clue_certainty, clue.certainty)
         else:
             self.clue_text.clear()
             self._restore_clue_choices()
@@ -421,20 +401,18 @@ class CaseContextPanel(Card):
         self._update_clue_inputs()
 
     def _clear_clue_choices(self) -> None:
-        for combo in (self.clue_source, self.clue_certainty):
-            combo.setCurrentIndex(-1)
+        self.clue_source.setCurrentIndex(-1)
 
     def _restore_clue_choices(self) -> None:
-        """Back to the last added clue's source and certainty (blank before the first)."""
+        """Back to the last added clue's source (blank before the first)."""
         last = getattr(self, "_last_clue_choice", None)
         if last is None:
             self._clear_clue_choices()
             return
-        self._set_combo_value(self.clue_source, last[0])
-        self._set_combo_value(self.clue_certainty, last[1])
+        self._set_combo_value(self.clue_source, last)
 
     def _clue_choices_made(self) -> bool:
-        return self.clue_source.currentIndex() >= 0 and self.clue_certainty.currentIndex() >= 0
+        return self.clue_source.currentIndex() >= 0
 
     def _update_clue_inputs(self) -> None:
         """The sentence field and add button open once source and certainty are chosen."""
@@ -444,7 +422,7 @@ class CaseContextPanel(Card):
         self.clue_text.setPlaceholderText(
             "예: 신고자는 사람이 문 앞 상자를 들어 이동했다고 설명함"
             if ready
-            else "출처와 확실성을 먼저 선택하세요"
+            else "출처를 먼저 선택하세요"
         )
 
     def require_title(self) -> bool:
@@ -466,7 +444,6 @@ class CaseContextPanel(Card):
             clue,
             text=text,
             source=self.clue_source.currentData(),
-            certainty=self.clue_certainty.currentData(),
             use_for_analysis=item.checkState() == Qt.CheckState.Checked,
         )
         self.clue_list.blockSignals(True)
@@ -528,10 +505,7 @@ class CaseContextPanel(Card):
 
         Analysis use is the item's check state, which screen readers announce themselves.
         """
-        return (
-            f"{clue.text} — 출처: {SOURCE_LABELS[clue.source]}, "
-            f"확실성: {CERTAINTY_LABELS[clue.certainty]}"
-        )
+        return f"{clue.text} — 출처: {SOURCE_LABELS[clue.source]}"
 
     def _update_clue_count(self) -> None:
         clues = self.clues()
@@ -608,7 +582,6 @@ class CaseContextPanel(Card):
             self.notes_edit,
             self.clue_text,
             self.clue_source,
-            self.clue_certainty,
             self.clue_use,
             self.add_clue_button,
             self.cancel_clue_edit_button,

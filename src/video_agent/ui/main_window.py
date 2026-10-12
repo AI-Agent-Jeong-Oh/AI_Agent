@@ -96,10 +96,12 @@ from video_agent.storage.json_store import (
 from video_agent.storage.paths import AppPaths, CacheManager
 from video_agent.ui.analysis_choice import SAMPLE_LABEL, AnalysisChoice
 from video_agent.ui.card import Card
-from video_agent.ui.case_panel import CERTAINTY_LABELS, SOURCE_LABELS, CaseContextPanel
+from video_agent.ui.case_panel import SOURCE_LABELS, CaseContextPanel
+from video_agent.ui.disclosure import DisclosureButton
 from video_agent.ui.focus_panel import FocusSection
 from video_agent.ui.motion_table import MotionHeader, MotionItemDelegate
 from video_agent.ui.judgement_marks import JUDGEMENT_MARKS
+from video_agent.ui.time_field import TimeSpinBox, format_time
 from video_agent.ui.timeline import TimelineLegend, TimelineMark, TimelineSlider
 from video_agent.ui.popover import InfoPopover, info_mark
 from video_agent.ui.step_section import StepSection
@@ -222,6 +224,7 @@ class MainWindow(QMainWindow):
     )
     MOTION_EMPTY_NO_VIDEO = "등록된 CCTV 영상이 없습니다."
     MOTION_EMPTY_NOT_SCANNED = ""
+    MOTION_EMPTY_RANGE_CHANGED = "범위가 바뀌어 움직임 구간을 다시 찾아야 합니다."
     MOTION_EMPTY_SCANNING = "움직임 구간을 찾는 중입니다."
     MOTION_EMPTY_NONE_FOUND = "현재 분석 범위에서 발견된 움직임 구간이 없습니다."
     OPENAI_PROVIDER_ID = "openai"
@@ -270,7 +273,7 @@ class MainWindow(QMainWindow):
         self._sampling_strategy_override: SamplingStrategy | None = None
         self._applied_motion_proposals: tuple[MotionProposal, ...] = ()
         # The range typed before checked candidates replaced it; restored if all are unchecked.
-        self._range_before_motion: tuple[float, float] | None = None
+        self._motion_range_changed = False
         # "idle" (not scanned), "scanning", "none_found" or "found"; display only.
         self._motion_scan_state = "idle"
         # (metadata, intent) of the run that produced the range expansion proposal.
@@ -648,12 +651,11 @@ class MainWindow(QMainWindow):
         range_row = QWidget()
         range_layout = QHBoxLayout(range_row)
         range_layout.setContentsMargins(0, 0, 0, 0)
-        self._range_start = QDoubleSpinBox()
-        self._range_end = QDoubleSpinBox()
+        # Entered as minutes:seconds ("1:30"), like the player's time; values stay seconds.
+        self._range_start = TimeSpinBox()
+        self._range_end = TimeSpinBox()
         for spin in (self._range_start, self._range_end):
-            spin.setDecimals(3)
             spin.setRange(0, 0)
-            spin.setSuffix(" 초")
         self._range_end.setSpecialValueText("영상 끝")
         for label, spin in (("시작", self._range_start), ("종료", self._range_end)):
             name = QLabel(label)
@@ -757,6 +759,15 @@ class MainWindow(QMainWindow):
         plan_part.body_layout.addWidget(self._question_label)
         plan_part.body_layout.addWidget(self._clarification_edit)
         plan_part.body_layout.addWidget(self._plan_view, 1)
+        # Sampling, limits and model guidance, folded under the plan.
+        self._plan_details_toggle = DisclosureButton("세부 조건")
+        self._plan_details_view = QTextEdit()
+        self._plan_details_view.setReadOnly(True)
+        self._plan_details_view.setVisible(False)
+        self._plan_details_toggle.setVisible(False)
+        self._plan_details_toggle.toggled.connect(self._plan_details_view.setVisible)
+        plan_part.body_layout.addWidget(self._plan_details_toggle)
+        plan_part.body_layout.addWidget(self._plan_details_view, 1)
         plan_part.body_layout.addStretch(0)
 
         self._plan_parts = (find_part, range_part, plan_part)
@@ -969,7 +980,7 @@ class MainWindow(QMainWindow):
         self._motion_list.itemClicked.connect(self._preview_motion_proposal)
         self._motion_list.itemChanged.connect(self._motion_check_changed)
         self._make_plan_button.clicked.connect(self._make_plan)
-        self._approve_button.clicked.connect(self._approve_plan)
+        self._approve_button.clicked.connect(self._approve_and_run)
         self._transfer_button.clicked.connect(self._approve_transfer)
         self._run_button.clicked.connect(self._start_analysis)
         self._cancel_button.clicked.connect(self._cancel_analysis)
@@ -1749,6 +1760,7 @@ class MainWindow(QMainWindow):
             return
 
         self._open_plan_part(1)
+        self._motion_range_changed = False
         scan_id = f"motion-{uuid4().hex[:12]}"
         purpose = self._purpose_edit.toPlainText().strip()
         temporal = temporal_motion_requirement(purpose)
@@ -1928,14 +1940,6 @@ class MainWindow(QMainWindow):
         self._sampling_timestamps_override = ()
         self._sampling_strategy_override = None
         self._applied_motion_proposals = ()
-        if self._range_before_motion is not None:
-            self._range_start.blockSignals(True)
-            self._range_end.blockSignals(True)
-            self._range_start.setValue(self._range_before_motion[0])
-            self._range_end.setValue(self._range_before_motion[1])
-            self._range_start.blockSignals(False)
-            self._range_end.blockSignals(False)
-            self._range_before_motion = None
         self._inputs_changed()
         return True
 
@@ -1962,14 +1966,8 @@ class MainWindow(QMainWindow):
             self._show_error(str(exc))
             return False
 
-        if not self._applied_motion_proposals:
-            self._range_before_motion = (self._range_start.value(), self._range_end.value())
-        self._range_start.blockSignals(True)
-        self._range_end.blockSignals(True)
-        self._range_start.setValue(min(proposal.start_sec for proposal in proposals))
-        self._range_end.setValue(max(proposal.end_sec for proposal in proposals))
-        self._range_start.blockSignals(False)
-        self._range_end.blockSignals(False)
+        # The entered range stays as typed; the plan takes the checked ranges' span
+        # (see _intent_range).
         gaps = tuple(later - earlier for earlier, later in zip(timestamps, timestamps[1:]))
         self._sampling_interval_override = min(gaps, default=0.25)
         self._sampling_timestamps_override = timestamps
@@ -2006,6 +2004,8 @@ class MainWindow(QMainWindow):
             text = self.MOTION_EMPTY_SCANNING
         elif self._motion_scan_state == "none_found":
             text = self.MOTION_EMPTY_NONE_FOUND
+        elif self._motion_range_changed:
+            text = self.MOTION_EMPTY_RANGE_CHANGED
         else:
             text = self.MOTION_EMPTY_NOT_SCANNED
         self._motion_empty_label.setText(text)
@@ -2299,6 +2299,15 @@ class MainWindow(QMainWindow):
             return max(candidates, key=lambda item: (self._parameter_billions(item) or 0, item.lower()))
         return saved
 
+    def _intent_range(self) -> tuple[float, float | None]:
+        """The checked motion ranges' span when some are checked, else the entered range."""
+        if self._applied_motion_proposals:
+            return (
+                min(item.start_sec for item in self._applied_motion_proposals),
+                max(item.end_sec for item in self._applied_motion_proposals),
+            )
+        return self._range_start.value(), self._range_end.value() or None
+
     def _current_intent(self) -> AnalysisIntent:
         mode = self._current_mode()
         if mode is AnalysisMode.LOCAL:
@@ -2322,8 +2331,8 @@ class MainWindow(QMainWindow):
             purpose=self._purpose_edit.toPlainText().strip(),
             mode=mode,
             model_id=self._model_id() or None,
-            range_start_sec=self._range_start.value(),
-            range_end_sec=self._range_end.value() or None,
+            range_start_sec=self._intent_range()[0],
+            range_end_sec=self._intent_range()[1],
             sampling_interval_sec=self._sampling_interval_override,
             sample_timestamps_sec=self._sampling_timestamps_override,
             provider_id=provider_id,
@@ -2352,7 +2361,8 @@ class MainWindow(QMainWindow):
         self._inputs_changed()
 
     def _range_changed(self) -> None:
-        self._range_before_motion = None
+        # Ranges found in the old span no longer fit; say so instead of an empty table.
+        self._motion_range_changed = self._motion_list.count() > 0 or self._motion_range_changed
         self._sampling_interval_override = None
         self._sampling_timestamps_override = ()
         self._sampling_strategy_override = None
@@ -2509,22 +2519,44 @@ class MainWindow(QMainWindow):
             AnalysisMode.EXTERNAL: f"외부 AI 분석 · {plan.model_id}",
         }[plan.mode]
         video_name = self._video_path.name if self._video_path is not None else plan.video_id
-        start = format_milliseconds(seconds_to_milliseconds(plan.range_start_sec))
-        end = format_milliseconds(seconds_to_milliseconds(plan.range_end_sec))
+        if self._applied_motion_proposals:
+            ranges = ", ".join(
+                f"{format_time(item.start_sec)}–{format_time(item.end_sec)}"
+                for item in self._applied_motion_proposals
+            )
+            where = f"움직임 구간 {len(self._applied_motion_proposals)}개: {ranges}"
+        else:
+            where = f"{format_time(plan.range_start_sec)}–{format_time(plan.range_end_sec)}"
         limits = plan.limits
         focus = self._focus_section.focus()
-        hints: tuple[str, ...] = ()
+        frames = (
+            "프레임을 뽑지 않음 (시연용)"
+            if plan.mode is AnalysisMode.SAMPLE
+            else f"프레임 {len(plan.sample_timestamps_sec)}장"
+        )
+        # What the officer needs to approve: what, where, with which clues, and how.
         rows = [
-            ("사건", f"{case_title} (사건 정보 v{plan.case_revision})" if plan.case_revision else case_title),
+            ("찾을 장면", plan.purpose),
+            ("볼 영상", f"{video_name}\n{where}"),
             (
-                "우선 확인 상황",
-                ", ".join(SITUATION_LABELS[item] for item in focus)
-                + "\n선택하지 않은 상황도 분석합니다."
-                if focus
-                else "선택 없음 (모든 상황을 같은 우선순위로 확인)",
+                "우선 확인",
+                ", ".join(SITUATION_LABELS[item] for item in focus) if focus else "선택 없음",
             ),
-            ("분석 방식", mode_text),
-            ("대상 영상", f"{video_name} · {start}–{end}"),
+            (
+                "사용 단서",
+                "\n".join(
+                    f"{item.text} (출처: {SOURCE_LABELS[item.source]})"
+                    for item in plan.analysis_clues
+                )
+                + "\n영상에서 확인한 사실이 아닙니다."
+                if plan.analysis_clues
+                else "없음",
+            ),
+            ("분석 방식", f"{mode_text} · {frames}"),
+        ]
+        # The rest stays one click away under "세부 조건".
+        details = [
+            ("사건", f"{case_title} (사건 정보 v{plan.case_revision})" if plan.case_revision else case_title),
             ("표본", sampling),
             (
                 "한도",
@@ -2533,22 +2565,12 @@ class MainWindow(QMainWindow):
                 f"자동 재분석 {limits.max_reanalysis_attempts}회",
             ),
             ("범위 확대", "필요하면 자동 실행하지 않고 제안만 합니다"),
-            *([("추가 탐색 힌트", ", ".join(hints))] if hints else []),
-            (
-                "사전 정보",
-                "\n".join(
-                    f"{item.text} (출처: {SOURCE_LABELS[item.source]}, "
-                    f"확실성: {CERTAINTY_LABELS[item.certainty]})"
-                    for item in plan.analysis_clues
-                )
-                + "\n영상에서 확인한 사실이 아닙니다."
-                if plan.analysis_clues
-                else "없음",
-            ),
+            ("우선 확인 방식", "선택한 상황은 확인 순서에만 반영하고, 선택하지 않은 상황도 분석합니다."),
         ]
         if plan.observation_guidance:
-            rows.append(("관찰 기준", " / ".join(plan.observation_guidance)))
+            details.append(("관찰 기준", " / ".join(plan.observation_guidance)))
         if plan.transfer_manifest:
+            # Anything leaving this computer is always shown, never folded away.
             manifest = plan.transfer_manifest
             times = ", ".join(f"{item:.3f}s" for item in manifest.frame_timestamps_sec)
             rows.extend(
@@ -2568,12 +2590,27 @@ class MainWindow(QMainWindow):
                     ("전송하지 않음", "PDF·원본 영상 전체·라벨 JSON"),
                 ]
             )
+        self._plan_details_view.setHtml(theme.label_value_table(details))
+        self._plan_details_toggle.setChecked(False)
         self._plan_view.setHtml(theme.label_value_table(rows))
         self._clarification_edit.setEnabled(False)
         self._approve_button.setEnabled(True)
         self._transfer_button.setEnabled(False)
         self._run_button.setEnabled(False)
-        self.statusBar().showMessage("계획을 확인한 뒤 분석 계획을 승인해 주세요.", 5000)
+        self.statusBar().showMessage(
+            "계획을 확인한 뒤 분석 계획을 승인해 주세요."
+            if plan.mode is AnalysisMode.EXTERNAL
+            else "계획을 확인한 뒤 [승인하고 실행]을 눌러 주세요.",
+            5000,
+        )
+
+    def _approve_and_run(self) -> None:
+        """Approving the plan shown is the click that starts it, except for external AI,
+        whose separate transfer approval still comes between."""
+        external = self._session.plan is not None and self._session.plan.mode is AnalysisMode.EXTERNAL
+        self._approve_plan()
+        if not external and self._run_button.isEnabled():
+            self._start_analysis()
 
     def _approve_plan(self) -> None:
         try:
@@ -2966,6 +3003,14 @@ class MainWindow(QMainWindow):
         # Plan, approve and run take turns in the pinned bar.
         self._make_plan_button.setVisible(not approved and state is not WorkflowState.PLAN_READY)
         self._approve_button.setVisible(state is WorkflowState.PLAN_READY)
+        # Approving starts the run, except for external AI (its transfer approval comes next).
+        external = self._current_mode() is AnalysisMode.EXTERNAL
+        self._approve_button.setText("분석 계획 승인" if external else "승인하고 실행")
+        self._approve_button.setToolTip(
+            "계획을 승인합니다. 외부 전송은 따로 승인합니다."
+            if external
+            else "위 계획을 승인하고 바로 분석을 시작합니다."
+        )
         self._run_button.setVisible(approved)
         # External mode: the separate transfer approval appears at its turn, after approval.
         self._transfer_button.setVisible(
@@ -3031,14 +3076,18 @@ class MainWindow(QMainWindow):
         find_part.set_summary(
             f"{purpose or '목적 미입력'} · " + (f"상황 {focus}개" if focus else "상황 선택 없음")
         )
-        chosen = len(self._checked_motion_proposals())
-        if chosen:
-            range_part.set_summary(f"움직임 구간 {chosen}개")
+        checked = self._checked_motion_proposals()
+        if checked:
+            first = min(item.start_sec for item in checked)
+            last = max(item.end_sec for item in checked)
+            range_part.set_summary(f"움직임 구간 {len(checked)}개 · {format_time(first)}–{format_time(last)}")
         else:
-            start = format_milliseconds(seconds_to_milliseconds(self._range_start.value()))
-            end_value = self._range_end.value()
-            end = format_milliseconds(seconds_to_milliseconds(end_value)) if end_value else "영상 끝"
-            range_part.set_summary("영상 전체" if not self._range_start.value() and not end_value else f"{start}–{end}")
+            start_value, end_value = self._range_start.value(), self._range_end.value()
+            range_part.set_summary(
+                "영상 전체"
+                if not start_value and not end_value
+                else f"{format_time(start_value)}–{format_time(end_value) if end_value else '영상 끝'}"
+            )
         state = self._session.state
         if state in (WorkflowState.COMPLETED, WorkflowState.PARTIAL, WorkflowState.EXPANSION_PROPOSED):
             status = "분석 끝남"
@@ -3051,7 +3100,11 @@ class MainWindow(QMainWindow):
         else:
             status = "계획 없음"
         plan_part.set_summary(f"{status} · {self._analysis_choice.currentText()}")
-        self._plan_view.setVisible(planned and bool(self._plan_view.toPlainText().strip()))
+        has_plan = planned and bool(self._plan_view.toPlainText().strip())
+        self._plan_view.setVisible(has_plan)
+        self._plan_details_toggle.setVisible(has_plan)
+        if not has_plan:
+            self._plan_details_toggle.setChecked(False)
         if planned and not self._plan_was_ready:
             self._open_plan_part(2)
         self._plan_was_ready = planned

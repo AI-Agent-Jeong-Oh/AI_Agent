@@ -151,7 +151,10 @@ class SummaryBuilderTests(unittest.TestCase):
         self.assertIn("발생 시각: 10월 10일 오후 (추정)", text)
         self.assertIn("분석 당시 사건 버전 1, 현재 저장본 버전 2", text)
         self.assertIn("사용자 제공 정보이며 영상으로 확인한 사실이 아님", text)
-        self.assertIn("신고자는 문 앞 상자가 사라졌다고 설명함 (출처: 신고·보고 · 확실성: 추정)", text)
+        # Whatever an older file recorded, every clue reads as not checked against the video.
+        self.assertIn(
+            "신고자는 문 앞 상자가 사라졌다고 설명함 (출처: 신고·보고 · 확인 상태: 미확인(영상 확인 전))", text
+        )
         self.assertNotIn("010-0000-0000", text)
 
     def test_case_section_shows_type_focus_and_hints_without_judgement(self) -> None:

@@ -37,25 +37,27 @@ class CaseClueTests(unittest.TestCase):
     def count_change(self) -> None:
         self.changes += 1
 
-    def add(self, text, source=ClueSource.REPORT, certainty=InformationCertainty.ESTIMATED, use=True):
+    def add(self, text, source=ClueSource.REPORT, use=True):
         panel = self.panel
         panel.clue_text.setText(text)
         panel.clue_source.setCurrentIndex(panel.clue_source.findData(source))
-        panel.clue_certainty.setCurrentIndex(panel.clue_certainty.findData(certainty))
         panel.clue_use.setChecked(use)
         panel.add_clue_button.click()
 
-    def test_certainty_does_not_change_analysis_use(self) -> None:
-        self.add("추정 단서", certainty=InformationCertainty.ESTIMATED)
-        self.add("미확인 단서", certainty=InformationCertainty.UNKNOWN)
-        self.add("관리용 단서", certainty=InformationCertainty.CONFIRMED, use=False)
+    def test_new_clues_are_unconfirmed_and_use_is_the_check(self) -> None:
+        self.add("신고 단서")
+        self.add("진술 단서", ClueSource.USER_STATEMENT)
+        self.add("관리용 단서", use=False)
 
         clues = self.panel.clues()
         self.assertEqual([clue.use_for_analysis for clue in clues], [True, True, False])
+        # No certainty is asked: prior information is not yet checked against the video.
+        self.assertTrue(all(clue.certainty is InformationCertainty.UNKNOWN for clue in clues))
         self.assertEqual(self.panel.clue_count_label.text(), "분석 사용 2 / 전체 3")
+        self.assertFalse(hasattr(self.panel, "clue_certainty"))
 
     def test_selected_clue_is_edited_in_place(self) -> None:
-        self.add("처음 문장", ClueSource.REPORT, InformationCertainty.ESTIMATED)
+        self.add("처음 문장", ClueSource.REPORT)
         self.add("다른 단서", use=False)
         original = self.panel.clues()[0]
         before = self.changes
@@ -70,16 +72,13 @@ class CaseClueTests(unittest.TestCase):
         self.panel.clue_source.setCurrentIndex(
             self.panel.clue_source.findData(ClueSource.DOCUMENT)
         )
-        self.panel.clue_certainty.setCurrentIndex(
-            self.panel.clue_certainty.findData(InformationCertainty.CONFIRMED)
-        )
         self.panel.add_clue_button.click()
 
         edited, other = self.panel.clues()
         self.assertEqual(edited.clue_id, original.clue_id)
         self.assertEqual(edited.text, "고친 문장")
         self.assertIs(edited.source, ClueSource.DOCUMENT)
-        self.assertIs(edited.certainty, InformationCertainty.CONFIRMED)
+        self.assertIs(edited.certainty, InformationCertainty.UNKNOWN)
         self.assertTrue(edited.use_for_analysis)
         self.assertFalse(other.use_for_analysis)
         self.assertEqual(len(self.panel.clues()), 2)
@@ -104,14 +103,11 @@ class CaseClueTests(unittest.TestCase):
         item = self.panel.clue_list.item(0)
         item.setCheckState(Qt.CheckState.Unchecked)
         self.panel.clue_list.setCurrentRow(0)
-        self.panel.clue_certainty.setCurrentIndex(
-            self.panel.clue_certainty.findData(InformationCertainty.UNKNOWN)
-        )
+        self.panel.clue_text.setText("체크 해제할 단서 (고침)")
         self.panel.add_clue_button.click()
 
         (clue,) = self.panel.clues()
         self.assertFalse(clue.use_for_analysis)
-        self.assertIs(clue.certainty, InformationCertainty.UNKNOWN)
 
     def test_saved_clues_load_and_can_be_edited(self) -> None:
         stored = AnalysisClue(
@@ -124,18 +120,18 @@ class CaseClueTests(unittest.TestCase):
         self.panel.set_record(CaseRecord(case_id="case-1", revision=1, title="사건", clues=(stored,)))
         self.assertEqual(self.panel.clues(), (stored,))
         self.assertIn("저장된 단서", self.panel.clue_list.item(0).text())
-        self.assertIn("출처: 사용자 진술, 확실성: 미확인", self.panel.clue_list.item(0).text())
+        self.assertIn("출처: 사용자 진술", self.panel.clue_list.item(0).text())
+        self.assertNotIn("확실성", self.panel.clue_list.item(0).text())
         self.assertEqual(self.panel.clue_list.item(0).checkState(), Qt.CheckState.Unchecked)
 
         self.panel.clue_list.setCurrentRow(0)
         self.assertEqual(self.panel.clue_source.currentData(), ClueSource.USER_STATEMENT)
-        self.panel.clue_certainty.setCurrentIndex(
-            self.panel.clue_certainty.findData(InformationCertainty.ESTIMATED)
-        )
+        self.panel.clue_source.setCurrentIndex(self.panel.clue_source.findData(ClueSource.DOCUMENT))
         self.panel.add_clue_button.click()
         (clue,) = self.panel.clues()
         self.assertEqual(clue.clue_id, "clue-saved")
-        self.assertIs(clue.certainty, InformationCertainty.ESTIMATED)
+        self.assertIs(clue.source, ClueSource.DOCUMENT)
+        self.assertIs(clue.certainty, InformationCertainty.UNKNOWN)  # an older value is kept
         self.assertFalse(clue.use_for_analysis)
 
     def test_long_clue_row_wraps_to_more_lines(self) -> None:
@@ -174,8 +170,8 @@ class CaseClueTests(unittest.TestCase):
         QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=check_rect.center())
         self.assertTrue(self.panel.clues()[0].use_for_analysis)
 
-    def test_row_is_a_table_line_with_source_and_certainty_columns(self) -> None:
-        self.add("관리용 단서", ClueSource.REPORT, InformationCertainty.ESTIMATED, use=False)
+    def test_row_is_a_table_line_with_a_source_column(self) -> None:
+        self.add("관리용 단서", ClueSource.REPORT, use=False)
         self.panel.show()
         self.app.processEvents()
         clue_list = self.panel.clue_list
@@ -184,14 +180,14 @@ class CaseClueTests(unittest.TestCase):
         option.rect = clue_list.visualItemRect(clue_list.item(0))
         clue = clue_list.item(0).data(Qt.ItemDataRole.UserRole)
         delegate = clue_list.itemDelegate()
-        # The sentence cell holds only the clue; source and certainty have their own columns.
+        # The sentence cell holds only the clue; the source has its own column.
         self.assertEqual(delegate.document(option, clue, 400).toPlainText(), "관리용 단서")
         cells = delegate.columns(option.rect, option.font)
         self.assertLess(cells.check.right(), cells.text.left())
         self.assertLess(cells.text.right(), cells.source.left())
-        self.assertLess(cells.source.right(), cells.certainty.left() + 1)
-        self.assertLess(cells.certainty.right(), cells.edit.left())
+        self.assertLess(cells.source.right(), cells.edit.left())
         self.assertLess(cells.edit.right(), cells.remove.left())
+        self.assertFalse(hasattr(cells, "certainty"))
         self.assertFalse(self.panel.clue_header.isHidden())
 
     def test_row_marks_edit_and_delete(self) -> None:
@@ -212,32 +208,26 @@ class CaseClueTests(unittest.TestCase):
         QTest.mouseClick(clue_list.viewport(), Qt.MouseButton.LeftButton, pos=QPoint(cells.remove.center().x(), y))
         self.assertEqual([clue.text for clue in self.panel.clues()], ["첫 단서"])
 
-    def test_source_and_certainty_come_before_the_sentence(self) -> None:
+    def test_source_comes_before_the_sentence(self) -> None:
         panel = self.panel
         self.assertEqual(panel.clue_source.currentIndex(), -1)
-        self.assertEqual(panel.clue_certainty.currentIndex(), -1)
         self.assertFalse(panel.clue_text.isEnabled())
         self.assertFalse(panel.add_clue_button.isEnabled())
         panel.clue_text.setText("고르지 않은 단서")
         panel.add_clue_button.click()
         self.assertEqual(panel.clues(), ())
         panel.clue_source.setCurrentIndex(panel.clue_source.findData(ClueSource.REPORT))
-        self.assertFalse(panel.clue_text.isEnabled())
-        panel.clue_certainty.setCurrentIndex(
-            panel.clue_certainty.findData(InformationCertainty.ESTIMATED)
-        )
         self.assertTrue(panel.clue_text.isEnabled())
         panel.add_clue_button.click()
         self.assertEqual(len(panel.clues()), 1)
         # The next clue usually comes from the same report: the choice stays.
         self.assertEqual(panel.clue_source.currentData(), ClueSource.REPORT)
-        self.assertEqual(panel.clue_certainty.currentData(), InformationCertainty.ESTIMATED)
         self.assertTrue(panel.clue_text.isEnabled())
-        # Editing another clue and leaving it returns to that choice, not to blank.
+        # Editing a clue and leaving it returns to that choice, not to blank.
         panel.clue_list.setCurrentRow(0)
-        panel.clue_certainty.setCurrentIndex(panel.clue_certainty.findData(InformationCertainty.CONFIRMED))
+        panel.clue_source.setCurrentIndex(panel.clue_source.findData(ClueSource.DOCUMENT))
         panel.cancel_clue_edit_button.click()
-        self.assertEqual(panel.clue_certainty.currentData(), InformationCertainty.ESTIMATED)
+        self.assertEqual(panel.clue_source.currentData(), ClueSource.REPORT)
 
     def test_empty_case_name_is_asked_for(self) -> None:
         self.panel.show()

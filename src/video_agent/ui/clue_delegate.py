@@ -1,7 +1,8 @@
 """Table-style drawing of the case clue list, like the CCTV video table.
 
 Each row has columns: analysis use (check box), the clue sentence (wrapping onto more
-lines), source, certainty, and edit/delete marks at the end. `ClueHeader` draws the grey
+lines), source, and edit/delete marks at the end. Clues are not rated for certainty: all
+of them are prior information not yet checked against the video. `ClueHeader` draws the grey
 header line above the list from the same column positions. The list keeps its own check
 boxes and item data; this only changes how a row looks and where clicks land.
 """
@@ -45,19 +46,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from video_agent.contracts import AnalysisClue, ClueSource, InformationCertainty
+from video_agent.contracts import AnalysisClue, ClueSource
 from video_agent.ui import theme
 
-# Like the demo page's status marks: a dot with the word. "확인" gets a grey dot so it
-# does not read as a verified fact.
-CERTAINTY_DOTS = {
-    InformationCertainty.CONFIRMED: (theme.GRAY_40, theme.TEXT),
-    InformationCertainty.ESTIMATED: (theme.WARNING_DOT, theme.WARNING_TEXT),
-    InformationCertainty.UNKNOWN: (theme.GRAY_50, theme.TEXT),
-}
-HEADER_LABELS = ("사용", "단서", "출처", "확실성")
-_DOT = 8
-_GAP = 6
+HEADER_LABELS = ("사용", "단서", "출처")
 
 
 @dataclass(frozen=True)
@@ -65,7 +57,6 @@ class ClueColumns:
     check: QRect
     text: QRect
     source: QRect
-    certainty: QRect
     edit: QRect
     remove: QRect
 
@@ -78,7 +69,6 @@ def clue_columns(
     rect: QRect,
     font: QFont,
     source_labels: Mapping[ClueSource, str],
-    certainty_labels: Mapping[InformationCertainty, str],
 ) -> ClueColumns:
     """Column boxes of one row (or of the header), all `rect.height()` tall."""
     base = _px(font)
@@ -89,10 +79,6 @@ def clue_columns(
     source_width = max(
         metrics.horizontalAdvance(label) for label in (*source_labels.values(), HEADER_LABELS[2])
     ) + pad
-    certainty_width = _DOT + _GAP + max(
-        metrics.horizontalAdvance(label)
-        for label in (*certainty_labels.values(), HEADER_LABELS[3])
-    ) + pad
     action = round(base * 28 / 16)
     top, height = rect.top(), rect.height()
     left = rect.left() + pad
@@ -100,29 +86,22 @@ def clue_columns(
     right = rect.right() - pad // 2
     remove = QRect(right - action + 1, top, action, height)
     edit = QRect(remove.left() - action - 2, top, action, height)
-    certainty = QRect(edit.left() - pad // 2 - certainty_width, top, certainty_width, height)
-    source = QRect(certainty.left() - source_width, top, source_width, height)
+    source = QRect(edit.left() - pad // 2 - source_width, top, source_width, height)
     text_left = check.right() + 1 + pad
     text = QRect(text_left, top, max(40, source.left() - pad - text_left), height)
-    return ClueColumns(check, text, source, certainty, edit, remove)
+    return ClueColumns(check, text, source, edit, remove)
 
 
 class ClueItemDelegate(QStyledItemDelegate):
     edit_requested = Signal(int)
     remove_requested = Signal(int)
 
-    def __init__(
-        self,
-        source_labels: Mapping[ClueSource, str],
-        certainty_labels: Mapping[InformationCertainty, str],
-        parent=None,
-    ) -> None:
+    def __init__(self, source_labels: Mapping[ClueSource, str], parent=None) -> None:
         super().__init__(parent)
         self._source_labels = source_labels
-        self._certainty_labels = certainty_labels
 
     def columns(self, rect: QRect, font: QFont) -> ClueColumns:
-        return clue_columns(rect, font, self._source_labels, self._certainty_labels)
+        return clue_columns(rect, font, self._source_labels)
 
     def paint(
         self,
@@ -167,18 +146,6 @@ class ClueItemDelegate(QStyledItemDelegate):
             source_rect,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             self._source_labels[clue.source],
-        )
-        dot, color = CERTAINTY_DOTS[clue.certainty]
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(dot))
-        painter.drawEllipse(cells.certainty.left(), first.top() + (line - _DOT) // 2 + 1, _DOT, _DOT)
-        painter.setPen(QColor(color))
-        text_left = cells.certainty.left() + _DOT + _GAP
-        painter.drawText(
-            QRect(text_left, first.top(), cells.certainty.right() - text_left, line),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            self._certainty_labels[clue.certainty],
         )
         enabled = bool(opt.state & QStyle.StateFlag.State_Enabled)
         mode = QIcon.Mode.Normal if enabled else QIcon.Mode.Disabled
@@ -329,7 +296,7 @@ class ClueHeader(QWidget):
         painter.setFont(font)
         painter.setPen(QColor(theme.TEXT_BOLDER))
         for label, cell in zip(
-            HEADER_LABELS, (cells.check, cells.text, cells.source, cells.certainty), strict=True
+            HEADER_LABELS, (cells.check, cells.text, cells.source), strict=True
         ):
             painter.drawText(
                 QRect(cell.left(), 0, max(cell.width(), 60), self.height()),

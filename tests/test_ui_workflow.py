@@ -139,9 +139,10 @@ class UiWorkflowTests(unittest.TestCase):
         window._update_post_run_buttons()
         window._make_plan()
         plan_text = window._plan_view.toPlainText()
-        self.assertIn("우선 확인 상황", plan_text)
+        self.assertIn("우선 확인", plan_text)
         self.assertIn("인물 간 상호작용, 자세·움직임 변화", plan_text)
-        self.assertIn("선택하지 않은 상황도 분석합니다", plan_text)
+        # How the situations are used is one click away, under "세부 조건".
+        self.assertIn("선택하지 않은 상황도 분석합니다", window._plan_details_view.toPlainText())
         window._approve_plan()
         self.assertTrue(window._run_button.isEnabled())
 
@@ -219,9 +220,6 @@ class UiWorkflowTests(unittest.TestCase):
         panel.title_edit.setText("문 앞 택배 이동 확인")
         panel.case_type.set_value("관리용 사건 분류")
         panel.clue_source.setCurrentIndex(panel.clue_source.findData(ClueSource.USER_STATEMENT))
-        panel.clue_certainty.setCurrentIndex(
-            panel.clue_certainty.findData(InformationCertainty.CONFIRMED)
-        )
         panel.clue_text.setText("신고자는 사람이 문 앞 상자를 들었다고 설명함")
         panel.add_clue_button.click()
         self.window._save_case()
@@ -245,12 +243,9 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertFalse(self.window._run_button.isEnabled())
         self.assertIsNone(self.window._session.analysis_approval)
 
-    def test_editing_clue_certainty_keeps_it_in_plan_and_requires_reapproval(self) -> None:
+    def test_editing_clue_source_keeps_it_in_plan_and_requires_reapproval(self) -> None:
         panel = self.window._case_panel
         panel.clue_source.setCurrentIndex(panel.clue_source.findData(ClueSource.USER_STATEMENT))
-        panel.clue_certainty.setCurrentIndex(
-            panel.clue_certainty.findData(InformationCertainty.CONFIRMED)
-        )
         panel.clue_text.setText("신고자는 문 앞 상자가 사라졌다고 설명함")
         panel.add_clue_button.click()
         self.window._purpose_edit.setPlainText(
@@ -261,17 +256,16 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertTrue(self.window._run_button.isEnabled())
 
         panel.clue_list.setCurrentRow(0)
-        panel.clue_certainty.setCurrentIndex(
-            panel.clue_certainty.findData(InformationCertainty.ESTIMATED)
-        )
+        panel.clue_source.setCurrentIndex(panel.clue_source.findData(ClueSource.DOCUMENT))
         panel.add_clue_button.click()
 
         self.assertFalse(self.window._run_button.isEnabled())
         self.assertIsNone(self.window._session.analysis_approval)
         self.window._make_plan()
         (clue,) = self.window._session.plan.analysis_clues
-        self.assertIs(clue.certainty, InformationCertainty.ESTIMATED)
-        self.assertIn("문 앞 상자가 사라졌다고 설명함", self.window._plan_view.toPlainText())
+        self.assertIs(clue.source, ClueSource.DOCUMENT)
+        self.assertIs(clue.certainty, InformationCertainty.UNKNOWN)
+        self.assertIn("문 앞 상자가 사라졌다고 설명함 (출처: 문서)", self.window._plan_view.toPlainText())
 
     def test_status_line_shows_only_mode_and_selected_model(self) -> None:
         self.window._runtime_inventory = RuntimeInventory(
@@ -380,6 +374,24 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertEqual(shown(), [window._make_plan_button])
         self.assertFalse(window._run_button.isEnabled())
 
+    def test_one_click_approves_and_runs_a_local_plan(self) -> None:
+        window = self.window
+        window._purpose_edit.setPlainText("사람이 문 앞 상자를 들어 이동시키는 장면 후보 찾기")
+        window._make_plan()
+        self.assertEqual(window._approve_button.text(), "승인하고 실행")
+        rows = window._plan_view.toPlainText()
+        for label in ("찾을 장면", "볼 영상", "우선 확인", "사용 단서", "분석 방식"):
+            self.assertIn(label, rows)
+        for detail in ("한도", "표본", "범위 확대"):
+            self.assertNotIn(detail, rows)
+        self.assertFalse(window._plan_details_toggle.isHidden())
+        self.assertTrue(window._plan_details_view.isHidden())
+        with patch.object(window, "_start_analysis") as start:
+            window._approve_button.click()
+        # The click is the approval of the plan shown, then the run starts.
+        self.assertIsNotNone(window._session.analysis_approval)
+        start.assert_called_once()
+
     def test_every_drop_down_uses_the_styled_list(self) -> None:
         combos = self.window.findChildren(QComboBox)
         self.assertGreaterEqual(len(combos), 5)
@@ -478,9 +490,11 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertFalse(window._motion_selection_label.isHidden())
         self.assertEqual(window._motion_list.item(0).checkState(), Qt.CheckState.Checked)
 
-        window._range_changed()  # inputs changed: proposals cleared, back to "not scanned"
+        window._range_changed()  # inputs changed: proposals cleared, to be found again
         self.assertTrue(window._motion_list.isHidden())
-        self.assertTrue(window._motion_empty_label.isHidden())
+        self.assertEqual(
+            window._motion_empty_label.text(), "범위가 바뀌어 움직임 구간을 다시 찾아야 합니다."
+        )
 
     def test_analysis_panel_preserves_readable_motion_and_plan_areas(self) -> None:
         self.assertGreaterEqual(self.window._motion_list.minimumHeight(), 120)
@@ -899,7 +913,7 @@ class UiWorkflowTests(unittest.TestCase):
 
         plan = self.window._session.plan
         self.assertEqual(plan.sampling_strategy, SamplingStrategy.TEMPORAL_SEQUENCE)
-        plan_text = self.window._plan_view.toPlainText()
+        plan_text = self.window._plan_details_view.toPlainText()
         self.assertIn("최대 1920px 원본", plan_text)
         self.assertIn("전체 화면 보기 + 중앙 60% 확대 보기", plan_text)
         self.assertNotIn("2×2 시간순 비교 보드", plan_text)
@@ -1004,15 +1018,16 @@ class UiWorkflowTests(unittest.TestCase):
         self.window._apply_motion_proposal()
 
         self.assertIsNone(self.window._session.analysis_approval)
-        self.assertEqual(self.window._range_start.value(), 2.0)
-        self.assertEqual(self.window._range_end.value(), 8.0)
+        # The entered range stays as typed; the plan takes the checked range.
+        self.assertEqual((self.window._range_start.value(), self.window._range_end.value()), (0.0, 0.0))
+        self.assertEqual(self.window._intent_range(), (2.0, 8.0))
         self.assertFalse(self.window._run_button.isEnabled())
 
         self.window._make_plan()
 
         self.assertEqual(len(self.window._session.plan.sample_timestamps_sec), 12)
         self.assertAlmostEqual(self.window._session.plan.sampling_interval_sec, 0.25)
-        self.assertIn("최대 변화 시각 중심", self.window._plan_view.toPlainText())
+        self.assertIn("최대 변화 시각 중심", self.window._plan_details_view.toPlainText())
         self.assertEqual(
             self.window._session.plan.sampling_strategy,
             SamplingStrategy.MOTION_PEAK,
@@ -1062,7 +1077,7 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertLess(plan.sample_timestamps_sec[0], 2.5)
         self.assertGreater(plan.sample_timestamps_sec[-1], 7.5)
         self.assertTrue(plan.observation_guidance)
-        plan_text = self.window._plan_view.toPlainText()
+        plan_text = self.window._plan_details_view.toPlainText()
         self.assertIn("각 구간 전체에 분산한 시간순 비교", plan_text)
         self.assertIn("관찰 기준", plan_text)
 
@@ -1149,11 +1164,13 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertEqual(sum(0.0 <= value < 2.0 for value in plan.sample_timestamps_sec), 4)
         self.assertEqual(sum(3.0 <= value < 5.0 for value in plan.sample_timestamps_sec), 4)
         self.assertEqual(sum(6.0 <= value < 8.0 for value in plan.sample_timestamps_sec), 4)
-        self.assertIn("움직임 구간 3개", self.window._plan_view.toPlainText())
-        self.assertIn("등록된 분석 구간", self.window._plan_view.toPlainText())
-        self.assertIn("1. 0.000~2.000초", self.window._plan_view.toPlainText())
-        self.assertIn("2. 3.000~5.000초", self.window._plan_view.toPlainText())
-        self.assertIn("3. 6.000~8.000초", self.window._plan_view.toPlainText())
+        # The plan names the ranges in minutes:seconds; sampling detail is under "세부 조건".
+        self.assertIn("움직임 구간 3개: 0:00–0:02, 0:03–0:05, 0:06–0:08", self.window._plan_view.toPlainText())
+        details = self.window._plan_details_view.toPlainText()
+        self.assertIn("등록된 분석 구간", details)
+        self.assertIn("1. 0.000~2.000초", details)
+        self.assertIn("2. 3.000~5.000초", details)
+        self.assertIn("3. 6.000~8.000초", details)
 
     def test_stale_motion_scan_result_is_ignored(self) -> None:
         proposal = MotionProposal(
