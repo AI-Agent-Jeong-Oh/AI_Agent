@@ -40,7 +40,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
-    QMessageBox,
     QPlainTextEdit,
     QTextEdit,
     QProgressBar,
@@ -60,17 +59,15 @@ from PySide6.QtWidgets import (
 from video_agent.agent.planning import AgentSession, AnalysisIntent, PlanningError, WorkflowState
 from video_agent.agent.situations import DEFAULT_PURPOSES, SITUATION_LABELS
 from video_agent.analysis.evidence import (
-    duration_requirement,
     fine_detail_requirement,
-    observation_span_seconds,
     temporal_motion_requirement,
 )
 from video_agent.analysis.factory import create_analyzer
 from video_agent.analysis.batch import (
     BatchExecutionWorker,
+    BatchPreparation,
     BatchPreparationWorker,
     BatchVideoInput,
-    PreparedBatchVideo,
 )
 from video_agent.analysis.worker import AnalysisWorker
 from video_agent.contracts import (
@@ -109,11 +106,12 @@ from video_agent.storage.json_store import (
 )
 from video_agent.storage.paths import AppPaths, CacheManager
 from video_agent.ui.analysis_choice import SAMPLE_LABEL, AnalysisChoice
-from video_agent.ui.batch_dialog import BatchDialogConfig, CaseBatchDialog
 from video_agent.ui.card import Card
 from video_agent.ui.case_panel import SOURCE_LABELS, CaseContextPanel
 from video_agent.ui.disclosure import DisclosureButton
 from video_agent.ui.focus_panel import FocusSection
+from video_agent.ui.message import confirm, notify
+from video_agent.ui.segment_detail import clock, segment_rows
 from video_agent.ui.motion_table import MotionHeader, MotionItemDelegate
 from video_agent.ui.person_comparison_dialog import PersonComparisonDialog
 from video_agent.ui.judgement_marks import JUDGEMENT_MARKS
@@ -305,7 +303,14 @@ class MainWindow(QMainWindow):
         self._worker: AnalysisWorker | None = None
         self._metadata_worker: MetadataWorker | None = None
         self._motion_worker: MotionScanWorker | None = None
-        self._batch_dialog: CaseBatchDialog | None = None
+        # Step ②: the checked videos; two or more run as one prepared batch.
+        self._analysis_targets: tuple[str, ...] = ()
+        self._batch_prepare_worker: BatchPreparationWorker | None = None
+        self._batch_run_worker: BatchExecutionWorker | None = None
+        self._batch_preparation: BatchPreparation | None = None
+        self._batch_done = False
+        self._batch_pending: tuple[str, ...] = ()
+        self._batch_results: list[AnalysisJob] = []
         self._person_comparison_dialog: PersonComparisonDialog | None = None
         self._active_motion_scan_id: str | None = None
         self._sampling_interval_override: float | None = None
@@ -751,6 +756,8 @@ class MainWindow(QMainWindow):
         self._question_label.setVisible(False)
         self._clarification_edit.setVisible(False)
         self._plan_view = QTextEdit()
+        # The grid has its own lines; no frame around it.
+        self._plan_view.setObjectName("plainTable")
         self._plan_view.setReadOnly(True)
         # Shown once there is a plan (no empty box before that).
         self._plan_view.setVisible(False)
@@ -776,22 +783,35 @@ class MainWindow(QMainWindow):
         # The explanation sits behind ⓘ; its text follows the purpose (see _motion_help).
         self._motion_help.setVisible(False)
         self._motion_note.setVisible(False)
+        # One video: start/end and motion ranges. Several: each video finds its own.
+        self._single_range_box = QWidget()
+        single_range = QVBoxLayout(self._single_range_box)
+        single_range.setContentsMargins(0, 0, 0, 0)
+        single_range.setSpacing(8)
         range_line = QHBoxLayout()
         range_line.addWidget(self._motion_scan_button)
         range_line.addSpacing(8)
         range_line.addWidget(range_row, 1)
-        range_part.body_layout.addLayout(range_line)
-        range_part.body_layout.addWidget(self._motion_help)
-        range_part.body_layout.addWidget(self._motion_note)
-        range_part.body_layout.addWidget(self._motion_empty_label)
+        single_range.addLayout(range_line)
+        single_range.addWidget(self._motion_help)
+        single_range.addWidget(self._motion_note)
+        single_range.addWidget(self._motion_empty_label)
         motion_table = QWidget()
         motion_table_layout = QVBoxLayout(motion_table)
         motion_table_layout.setContentsMargins(0, 0, 0, 0)
         motion_table_layout.setSpacing(0)
         motion_table_layout.addWidget(self._motion_header)
         motion_table_layout.addWidget(self._motion_list, 1)
-        range_part.body_layout.addWidget(motion_table, 1)
-        range_part.body_layout.addWidget(self._motion_selection_label)
+        single_range.addWidget(motion_table, 1)
+        single_range.addWidget(self._motion_selection_label)
+        range_part.body_layout.addWidget(self._single_range_box, 1)
+        self._multi_range_label = WrapLabel(
+            "영상마다 움직임이 큰 구간을 최대 3개 자동으로 찾습니다. "
+            "움직임이 없으면 영상 전체를 고르게 봅니다."
+        )
+        self._multi_range_label.setObjectName("subsectionHelp")
+        self._multi_range_label.setVisible(False)
+        range_part.body_layout.addWidget(self._multi_range_label, 0, Qt.AlignmentFlag.AlignTop)
 
         plan_part = StepSection(3, "계획 확인")
         plan_part.body_layout.addWidget(method_form)
@@ -801,6 +821,7 @@ class MainWindow(QMainWindow):
         # Sampling, limits and model guidance, folded under the plan.
         self._plan_details_toggle = DisclosureButton("세부 조건")
         self._plan_details_view = QTextEdit()
+        self._plan_details_view.setObjectName("plainTable")
         self._plan_details_view.setReadOnly(True)
         self._plan_details_view.setVisible(False)
         self._plan_details_toggle.setVisible(False)
@@ -849,12 +870,6 @@ class MainWindow(QMainWindow):
         approve_row.addWidget(self._approve_button)
         approve_row.addWidget(self._run_button)
         run_layout.addLayout(approve_row)
-        self._batch_button = QPushButton("여러 영상 일괄 분석")
-        self._batch_button.setToolTip(
-            "연결된 여러 영상을 준비한 뒤 표시된 구간과 모델을 한 번에 승인해 순차 분석합니다"
-        )
-        self._batch_button.setVisible(False)
-        run_layout.addWidget(self._batch_button)
         # Only external mode needs the separate transfer approval.
         run_layout.addWidget(self._transfer_button)
         self._progress_bar = QProgressBar()
@@ -889,12 +904,6 @@ class MainWindow(QMainWindow):
         result_group = Card("AI 분석 결과")
         result_layout = QVBoxLayout(result_group.body)
         result_layout.setContentsMargins(12, 8, 12, 8)
-        # Only what helps the work: the review keys (behind a mark, so the step fits).
-        help_label = info_mark(
-            "후보 목록을 누른 뒤\n1 관련 있음 · 2 추가 확인 · 3 제외 · 0 미검토\nSpace 재생 · ↑↓ 다른 후보",
-            "검토 단축키",
-            "단축키",
-        )
         saved_row = QHBoxLayout()
         self._saved_results_combo = QComboBox()
         self._saved_results_combo.setAccessibleName("이 영상의 저장된 분석 결과")
@@ -928,11 +937,14 @@ class MainWindow(QMainWindow):
         camera_row.addWidget(self._camera_tabs)
         camera_row.addStretch(1)
         camera_row.addWidget(self._case_overview.toggle_button)
+        # Each video's candidates are reviewed in its own tab; the all-camera list is
+        # not offered (kept only for the result summary's counts).
+        self._case_overview.toggle_button.setVisible(False)
         self._camera_row.setVisible(False)
         candidate_layout.addWidget(self._camera_row)
         candidate_layout.addWidget(self._case_overview)
         candidate_layout.addWidget(self._saved_results_row)
-        self._review_panel = CandidateReviewPanel(self._segment_text)
+        self._review_panel = CandidateReviewPanel(self._segment_rows)
         self._person_compare_button = QPushButton("영상 간 인물 비교")
         self._person_compare_button.setToolTip(
             "서로 다른 영상의 실제 AI 분석 후보를 골라 외형 유사성을 비교합니다"
@@ -940,12 +952,10 @@ class MainWindow(QMainWindow):
         theme.mark_compact(self._person_compare_button)
         result_group.add_header_widget(self._person_compare_button)
         result_group.add_header_widget(self._review_panel.completion_bar)
-        self._review_panel.playback_row.flow.addWidget(help_label)
         self._result_list = self._review_panel.candidate_list
         self._review_empty_label = QLabel("아직 분석 결과가 없습니다.")
         self._review_empty_label.setWordWrap(True)
         self._review_empty_label.setObjectName("placeholder")
-        self._result_help_label = help_label
         candidate_layout.addWidget(self._review_empty_label)
         candidate_layout.addWidget(self._review_panel.list_section, 1)
         self._candidate_card = candidate_card
@@ -1039,7 +1049,7 @@ class MainWindow(QMainWindow):
         self._approve_button.clicked.connect(self._approve_and_run)
         self._transfer_button.clicked.connect(self._approve_transfer)
         self._run_button.clicked.connect(self._start_analysis)
-        self._batch_button.clicked.connect(self._open_batch_analysis)
+        self._video_list.targets_changed.connect(self._targets_changed)
         self._person_compare_button.clicked.connect(self._open_person_comparison)
         self._cancel_button.clicked.connect(self._cancel_analysis)
         # Every enable/disable of a step ② action re-picks the one blue "next" button.
@@ -1500,12 +1510,28 @@ class MainWindow(QMainWindow):
         # The analysis worker is set before it starts and cleared when it finishes.
         if video_id == self._video_id and self._worker is not None:
             return "분석 중", analyzed
+        if video_id in self._batch_pending:
+            return ("분석 중" if video_id == self._batch_pending[0] else "분석 대기"), analyzed
         note = self._video_run_notes.get(video_id)
         if note is not None:
             text = f"{note} · 이전 {text}" if analyzed else note
         return text, analyzed
 
+    def _sync_targets(self) -> None:
+        """Checked videos stay linked ones; one checked video is always the open one."""
+        linked = [video_id for video_id, path in self._case_videos.items() if path is not None]
+        targets = [video_id for video_id in self._analysis_targets if video_id in linked]
+        if len(targets) <= 1:
+            targets = [self._video_id] if self._video_id in linked else targets[:1]
+        self._analysis_targets = tuple(video_id for video_id in linked if video_id in targets)
+
+    def _multi_target(self) -> bool:
+        return len(self._analysis_targets) >= 2
+
     def _refresh_video_list(self) -> None:
+        self._sync_targets()
+        self._video_list.set_targets(self._analysis_targets, redraw=False)
+        self._refresh_target_layout()
         entries = []
         for video_id, path in self._case_videos.items():
             link = self._link_for(video_id)
@@ -1528,9 +1554,6 @@ class MainWindow(QMainWindow):
         self._refresh_attention()
         self._refresh_case_header()
         self._refresh_timeline_marks()
-        linked_count = sum(path is not None for path in self._case_videos.values())
-        self._batch_button.setVisible(linked_count >= 2)
-        self._batch_button.setEnabled(linked_count >= 2 and not self._background_work_running())
         self._refresh_person_compare_button()
 
     def _review_target(self) -> str | None:
@@ -1603,7 +1626,6 @@ class MainWindow(QMainWindow):
                         end_sec=segment.end_sec,
                         summary=segment.summary,
                         judgement=JUDGEMENT_LABELS[judgement],
-                        bookmarked=bool(review is not None and review.bookmarked),
                     )
                 )
         self._case_overview.set_rows(
@@ -1639,10 +1661,8 @@ class MainWindow(QMainWindow):
                     label=(
                         f"후보 #{index + 1} · {format_milliseconds(start)}–{format_milliseconds(end)}"
                         f" · {JUDGEMENT_LABELS[judgement]}"
-                        + (" · 북마크" if record.bookmarked else "")
                     ),
                     selected=index == selected,
-                    bookmarked=record.bookmarked,
                 )
             )
         self._timeline.set_marks(tuple(marks))
@@ -2441,6 +2461,9 @@ class MainWindow(QMainWindow):
         self._persist_settings()
 
     def _invalidate_plan_display(self) -> None:
+        # Any change (videos, purpose, method) needs a new plan and a new approval.
+        self._batch_preparation = None
+        self._batch_done = False
         self._plan_view.clear()
         self._question_label.setText("")
         self._question_label.setVisible(False)
@@ -2478,6 +2501,10 @@ class MainWindow(QMainWindow):
                     "이 컴퓨터에 AI 분석 프로그램이 없습니다. 담당자에게 설치를 요청하세요."
                 )
             return
+        if self._multi_target():
+            self._session.update_context(self._metadata, self._current_intent())
+            self._prepare_batch()
+            return
         if not self._sync_motion_selection():
             return
         self._session.update_context(self._metadata, self._current_intent())
@@ -2512,69 +2539,22 @@ class MainWindow(QMainWindow):
             self._show_error(str(exc))
             return
 
-        if plan.mode is AnalysisMode.SAMPLE:
-            sampling = "프레임을 뽑지 않음 (시연용 결과)"
-        elif self._sampling_timestamps_override:
-            fine_detail = fine_detail_requirement(plan.purpose)
-            proposal_ranges = "\n".join(
-                f"  {index}. {item.start_sec:.3f}~{item.end_sec:.3f}초 "
-                f"(최대 변화 {item.peak_timestamp_sec:.3f}초)"
-                for index, item in enumerate(self._applied_motion_proposals, start=1)
-            )
-            strategy_text = (
-                "각 구간 전체에 분산한 시간순 비교"
-                if plan.sampling_strategy is SamplingStrategy.TEMPORAL_SEQUENCE
-                else "최대 변화 시각 중심의 촘촘한 비교"
-            )
-            sampling = (
-                f"움직임 구간 {len(self._applied_motion_proposals)}개에서 원본 시각 "
-                f"{len(plan.sample_timestamps_sec)}개 ({strategy_text}, "
-                f"최소 {plan.sampling_interval_sec:.3f}초 간격)\n"
-                f"등록된 분석 구간:\n{proposal_ranges}\n"
-                "구간 수와 결과 후보 수는 다를 수 있음"
-            )
-            if (
-                plan.mode is AnalysisMode.LOCAL
-                and plan.sampling_strategy is SamplingStrategy.TEMPORAL_SEQUENCE
-                and not fine_detail.required
-            ):
-                sampling += "\n프레임 4개씩 2×2 비교 화면으로 묶어 분석"
-        elif plan.sampling_strategy is SamplingStrategy.TEMPORAL_SEQUENCE:
-            fine_detail = fine_detail_requirement(plan.purpose)
-            sampling = (
-                f"반복 변화 비교용 원본 시각 {len(plan.sample_timestamps_sec)}개 "
-                f"(약 {plan.sampling_interval_sec:.3f}초 간격)"
-            )
-            if plan.mode is AnalysisMode.LOCAL and not fine_detail.required:
-                sampling += "\n프레임 4개씩 2×2 비교 화면으로 묶어 분석"
-        else:
-            sampling = (
-                f"원본 시각 {len(plan.sample_timestamps_sec)}개를 고르게 선택 "
-                f"(약 {plan.sampling_interval_sec:.3f}초 간격)"
-            )
-        if (
-            plan.mode is AnalysisMode.LOCAL
-            and fine_detail_requirement(plan.purpose).required
-        ):
-            sampling += (
-                "\n작은 접촉 정밀 입력: 최대 1920px 원본에서 각 시각별 "
-                "전체 화면 보기 + 중앙 60% 확대 보기(1280×1080)를 모델에 전달"
-            )
+        sampling = self._plan_photo_text(plan)
         case_title = self._case_panel.title_edit.text().strip() or self._case_record.title
         mode_text = {
             AnalysisMode.SAMPLE: SAMPLE_LABEL,
-            AnalysisMode.LOCAL: f"{self._choice_label(plan.model_id)} (이 컴퓨터에서 처리)",
+            AnalysisMode.LOCAL: self._choice_label(plan.model_id),
             AnalysisMode.EXTERNAL: f"외부 AI 분석 · {plan.model_id}",
         }[plan.mode]
         video_name = self._video_path.name if self._video_path is not None else plan.video_id
         if self._applied_motion_proposals:
             ranges = ", ".join(
-                f"{format_time(item.start_sec)}–{format_time(item.end_sec)}"
-                for item in self._applied_motion_proposals
+                f"{clock(item.start_sec)}–{clock(item.end_sec)}"
+                for item in sorted(self._applied_motion_proposals, key=lambda p: p.start_sec)
             )
             where = f"움직임 구간 {len(self._applied_motion_proposals)}개: {ranges}"
         else:
-            where = f"{format_time(plan.range_start_sec)}–{format_time(plan.range_end_sec)}"
+            where = f"{clock(plan.range_start_sec)}–{clock(plan.range_end_sec)}"
         limits = plan.limits
         focus = self._focus_section.focus()
         frames = (
@@ -2587,7 +2567,7 @@ class MainWindow(QMainWindow):
             ("찾을 장면", plan.purpose),
             ("볼 영상", f"{video_name}\n{where}"),
             (
-                "우선 확인",
+                "중점 관찰",
                 ", ".join(SITUATION_LABELS[item] for item in focus) if focus else "선택 없음",
             ),
             (
@@ -2602,25 +2582,16 @@ class MainWindow(QMainWindow):
             ),
             ("분석 방식", f"{mode_text} · {frames}"),
         ]
-        # The rest stays one click away under "세부 조건".
+        # The rest stays one click away under "세부 조건": three short lines.
         details = [
-            ("사건", f"{case_title} (사건 정보 v{plan.case_revision})" if plan.case_revision else case_title),
-            ("표본", sampling),
-            (
-                "한도",
-                f"최대 {limits.max_runtime_seconds:g}초 · 프레임 {limits.max_frames}개 · "
-                f"모델 요청 {limits.max_provider_requests}회(요청당 {limits.max_frames_per_request}프레임) · "
-                f"자동 재분석 {limits.max_reanalysis_attempts}회",
-            ),
-            ("범위 확대", "필요하면 자동 실행하지 않고 제안만 합니다"),
-            ("우선 확인 방식", "선택한 상황은 확인 순서에만 반영하고, 선택하지 않은 상황도 분석합니다."),
+            ("사진", sampling),
+            ("시간 한도", f"최대 {self._duration_text(limits.max_runtime_seconds)}"),
+            ("관찰 기준", self._guidance_text(plan.observation_guidance, focus)),
         ]
-        if plan.observation_guidance:
-            details.append(("관찰 기준", " / ".join(plan.observation_guidance)))
         if plan.transfer_manifest:
             # Anything leaving this computer is always shown, never folded away.
             manifest = plan.transfer_manifest
-            times = ", ".join(f"{item:.3f}s" for item in manifest.frame_timestamps_sec)
+            times = " · ".join(clock(item) for item in manifest.frame_timestamps_sec)
             rows.extend(
                 [
                     ("외부 전송", "분석 승인과 별도로 승인해야 합니다"),
@@ -2652,9 +2623,69 @@ class MainWindow(QMainWindow):
             5000,
         )
 
+    @staticmethod
+    def _duration_text(seconds: float) -> str:
+        minutes, rest = divmod(round(seconds), 60)
+        if minutes and rest:
+            return f"{minutes}분 {rest}초"
+        return f"{minutes}분" if minutes else f"{rest}초"
+
+    def _plan_photo_text(self, plan) -> str:
+        """'12장, 약 10초 간격 (4장씩 묶어 3번 분석)' — what the model will see, shortly."""
+        if plan.mode is AnalysisMode.SAMPLE:
+            return "사진을 뽑지 않음 (시연용)"
+        count = len(plan.sample_timestamps_sec)
+        if self._sampling_timestamps_override and self._applied_motion_proposals:
+            how = (
+                "구간 전체에 시간순"
+                if plan.sampling_strategy is SamplingStrategy.TEMPORAL_SEQUENCE
+                else "변화가 가장 큰 순간 주변"
+            )
+            text = f"움직임 구간 {len(self._applied_motion_proposals)}개에서 {count}장 ({how})"
+        else:
+            interval = plan.sampling_interval_sec
+            text = f"{count}장, " + (f"약 {round(interval)}초 간격" if interval >= 1 else "1초 안쪽 간격")
+        fine = fine_detail_requirement(plan.purpose).required
+        if plan.mode is AnalysisMode.LOCAL and fine:
+            # The frame change for small contacts is always disclosed (see README).
+            text += "\n작은 접촉: 최대 1920px 원본에서 전체 화면 보기 + 중앙 60% 확대 보기로 전달"
+        elif plan.mode is AnalysisMode.LOCAL and plan.sampling_strategy is SamplingStrategy.TEMPORAL_SEQUENCE:
+            text += f"\n4장씩 한 화면(2×2)으로 묶어 {-(-count // 4)}번 분석"
+        return text
+
+    @staticmethod
+    def _guidance_text(guidance: tuple[str, ...], focus: tuple) -> str:
+        """The plan's observation guidance as short points (the model still gets the full text)."""
+        points: list[str] = []
+        for line in guidance:
+            if line.startswith("우선 확인 상황("):
+                continue  # shown below from the chosen items
+            if line.startswith("사용자가 입력한 추가 탐색 힌트"):
+                points.append("추가 힌트: " + line.partition(": ")[2] + " (영상 사실 아님)")
+            elif "머리·얼굴·몸통" in line:
+                points.append("머리·얼굴·몸통 방향이 바뀌는지 시간순 비교")
+            elif "반복되는지 시간순으로 비교" in line:
+                points.append("같은 부위·물체의 위치 변화가 반복되는지 시간순 비교")
+            elif "손·손가락" in line:
+                points.append("손·손가락과 물체의 접촉을 원본에 가까운 사진으로 확인")
+            else:
+                points.append(line)
+        lines = []
+        if focus:
+            lines.append("  ".join(f"• {SITUATION_LABELS[item]}" for item in focus))
+        lines.extend(f"• {point}" for point in points)
+        lines.append(
+            ("고른 항목을 먼저 보되 다른 장면도 봄 · " if focus else "")
+            + "보이는 움직임만 적고 범죄 여부는 판단하지 않음"
+        )
+        return "\n".join(lines)
+
     def _approve_and_run(self) -> None:
         """Approving the plan shown is the click that starts it, except for external AI,
         whose separate transfer approval still comes between."""
+        if self._multi_target():
+            self._run_batch()
+            return
         external = self._session.plan is not None and self._session.plan.mode is AnalysisMode.EXTERNAL
         self._approve_plan()
         if not external and self._run_button.isEnabled():
@@ -2693,73 +2724,191 @@ class MainWindow(QMainWindow):
             7000,
         )
 
-    def _open_batch_analysis(self) -> None:
-        """Prepare and execute one approved local plan per linked case video."""
+    # ----- step ②: one video or several -------------------------------------------
+
+    def _targets_changed(self, targets: tuple[str, ...]) -> None:
+        """Check boxes in the step ② video table: one video runs as before, several as a batch."""
         if self._background_work_running():
-            self._show_error("이미 백그라운드 작업이 실행 중입니다.")
+            self.statusBar().showMessage("작업 중에는 분석할 영상을 바꿀 수 없습니다.", 5000)
+            self._refresh_video_list()
             return
-        videos = tuple(
-            BatchVideoInput(video_id, path, path.name)
-            for video_id, path in self._case_videos.items()
-            if path is not None
+        targets = tuple(targets) or ((self._video_id,) if self._video_id else ())
+        if len(targets) == 1 and targets[0] != self._video_id:
+            # One checked video is the open one: open it (the same as clicking its row).
+            self._activate_listed_video(targets[0])
+            if self._video_id != targets[0]:
+                self._refresh_video_list()
+                return
+        self._analysis_targets = targets
+        self._invalidate_plan_display()
+        self._refresh_target_layout()
+        self._refresh_video_list()
+        self._update_post_run_buttons()
+
+    def _refresh_target_layout(self) -> None:
+        multi = self._multi_target()
+        self._single_range_box.setVisible(not multi)
+        self._multi_range_label.setVisible(multi)
+        self._plan_group.set_aside(f"분석할 영상 {len(self._analysis_targets)}개" if multi else "")
+        self._make_plan_button.setToolTip(
+            "고른 영상마다 움직임 구간을 찾아 계획을 만듭니다. 승인 전에는 분석하지 않습니다."
+            if multi
+            else "체크한 움직임 구간과 입력한 목적·구간으로 계획을 만듭니다. 추가 질문이 있으면 먼저 표시합니다."
         )
-        if len(videos) < 2:
-            self._show_error("일괄 분석하려면 파일이 연결된 영상을 두 개 이상 등록해 주세요.")
-            return
-        purpose = self._purpose_edit.toPlainText().strip()
-        if not purpose:
-            self._show_error("여러 영상에 공통으로 적용할 분석 목적을 먼저 입력해 주세요.")
-            return
-        mode = self._current_mode()
-        if mode is AnalysisMode.EXTERNAL:
-            self._show_error(
-                "외부 AI는 영상별 전송 범위 승인이 필요해 일괄 분석에서 자동 실행하지 않습니다. "
-                "이 컴퓨터 분석 또는 시연용을 선택해 주세요."
-            )
-            return
-        model_id = self._model_id() or None
-        if mode is AnalysisMode.LOCAL and not self._runtime_inventory.confirms_vision(model_id):
-            self._show_error("사용할 로컬 영상 모델을 확인할 수 없습니다. 모델 목록을 새로고침해 주세요.")
-            return
-        limits = (
-            AnalysisLimits(
-                max_runtime_seconds=300.0,
-                max_provider_requests=3,
-                max_frames_per_request=4,
-            )
+
+    def _batch_limits(self, mode: AnalysisMode) -> AnalysisLimits:
+        return (
+            AnalysisLimits(max_runtime_seconds=300.0, max_provider_requests=3, max_frames_per_request=4)
             if mode is AnalysisMode.LOCAL
             else AnalysisLimits()
         )
-        provider_id = (
-            os.environ.get("VIDEO_AGENT_LOCAL_PROVIDER", "ollama-local")
-            if mode is AnalysisMode.LOCAL
-            else None
-        )
-        provider_endpoint = (
-            os.environ.get("VIDEO_AGENT_LOCAL_ENDPOINT", "http://127.0.0.1:11434/api/chat")
-            if mode is AnalysisMode.LOCAL
-            else None
-        )
 
-        def make_preparation(selected: tuple[BatchVideoInput, ...]) -> BatchPreparationWorker:
-            return BatchPreparationWorker(
-                selected,
-                purpose=purpose,
+    def _prepare_batch(self) -> None:
+        """Plan every checked video (motion ranges, frames) before any model call."""
+        mode = self._current_mode()
+        if mode is AnalysisMode.EXTERNAL:
+            self._show_error(
+                "외부 AI 분석은 영상마다 전송 승인을 받아야 해서 한 번에 한 영상만 할 수 있습니다. "
+                "영상을 하나만 고르거나 이 컴퓨터 분석을 고르세요."
+            )
+            return
+        questions = self._session.questions()
+        if questions:
+            self._show_error(f"분석 목적을 더 구체적으로 적어 주세요. {questions[0].prompt}")
+            return
+        model_id = self._model_id() or None
+        local = mode is AnalysisMode.LOCAL
+        videos = tuple(
+            BatchVideoInput(video_id, path, path.name)
+            for video_id in self._analysis_targets
+            if (path := self._case_videos.get(video_id)) is not None
+        )
+        try:
+            worker = BatchPreparationWorker(
+                videos,
+                purpose=self._purpose_edit.toPlainText().strip(),
                 mode=mode,
                 model_id=model_id,
-                provider_id=provider_id,
-                provider_endpoint=provider_endpoint,
+                provider_id=os.environ.get("VIDEO_AGENT_LOCAL_PROVIDER", "ollama-local") if local else None,
+                provider_endpoint=(
+                    os.environ.get("VIDEO_AGENT_LOCAL_ENDPOINT", "http://127.0.0.1:11434/api/chat")
+                    if local
+                    else None
+                ),
                 case_id=self._case_record.case_id,
                 case_revision=self._case_record.revision,
                 analysis_clues=self._current_case_clues(for_analysis=True),
                 focus_situations=self._focus_section.focus(),
-                limits=limits,
+                limits=self._batch_limits(mode),
             )
+        except ValueError as exc:
+            self._show_error(str(exc))
+            return
+        worker.progress_changed.connect(self._on_batch_progress)
+        worker.preparation_ready.connect(self._on_batch_prepared)
+        worker.finished.connect(self._on_batch_prepare_finished)
+        self._batch_prepare_worker = worker
+        self._batch_preparation = None
+        self._batch_done = False
+        self._start_batch_progress(f"영상 {len(videos)}개 계획 준비 중")
+        worker.start()
 
-        def make_execution(
-            prepared: tuple[PreparedBatchVideo, ...],
-        ) -> BatchExecutionWorker:
-            return BatchExecutionWorker(
+    def _start_batch_progress(self, message: str) -> None:
+        self._progress_bar.setRange(0, 0)
+        self._analysis_started_at = time.monotonic()
+        self._last_progress_message = message
+        self._refresh_elapsed_status()
+        self._elapsed_timer.start()
+        self._set_analysis_running(True)
+        self._refresh_next_action()
+
+    def _end_batch_progress(self, message: str) -> None:
+        self._elapsed_timer.stop()
+        self._analysis_started_at = None
+        self._set_analysis_running(False)
+        self._cancel_button.setEnabled(False)
+        self._progress_bar.setRange(0, 100)
+        self._progress_label.setText(message)
+        self._update_post_run_buttons()
+        self._refresh_video_list()
+
+    def _on_batch_progress(self, _value: object, message: str) -> None:
+        self._last_progress_message = message
+        self._refresh_elapsed_status()
+
+    def _on_batch_prepared(self, preparation: BatchPreparation) -> None:
+        self._batch_preparation = preparation
+        order = list(self._case_videos)
+        mode = self._current_mode()
+        mode_text = SAMPLE_LABEL if mode is AnalysisMode.SAMPLE else self._choice_label(self._model_id())
+        focus = self._focus_section.focus()
+        clues = self._current_case_clues(for_analysis=True)
+        rows = [
+            ("찾을 장면", self._purpose_edit.toPlainText().strip()),
+            ("중점 관찰", ", ".join(SITUATION_LABELS[item] for item in focus) if focus else "선택 없음"),
+            (
+                "사용 단서",
+                "\n".join(f"{item.text} (출처: {SOURCE_LABELS[item.source]})" for item in clues)
+                + "\n영상에서 확인한 사실이 아닙니다."
+                if clues
+                else "없음",
+            ),
+            ("분석 방식", f"{mode_text} · 영상마다 따로 분석하고 따로 저장"),
+        ]
+        for item in sorted(preparation.prepared, key=lambda p: order.index(p.video.video_id)):
+            ranges = ", ".join(
+                f"{format_time(round(p.start_sec))}–{format_time(round(p.end_sec))}"
+                for p in sorted(item.selected_proposals, key=lambda p: p.start_sec)
+            ) or f"영상 전체 ({format_time(round(item.metadata.duration_seconds))})"
+            frames = len(item.plan.sample_timestamps_sec)
+            rows.append(
+                (
+                    f"영상 {order.index(item.video.video_id) + 1}",
+                    f"{item.video.display_name}\n{ranges}" + (f" · 사진 {frames}장" if frames else ""),
+                )
+            )
+        for failure in preparation.failures:
+            number = order.index(failure.video.video_id) + 1 if failure.video.video_id in order else "?"
+            rows.append((f"영상 {number}", f"{failure.video.display_name}\n준비 실패: {failure.error}"))
+        limits = self._batch_limits(mode)
+        details = [
+            (
+                "한도",
+                f"영상마다 최대 {limits.max_runtime_seconds:g}초 · 프레임 {limits.max_frames}개 · "
+                f"모델 요청 {limits.max_provider_requests}회",
+            ),
+            ("구간", "영상마다 움직임이 큰 구간 최대 3개, 없으면 영상 전체를 고르게"),
+            ("순서", "영상 번호 순서대로 하나씩 분석"),
+        ]
+        self._plan_view.setHtml(theme.label_value_table(rows))
+        self._plan_details_view.setHtml(theme.label_value_table(details))
+        self._plan_details_toggle.setChecked(False)
+
+    def _on_batch_prepare_finished(self) -> None:
+        self._batch_prepare_worker = None
+        preparation = self._batch_preparation
+        ready = len(preparation.prepared) if preparation is not None else 0
+        failed = len(preparation.failures) if preparation is not None else 0
+        if ready == 0:
+            self._batch_preparation = None
+        message = f"영상 {ready}개 계획 준비됨" + (f" · 준비 실패 {failed}개" if failed else "")
+        self._end_batch_progress(message if preparation is not None else "계획 준비 취소됨")
+        if ready:
+            self.statusBar().showMessage("계획을 확인한 뒤 [승인하고 실행]을 눌러 주세요.", 5000)
+
+    def _run_batch(self) -> None:
+        """The click on [승인하고 실행] approves every plan shown and runs them in order."""
+        preparation = self._batch_preparation
+        if preparation is None or not preparation.prepared or self._background_work_running():
+            return
+        if not self._confirm_discard_unsaved_reviews("새 분석을 시작할까요?"):
+            return
+        mode = self._current_mode()
+        model_id = self._model_id() or None
+        order = list(self._case_videos)
+        prepared = tuple(sorted(preparation.prepared, key=lambda p: order.index(p.video.video_id)))
+        try:
+            worker = BatchExecutionWorker(
                 prepared,
                 self._cache_manager.create_job_dir,
                 vision_capability_confirmed=(
@@ -2768,48 +2917,53 @@ class MainWindow(QMainWindow):
                     else False
                 ),
             )
-
-        if mode is AnalysisMode.LOCAL:
-            model_label = f"{self._choice_label(model_id)} · {model_id}"
-        else:
-            model_label = SAMPLE_LABEL
-        dialog = CaseBatchDialog(
-            videos,
-            BatchDialogConfig(
-                purpose=purpose,
-                model_label=model_label,
-                make_preparation_worker=make_preparation,
-                make_execution_worker=make_execution,
-            ),
-            self,
-        )
-        dialog.result_ready.connect(self._on_batch_result)
-        dialog.running_changed.connect(self._on_batch_running_changed)
-        dialog.finished.connect(lambda _result: self._batch_dialog_closed(dialog))
-        self._batch_dialog = dialog
-        dialog.open()
+        except ValueError as exc:
+            self._show_error(str(exc))
+            return
+        worker.progress_changed.connect(self._on_batch_progress)
+        worker.result_ready.connect(self._on_batch_result)
+        worker.finished.connect(self._on_batch_run_finished)
+        self._batch_run_worker = worker
+        self._batch_pending = tuple(item.video.video_id for item in prepared)
+        self._batch_results = []
+        self._start_batch_progress(f"영상 {len(prepared)}개 분석 중")
+        self._refresh_video_list()
+        worker.start()
 
     def _on_batch_result(self, job: AnalysisJob) -> None:
         if job.status is not JobStatus.CANCELED:
             try:
                 self._result_store.save(job)
-            except OSError as exc:
-                self.statusBar().showMessage(f"일괄 분석 결과 저장 실패: {exc}", 8000)
+            except (OSError, ValueError) as exc:
+                self.statusBar().showMessage(f"결과 저장 실패: {exc}", 8000)
+        self._batch_pending = tuple(v for v in self._batch_pending if v != job.video_id)
+        self._batch_results.append(job)
         self._record_run_outcome(job)
+        # The open video's result shows right away, as after a single run.
+        if job.video_id == self._video_id and job.status in (JobStatus.COMPLETED, JobStatus.PARTIAL):
+            self._set_result_banner(job.origin, job.model_id)
+            self._display_segments(job)
+            self._refresh_saved_results(select_job_id=job.job_id)
 
-    def _on_batch_running_changed(self, running: bool) -> None:
-        self._batch_button.setEnabled(not running)
-        self._refresh_video_list()
-        if running:
-            self.statusBar().showMessage("여러 영상 일괄 작업이 실행 중입니다.")
-        else:
-            self.statusBar().showMessage("여러 영상 일괄 작업 상태를 확인했습니다.", 5000)
-
-    def _batch_dialog_closed(self, dialog: CaseBatchDialog) -> None:
-        if self._batch_dialog is dialog:
-            self._batch_dialog = None
+    def _on_batch_run_finished(self) -> None:
+        self._batch_run_worker = None
+        self._batch_pending = ()
+        self._batch_preparation = None
+        self._batch_done = True
+        results = self._batch_results
+        completed = sum(job.status in (JobStatus.COMPLETED, JobStatus.PARTIAL) for job in results)
+        failed = sum(job.status is JobStatus.FAILED for job in results)
+        canceled = sum(job.status is JobStatus.CANCELED for job in results)
+        message = f"끝남 · 결과 {completed}개"
+        if failed:
+            message += f" · 실패 {failed}개"
+        if canceled:
+            message += f" · 취소 {canceled}개"
+        self._end_batch_progress(message)
         self._refresh_video_statuses()
-        self._refresh_video_list()
+        self.statusBar().showMessage(
+            f"분석이 끝났습니다. [{self.STEP_TITLES[2]}] 단계에서 영상별로 후보를 검토하세요.", 10000
+        )
 
     def _person_comparison_candidates(self) -> tuple[PersonCandidateInput, ...]:
         candidates: list[PersonCandidateInput] = []
@@ -3039,6 +3193,13 @@ class MainWindow(QMainWindow):
         )
 
     def _cancel_analysis(self) -> None:
+        for worker in (self._batch_prepare_worker, self._batch_run_worker):
+            if worker is not None and worker.isRunning():
+                worker.request_cancel()
+                self._cancel_button.setEnabled(False)
+                self._last_progress_message = "취소 중 (지금 영상을 정리한 뒤 멈춤)"
+                self._refresh_elapsed_status()
+                return
         if self._motion_worker is not None and self._motion_worker.isRunning():
             self._active_motion_scan_id = None
             self._motion_worker.request_cancel()
@@ -3132,6 +3293,7 @@ class MainWindow(QMainWindow):
         self._step_buttons[index].setChecked(True)
         # Videos are added and linked in step ①; later steps only choose among them.
         self._video_list.set_select_only(index != 0)
+        self._video_list.set_target_choice(index == 1)
         # Step ③ shows its candidate list in the video list's place.
         self._video_list.setVisible(index != 2)
         self._candidate_card.setVisible(index == 2)
@@ -3259,7 +3421,11 @@ class MainWindow(QMainWindow):
         )
         self._make_plan_button.setEnabled(self._metadata is not None)
         self._clarification_edit.setEnabled(True)
-        self._approve_button.setEnabled(self._session.state is WorkflowState.PLAN_READY)
+        self._approve_button.setEnabled(
+            self._batch_ready()
+            if self._multi_target()
+            else self._session.state is WorkflowState.PLAN_READY
+        )
         self._transfer_button.setEnabled(
             self._session.state is WorkflowState.ANALYSIS_APPROVED
             and self._current_mode() is AnalysisMode.EXTERNAL
@@ -3275,8 +3441,40 @@ class MainWindow(QMainWindow):
             self._refresh_next_action()
         return super().eventFilter(watched, event)
 
+    def _batch_ready(self) -> bool:
+        preparation = self._batch_preparation
+        return (
+            preparation is not None
+            and bool(preparation.prepared)
+            and self._batch_run_worker is None
+            and self._batch_prepare_worker is None
+        )
+
     def _refresh_next_action(self) -> None:
         """Step ②: plan, approval and run share one place, and only the next action is blue."""
+        if self._multi_target():
+            # Several videos: [분석 계획 만들기] then [승인하고 실행] (each video still has
+            # its own plan, run and saved result).
+            ready = self._batch_ready()
+            running = self._batch_run_worker is not None
+            self._make_plan_button.setVisible(not ready and not running)
+            self._approve_button.setVisible(ready or running)
+            self._approve_button.setText("승인하고 실행")
+            self._approve_button.setToolTip("위 영상별 계획을 승인하고 차례로 분석합니다.")
+            self._run_button.setVisible(False)
+            self._transfer_button.setVisible(False)
+            next_button = (
+                self._approve_button
+                if ready and self._approve_button.isEnabled()
+                else self._make_plan_button
+                if self._make_plan_button.isEnabled() and not self._batch_done
+                else None
+            )
+            for button in self._next_action_buttons:
+                theme.set_primary(button, button is next_button)
+            self._refresh_plan_parts(ready or running or self._batch_done)
+            self._refresh_step_emphasis()
+            return
         state = self._session.state
         approved = state in (
             WorkflowState.ANALYSIS_APPROVED,
@@ -3354,7 +3552,9 @@ class MainWindow(QMainWindow):
             f"{purpose or '목적 미입력'} · " + (f"관찰 항목 {focus}개" if focus else "관찰 항목 선택 없음")
         )
         checked = self._checked_motion_proposals()
-        if checked:
+        if self._multi_target():
+            range_part.set_summary("영상마다 움직임이 큰 구간 자동")
+        elif checked:
             first = min(item.start_sec for item in checked)
             last = max(item.end_sec for item in checked)
             range_part.set_summary(f"움직임 구간 {len(checked)}개 · {format_time(first)}–{format_time(last)}")
@@ -3366,7 +3566,17 @@ class MainWindow(QMainWindow):
                 else f"{format_time(start_value)}–{format_time(end_value) if end_value else '영상 끝'}"
             )
         state = self._session.state
-        if state in (WorkflowState.COMPLETED, WorkflowState.PARTIAL, WorkflowState.EXPANSION_PROPOSED):
+        if self._multi_target():
+            status = (
+                "실행 중"
+                if self._batch_run_worker is not None
+                else "계획 확인 전"
+                if self._batch_ready()
+                else "분석 끝남"
+                if self._batch_done
+                else "계획 없음"
+            )
+        elif state in (WorkflowState.COMPLETED, WorkflowState.PARTIAL, WorkflowState.EXPANSION_PROPOSED):
             status = "분석 끝남"
         elif state in (WorkflowState.ANALYSIS_APPROVED, WorkflowState.APPROVED):
             status = "승인됨 · 실행 전"
@@ -3422,7 +3632,9 @@ class MainWindow(QMainWindow):
         elif origin is ResultOrigin.TEST_DOUBLE:
             self._show_status("test_double", "테스트 응답 (실제 모델 검증 아님)")
         else:
-            self._show_status("real_model", f"AI 분석 결과 · {self._choice_label(model_id)}", model_id or "")
+            # A real result needs no line at the top (the card already says "AI 분석 결과");
+            # only demonstration and test results are named there.
+            self._show_status("real_model", "", model_id or "")
 
     def _set_running_banner(self, mode: AnalysisMode, model_id: str | None) -> None:
         if mode is AnalysisMode.SAMPLE:
@@ -3508,87 +3720,24 @@ class MainWindow(QMainWindow):
                 if self._external_api_key_value() is not None
                 else "인증키 필요"
             )
-            detail = f"{model_id or '외부 AI 이름 필요'}\n{key_status}\n분석 승인과 외부 전송 승인을 따로 받습니다."
-            self._show_status("warning", "외부 AI 분석 · 영상 일부를 외부로 보냄", detail)
+            detail = (
+                f"외부 AI 분석 · 영상 일부를 외부로 보냄\n{model_id or '외부 AI 이름 필요'}\n"
+                f"{key_status}\n분석 승인과 외부 전송 승인을 따로 받습니다."
+            )
+            # Like local analysis, no line while it is simply chosen: the choice itself says
+            # frames leave this computer, and nothing is sent before the transfer approval.
+            self._show_status("warning", "", detail)
+
+    @classmethod
+    def _segment_rows(cls, segment: Segment, purpose: str | None = None) -> list[tuple[str, str]]:
+        """Rows of the candidate detail (minutes:seconds, short notes)."""
+        return segment_rows(segment, purpose, cls.RESULT_CONTEXT_PREROLL_SECONDS)
 
     @classmethod
     def _segment_text(cls, segment: Segment, purpose: str | None = None) -> str:
-        start = format_milliseconds(seconds_to_milliseconds(segment.start_sec))
-        end = format_milliseconds(seconds_to_milliseconds(segment.end_sec))
-        context_start = format_milliseconds(
-            seconds_to_milliseconds(cls._segment_playback_start_sec(segment))
+        return "\n".join(
+            f"{label}: {value}" for label, value in cls._segment_rows(segment, purpose)
         )
-        evidence = " / ".join(segment.evidence)
-        observed = (
-            "\n관찰 프레임 원본 시각: "
-            + ", ".join(f"{timestamp:.3f}초" for timestamp in segment.source_timestamps_sec)
-            if segment.source_timestamps_sec
-            else ""
-        )
-        duration_evidence = ""
-        requirement = duration_requirement(purpose or "")
-        if requirement.required:
-            timestamps = tuple(sorted(set(segment.source_timestamps_sec)))
-            span = observation_span_seconds(timestamps)
-            if not timestamps:
-                duration_evidence = (
-                    "\n지속 시간 근거: 관찰 프레임 시각이 없어 '오래 머무름'을 "
-                    "판단할 수 없음"
-                )
-            elif span is None:
-                duration_evidence = (
-                    "\n지속 시간 근거: 단일 관찰 시각만 있어 '오래 머무름'을 "
-                    "판단할 수 없음"
-                )
-            else:
-                duration_evidence = (
-                    f"\n지속 시간 표본 근거: {timestamps[0]:.3f}~{timestamps[-1]:.3f}초의 "
-                    f"{len(timestamps)}개 관찰 시각 · 첫·마지막 표본 사이 {span:.3f}초"
-                )
-                if requirement.threshold_seconds is not None:
-                    if span + 1e-6 >= requirement.threshold_seconds:
-                        duration_evidence += (
-                            f" · 시간 간격은 기준 {requirement.threshold_seconds:g}초 이상이지만 "
-                            "중간의 연속성은 원본 확인 필요"
-                        )
-                    else:
-                        duration_evidence += (
-                            f" · 기준 {requirement.threshold_seconds:g}초 충족 근거 부족"
-                        )
-        temporal_evidence = ""
-        temporal = temporal_motion_requirement(purpose or "")
-        if temporal.required:
-            timestamps = tuple(sorted(set(segment.source_timestamps_sec)))
-            span = observation_span_seconds(timestamps)
-            if not timestamps:
-                temporal_evidence = "\n시간 변화 근거: 관찰 프레임 시각이 없어 변화 순서를 확인할 수 없음"
-            elif span is None:
-                temporal_evidence = (
-                    "\n시간 변화 근거: 단일 관찰 시각만 있어 반복·방향 변화를 확인할 수 없음"
-                )
-            else:
-                temporal_evidence = (
-                    f"\n시간 변화 표본 근거: {timestamps[0]:.3f}~{timestamps[-1]:.3f}초의 "
-                    f"{len(timestamps)}개 관찰 시각 · 표본 사이 {span:.3f}초 · "
-                    "중간 동작과 실제 반복 횟수는 원본 확인 필요"
-                )
-        rows = [
-            ("요약", segment.summary),
-            ("확인용 재생 범위", f"{start}–{end}"),
-            (
-                "재생 시작",
-                f"{context_start} (확인용 범위 시작 최대 "
-                f"{cls.RESULT_CONTEXT_PREROLL_SECONDS:g}초 전부터 이어서 재생)",
-            ),
-            ("근거", evidence),
-        ]
-        # Evidence lines built above are "label: value" lines too.
-        for line in f"{observed}{duration_evidence}{temporal_evidence}".splitlines():
-            if line:
-                label, _, value = line.partition(": ")
-                rows.append((label, value))
-        rows.append(("불확실성", segment.uncertainty))
-        return "\n".join(f"{label}: {value}" for label, value in rows)
 
     @classmethod
     def _segment_playback_start_sec(cls, segment: Segment) -> float:
@@ -3820,14 +3969,12 @@ class MainWindow(QMainWindow):
         if not unsaved:
             return True
         names = ", ".join(f"후보 #{index + 1}" for index in unsaved)
-        answer = QMessageBox.question(
+        return confirm(
             self,
             "저장하지 않은 검토 기록",
             f"{names}의 검토 기록을 저장하지 않았습니다. 저장하지 않고 {action}",
-            QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
+            confirm_text="저장하지 않고 계속",
         )
-        return answer == QMessageBox.StandardButton.Discard
 
     def _persist_settings(self) -> None:
         try:
@@ -3868,19 +4015,21 @@ class MainWindow(QMainWindow):
 
     def _background_work_running(self) -> bool:
         return (
-            self._batch_dialog is not None
-            and self._batch_dialog.is_running
-        ) or (
             self._person_comparison_dialog is not None
             and self._person_comparison_dialog.is_running
         ) or any(
             worker is not None and worker.isRunning()
-            for worker in (self._worker, self._motion_worker)
+            for worker in (
+                self._worker,
+                self._motion_worker,
+                self._batch_prepare_worker,
+                self._batch_run_worker,
+            )
         )
 
     def _show_error(self, message: str) -> None:
         self.statusBar().showMessage(message, 8000)
-        QMessageBox.critical(self, "오류", message)
+        notify(self, "확인이 필요합니다", message, error=True)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt override name
         if not self._confirm_discard_unsaved_reviews():
@@ -3888,14 +4037,20 @@ class MainWindow(QMainWindow):
             return
         dialogs = tuple(
             dialog
-            for dialog in (self._batch_dialog, self._person_comparison_dialog)
+            for dialog in (self._person_comparison_dialog,)
             if dialog is not None and dialog.is_running
         )
         for dialog in dialogs:
             dialog.request_cancel()
         workers = [
             item
-            for item in (self._worker, self._motion_worker, self._metadata_worker)
+            for item in (
+                self._worker,
+                self._motion_worker,
+                self._metadata_worker,
+                self._batch_prepare_worker,
+                self._batch_run_worker,
+            )
             if item and item.isRunning()
         ]
         for worker in workers:
@@ -3904,7 +4059,7 @@ class MainWindow(QMainWindow):
         workers_finished = all(worker.wait(2000) for worker in workers)
         if not dialogs_finished or not workers_finished:
             event.ignore()
-            QMessageBox.warning(self, "종료 대기", "작업을 정리하고 있습니다. 잠시 후 다시 종료해 주세요.")
+            notify(self, "종료 대기", "작업을 정리하고 있습니다. 잠시 후 다시 종료해 주세요.")
             return
         self._player.stop()
         self._external_api_key_edit.clear()

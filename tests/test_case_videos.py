@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QApplication, QPushButton
 
@@ -28,7 +29,11 @@ from video_agent.video.files import build_video_id
 
 from test_model_analysis import frame
 from test_review_panel import job as review_job
+from test_batch_analysis import BatchProbe, BatchScanner
 from test_ui_workflow import metadata
+
+# UI tests run without a model, so they use the demonstration (off for staff).
+os.environ.setdefault("VIDEO_AGENT_ENABLE_SAMPLE", "1")
 
 # Dataset files name the answer: C041 = theft at the door, A30 = taking a parcel.
 LABELED_NAME = "C041_A30_SY25_P07_S02_01DBS.mp4"
@@ -58,7 +63,7 @@ class CaseVideoListTests(unittest.TestCase):
             ),
             # No real decoding: these tests cover the list, not FFprobe or playback.
             patch("video_agent.ui.main_window.MainWindow._start_metadata_probe"),
-            patch("video_agent.ui.main_window.QMessageBox.critical"),
+            patch("video_agent.ui.main_window.notify"),
         ]
         for item in self.patches:
             item.start()
@@ -136,8 +141,6 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertEqual(
             self.window._video_list.summary_text(), "영상 2건"
         )
-        self.assertFalse(self.window._batch_button.isHidden())
-        self.assertTrue(self.window._batch_button.isEnabled())
 
     def test_selecting_another_video_opens_it(self) -> None:
         self.add(self.cam_a, self.cam_b)
@@ -568,3 +571,146 @@ class CaseVideoListTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StepTwoVideoChoiceTests(unittest.TestCase):
+    """Step ②: check one video (as before) or several (one prepared batch, same buttons)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    setUp = CaseVideoListTests.setUp
+    tearDown = CaseVideoListTests.tearDown
+    new_window = CaseVideoListTests.new_window
+    video = CaseVideoListTests.video
+    add = CaseVideoListTests.add
+
+    def two_videos_in_step_two(self) -> tuple[str, str]:
+        self.add(self.cam_a, self.cam_b)
+        self.window._show_step(1)
+        return build_video_id(self.cam_a), build_video_id(self.cam_b)
+
+    def checked(self) -> list[str]:
+        table = self.window._video_list.list
+        return [
+            table.item(row, 0).data(VIDEO_ID_ROLE)
+            for row in range(table.rowCount())
+            if table.item(row, 0).checkState() == Qt.CheckState.Checked
+        ]
+
+    def test_open_video_is_checked_and_more_can_be_added(self) -> None:
+        a, b = self.two_videos_in_step_two()
+        window = self.window
+        self.assertEqual(self.checked(), [a])
+        self.assertFalse(window._multi_target())
+        self.assertFalse(window._single_range_box.isHidden())
+
+        window._video_list._toggle_target(b)
+        self.assertEqual(window._analysis_targets, (a, b))
+        self.assertEqual(self.checked(), [a, b])
+        # Several videos: each finds its own ranges, and the card says how many.
+        self.assertTrue(window._single_range_box.isHidden())
+        self.assertFalse(window._multi_range_label.isHidden())
+        self.assertEqual(window._plan_group.aside_label.text(), "분석할 영상 2개")
+        # Same buttons as one video; no separate batch window.
+        self.assertFalse(hasattr(window, "_batch_button"))
+        self.assertFalse(window._make_plan_button.isHidden())
+
+        # Step ① and ③ have no check boxes.
+        window._show_step(0)
+        self.assertEqual(self.checked(), [])
+        self.assertIsNone(window._video_list.list.item(0, 0).data(Qt.ItemDataRole.CheckStateRole))
+
+    def test_select_all_and_clear_keep_the_open_video(self) -> None:
+        a, b = self.two_videos_in_step_two()
+        card = self.window._video_list
+        self.assertFalse(card.all_button.isHidden())
+        card.all_button.click()
+        self.assertEqual(self.window._analysis_targets, (a, b))
+        self.assertEqual(card.all_button.text(), "선택 해제")
+        card.all_button.click()
+        self.assertEqual(self.window._analysis_targets, (a,))
+
+    def test_one_checked_video_is_opened(self) -> None:
+        a, b = self.two_videos_in_step_two()
+        window = self.window
+        window._video_list._toggle_target(b)
+        window._video_list._toggle_target(a)
+        self.assertEqual(window._analysis_targets, (b,))
+        self.assertEqual(window._video_id, b)
+        self.assertFalse(window._multi_target())
+
+    def test_external_ai_takes_one_video_at_a_time(self) -> None:
+        a, b = self.two_videos_in_step_two()
+        window = self.window
+        window._video_list._toggle_target(b)
+        window._metadata = replace(metadata(), video_id=a)
+        window._select_mode(AnalysisMode.EXTERNAL)
+        window._set_model_id("vision-model")
+        window._purpose_edit.setPlainText("출입문 앞 물체를 들고 이동하는 장면 후보 확인")
+        with patch("video_agent.ui.main_window.notify") as notify:
+            window._make_plan()
+        self.assertIn("한 번에 한 영상", notify.call_args.args[2])
+        self.assertIsNone(window._batch_prepare_worker)
+
+    def test_several_videos_plan_once_then_approval_runs_each_in_order(self) -> None:
+        a, b = self.two_videos_in_step_two()
+        window = self.window
+        window._video_list._toggle_target(b)
+        window._metadata = replace(metadata(), video_id=a)
+        window._select_mode(AnalysisMode.SAMPLE)
+        window._purpose_edit.setPlainText("출입문 앞 물체를 들고 이동하는 장면 후보 확인")
+        probe = BatchProbe({self.cam_a: a, self.cam_b: b})
+        from video_agent.analysis.batch import BatchPreparationWorker
+
+        def preparation(*args, **kwargs):
+            return BatchPreparationWorker(*args, probe=probe, scanner=BatchScanner(), **kwargs)
+
+        with patch("video_agent.ui.main_window.BatchPreparationWorker", side_effect=preparation), patch(
+            "video_agent.analysis.batch.QThread.start"
+        ):
+            window._make_plan()
+            worker = window._batch_prepare_worker
+            self.assertIsNotNone(worker)
+            # No model call before approval: the plan step only probes and scans.
+            worker.run()
+            worker.isRunning = lambda: False
+            window._on_batch_prepare_finished()
+        self.assertTrue(window._batch_ready())
+        self.assertFalse(window._approve_button.isHidden())
+        self.assertTrue(window._approve_button.isEnabled())
+        plan = window._plan_view.toPlainText()
+        self.assertIn("영상 1", plan)
+        self.assertIn("cam_b.mp4", plan)
+        self.assertIsNone(window._batch_run_worker)
+
+        with patch("video_agent.analysis.batch.QThread.start"), patch.object(
+            window, "_confirm_discard_unsaved_reviews", return_value=True
+        ):
+            window._approve_and_run()
+            runner = window._batch_run_worker
+            self.assertEqual(window._video_status_text(a)[0], "분석 중")
+            self.assertEqual(window._video_status_text(b)[0], "분석 대기")
+            runner.run()
+            runner.isRunning = lambda: False
+            window._on_batch_run_finished()
+        self.assertEqual([job.error for job in window._batch_results], [None, None])
+        self.assertEqual([job.video_id for job in window._batch_results], [a, b])
+        self.assertEqual(window._progress_label.text(), "끝남 · 결과 2개")
+        # Each video keeps its own saved result.
+        for video_id in (a, b):
+            stored, _skipped = window._result_store.list_for_video(video_id)
+            self.assertEqual(len(stored), 1)
+
+    def test_changing_the_checked_videos_needs_a_new_plan(self) -> None:
+        a, b = self.two_videos_in_step_two()
+        window = self.window
+        window._video_list._toggle_target(b)
+        window._batch_preparation = MagicMock(prepared=(object(),), failures=())
+        window._update_post_run_buttons()
+        self.assertTrue(window._batch_ready())
+        window._video_list._toggle_target(b)
+        self.assertIsNone(window._batch_preparation)
+        self.assertFalse(window._multi_target())
+

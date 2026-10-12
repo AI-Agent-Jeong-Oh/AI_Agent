@@ -3,19 +3,19 @@ from __future__ import annotations
 import errno
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QActionGroup, QIcon
+from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
     QComboBox,
-    QFormLayout,
+    QGridLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMenu,
-    QMessageBox,
     QPlainTextEdit,
     QTextEdit,
     QPushButton,
@@ -43,9 +42,11 @@ from video_agent.contracts import (
     Segment,
 )
 from video_agent.ui import theme
+from video_agent.ui.message import confirm
+from video_agent.ui.segment_detail import precise_text, tidy_seconds
 from video_agent.ui.candidate_delegate import ROW_ROLE, CandidateDelegate, CandidateRow
-from video_agent.ui.disclosure import DisclosureButton
 from video_agent.ui.flow_layout import FlowLayout, FlowRow
+from video_agent.ui.judgement_marks import JUDGEMENT_MARKS, MarkStyle, paint_mark
 from video_agent.video.files import format_milliseconds, seconds_to_milliseconds
 
 
@@ -59,7 +60,6 @@ JUDGEMENT_LABELS = {
 SEGMENT_INDEX_ROLE = Qt.ItemDataRole.UserRole + 1
 
 FILTER_ALL = "all"
-FILTER_BOOKMARKED = "bookmarked"
 SORT_TIME = "time"
 SORT_MODEL = "model"
 
@@ -150,6 +150,23 @@ class _CompactRichView(QTextEdit):
         return QSize(super().minimumSizeHint().width(), self.minimumHeight())
 
 
+def _pill_icon(judgement: ReviewJudgement, *, checked: bool) -> QIcon:
+    """The small judgement mark inside a round judgement button (white when chosen)."""
+    pixmap = QPixmap(24, 24)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    style = JUDGEMENT_MARKS[judgement]
+    if checked:
+        style = MarkStyle(
+            theme.SURFACE if not style.dashed else theme.PRIMARY_FILL,
+            theme.SURFACE,
+            dashed=style.dashed,
+        )
+    paint_mark(painter, QRectF(6, 6, 12, 12), style, radius=3.0)
+    painter.end()
+    return QIcon(pixmap)
+
+
 class CandidateReviewPanel(QWidget):
     """Candidate list, selected-segment detail and reviewer notes for one analysis job.
 
@@ -166,7 +183,7 @@ class CandidateReviewPanel(QWidget):
 
     def __init__(
         self,
-        detail_formatter: Callable[[Segment, str | None], str],
+        detail_formatter: Callable[[Segment, str | None], str | Sequence[tuple[str, str]]],
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         super().__init__()
@@ -186,7 +203,7 @@ class CandidateReviewPanel(QWidget):
         self._save_blocked = False
         self._saved: dict[int, ReviewRecord] = {}
         self._drafts: dict[int, ReviewRecord] = {}
-        # Records save themselves: a judgement or bookmark at once, memo and tags once
+        # Records save themselves: a judgement at once, memo and tags once
         # typing pauses, and anything pending when another candidate is chosen.
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
@@ -222,7 +239,6 @@ class CandidateReviewPanel(QWidget):
         self._sort_key = SORT_TIME
         self._filter_labels = {FILTER_ALL: "전체"}
         self._filter_labels.update({j.value: JUDGEMENT_LABELS[j] for j in ReviewJudgement})
-        self._filter_labels[FILTER_BOOKMARKED] = "북마크"
         self.progress_label = QLabel("")
         self.progress_label.setObjectName("reviewProgress")
         self.progress_label.setAccessibleName("검토 진행")
@@ -281,16 +297,33 @@ class CandidateReviewPanel(QWidget):
         list_layout.addWidget(self.candidate_list, 1)
 
         self.detail_view = _CompactRichView()
+        # The grid has its own lines; no frame around it.
+        self.detail_view.setObjectName("plainTable")
         self.detail_view.setReadOnly(True)
         self.detail_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.detail_view.setAccessibleName("선택 구간 상세")
         layout.addWidget(self.detail_view, 1)
 
-        # Wraps at large zoom; the window adds its playback help mark at the end.
+        # The reviewer's part, on a light grey panel under the AI result: watch (playback
+        # range), judge (four round buttons), note (memo) and tag (chips), in that order.
+        record_group = QFrame()
+        record_group.setObjectName("recordPanel")
+        record_group.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        panel = QVBoxLayout(record_group)
+        panel.setContentsMargins(14, 12, 14, 12)
+        panel.setSpacing(8)
+        title = QLabel("수사관 기록")
+        title.setObjectName("recordTitle")
+        panel.addWidget(title)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(8)
+        grid.setColumnStretch(1, 1)
+        panel.addLayout(grid)
+        self._record_grid = grid
+
+        # Wraps at large zoom instead of widening the panel.
         self.playback_row = FlowRow(spacing=8)
-        playback_label = QLabel("재생 범위")
-        playback_label.setObjectName("fieldLabel")
-        self.playback_row.flow.addWidget(playback_label)
         segments = QWidget()
         segment_layout = QHBoxLayout(segments)
         segment_layout.setContentsMargins(0, 0, 0, 0)
@@ -317,47 +350,7 @@ class CandidateReviewPanel(QWidget):
             segment_layout.addWidget(button)
             self.playback_buttons.append(button)
         self.playback_row.flow.addWidget(segments)
-        layout.addWidget(self.playback_row)
 
-        record_group = QFrame()
-        record_group.setObjectName("reviewCard")
-        card_layout = QVBoxLayout(record_group)
-        card_layout.setContentsMargins(0, 0, 0, 0)
-        card_layout.setSpacing(0)
-        header = QWidget()
-        header.setObjectName("reviewCardHeader")
-        header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        header_row = QHBoxLayout(header)
-        header_row.setContentsMargins(12, 4, 10, 4)
-        header_title = QLabel("수사관 기록")
-        header_title.setObjectName("reviewCardTitle")
-        header_note = QLabel("영상을 직접 본 뒤 기록")
-        header_note.setObjectName("reviewCardNote")
-        # Wraps instead of widening the panel when the UI is zoomed.
-        header_note.setWordWrap(True)
-        header_note.setMinimumWidth(1)
-        self.bookmark_check = QPushButton("북마크")
-        self.bookmark_check.setCheckable(True)
-        self.bookmark_check.setObjectName("bookmarkButton")
-        self.bookmark_check.setAccessibleName("북마크")
-        theme.set_icon(self.bookmark_check, "bookmark", theme.GRAY_0)
-        self.bookmark_check.toggled.connect(
-            lambda checked: theme.set_icon(self.bookmark_check, "bookmark", theme.GRAY_0)
-        )
-        header_row.addWidget(header_title)
-        header_row.addSpacing(6)
-        header_row.addWidget(header_note, 1)
-        header_row.addWidget(self.bookmark_check)
-        card_layout.addWidget(header)
-        body = QWidget()
-        record_layout = QFormLayout(body)
-        theme.polish_form(record_layout)
-        # Field labels move above their fields only when the row would not fit (large zoom).
-        record_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        record_layout.setContentsMargins(12, 8, 12, 8)
-        card_layout.addWidget(body)
-        self._record_layout = record_layout
-        # Wraps to two lines at large zoom instead of widening the panel.
         judgement_row = FlowRow(spacing=6)
         judgement_row.setAccessibleName("판단")
         self.judgement_group = QButtonGroup(self)
@@ -365,42 +358,75 @@ class CandidateReviewPanel(QWidget):
         for judgement in ReviewJudgement:
             button = QRadioButton(JUDGEMENT_LABELS[judgement])
             button.setAccessibleName(f"판단: {JUDGEMENT_LABELS[judgement]}")
-            theme.set_variant(
-                button, "judgementQuiet" if judgement is ReviewJudgement.UNREVIEWED else "judgement"
+            theme.set_variant(button, "pill")
+            button.setIcon(_pill_icon(judgement, checked=False))
+            button.toggled.connect(
+                lambda checked, b=button, j=judgement: b.setIcon(_pill_icon(j, checked=checked))
             )
             self.judgement_group.addButton(button)
             self.judgement_buttons[judgement] = button
             judgement_row.flow.addWidget(button)
+
         self.memo_edit = _CompactTextView()
         self.memo_edit.setPlaceholderText("원본에서 확인한 내용·제외 사유 등")
         self.memo_edit.setAccessibleName("검토 메모")
+
+        # Tags show as chips (× removes one); [+ 태그] opens a small input for new ones.
+        # tags_edit keeps the comma-separated text that is saved.
         self.tags_edit = QLineEdit()
-        self.tags_edit.setPlaceholderText("쉼표로 구분 예: 손 접촉, 재확인")
+        self.tags_edit.setVisible(False)
         self.tags_edit.setAccessibleName("검토 태그")
+        self.tag_chips = FlowRow(spacing=6)
+        # A small round "+" (no words); it opens a chip-shaped input, Enter adds the tag.
+        self.tags_add_button = QPushButton()
+        self.tags_add_button.setObjectName("tagAdd")
+        theme.set_icon(self.tags_add_button, "plus", theme.PRIMARY)
+        self.tags_add_button.setToolTip("태그 추가 (쉼표로 여러 개, Enter로 넣기)")
+        self.tags_add_button.setAccessibleName("태그 추가")
+        self.tag_input = QLineEdit()
+        self.tag_input.setObjectName("tagInput")
+        self.tag_input.setToolTip("Enter로 넣기 · 쉼표로 여러 개")
+        self.tag_input.setAccessibleName("새 태그")
+        self.tag_input.setVisible(False)
         self.save_button = QPushButton("기록 저장")
         self.revert_button = QPushButton("되돌리기")
         self.revert_button.setToolTip("마지막으로 저장한 기록으로 되돌립니다")
         self.unsaved_label = QLabel("")
         self.unsaved_label.setWordWrap(True)
         self.unsaved_label.setStyleSheet(f"color:{theme.WARNING_TEXT};")
+        self.unsaved_label.setVisible(False)
         self.save_status_label = QLabel("")
         self.save_status_label.setWordWrap(True)
         self.save_status_label.setAccessibleName("검토 기록 저장 상태")
-        # Tags are optional, so they stay folded until opened or already used.
-        self.tags_toggle = DisclosureButton("태그")
-        button_row = QHBoxLayout()
-        button_row.addWidget(self.tags_toggle)
-        button_row.addSpacing(16)
-        button_row.addWidget(self.save_status_label, 1)
-        button_row.addWidget(self.revert_button)
-        button_row.addWidget(self.save_button)
-        record_layout.addRow("판단", judgement_row)
-        record_layout.addRow("메모", self.memo_edit)
-        record_layout.addRow("태그", self.tags_edit)
-        record_layout.addRow("", button_row)
-        record_layout.addRow("", self.unsaved_label)
-        record_layout.setRowVisible(self.unsaved_label, False)
-        record_layout.setRowVisible(self.tags_edit, False)
+        # Chips, then [+ 태그] (or its input) flow on one line and wrap when needed.
+        self.tag_chips.flow.addWidget(self.tags_add_button)
+        self.tag_chips.flow.addWidget(self.tag_input)
+        self.tag_input.setFixedWidth(140)
+        tag_row = QHBoxLayout()
+        tag_row.setSpacing(6)
+        tag_row.addWidget(self.tag_chips, 1)
+        tag_row.addWidget(self.save_status_label)
+        tag_row.addWidget(self.revert_button)
+        tag_row.addWidget(self.save_button)
+
+        for row, (name, widget) in enumerate(
+            (
+                ("재생", self.playback_row),
+                ("판단", judgement_row),
+                ("메모", self.memo_edit),
+                ("태그", tag_row),
+            )
+        ):
+            label = QLabel(name)
+            label.setObjectName("fieldLabel")
+            label.setMinimumHeight(32)
+            label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            grid.addWidget(label, row, 0, Qt.AlignmentFlag.AlignTop)
+            if isinstance(widget, QHBoxLayout):
+                grid.addLayout(widget, row, 1)
+            else:
+                grid.addWidget(widget, row, 1)
+        grid.addWidget(self.unsaved_label, 4, 1)
         self.record_group = record_group
         layout.addWidget(record_group)
 
@@ -431,16 +457,16 @@ class CandidateReviewPanel(QWidget):
         completion_row.addWidget(self.complete_button)
 
     def _connect_signals(self) -> None:
-        self.tags_toggle.toggled.connect(
-            lambda shown: self._record_layout.setRowVisible(self.tags_edit, shown)
-        )
+        self.tags_add_button.clicked.connect(self._open_tag_input)
+        self.tag_input.returnPressed.connect(self._add_typed_tags)
+        self.tag_input.editingFinished.connect(self._close_tag_input)
+        self.tags_edit.textChanged.connect(self._refresh_tag_chips)
         self.candidate_list.currentItemChanged.connect(self._current_item_changed)
         self.candidate_list.judgement_key.connect(self._judgement_shortcut)
         self.candidate_list.play_key.connect(self.play_toggle_requested.emit)
         self.judgement_group.buttonToggled.connect(self._editor_changed)
         self.memo_edit.textChanged.connect(self._editor_changed)
         self.tags_edit.textChanged.connect(self._editor_changed)
-        self.bookmark_check.toggled.connect(self._editor_changed)
         self.save_button.clicked.connect(self.save_current)
         self.revert_button.clicked.connect(self.revert_current)
         self.complete_button.clicked.connect(self.complete_review)
@@ -452,12 +478,11 @@ class CandidateReviewPanel(QWidget):
         self.detail_view.setMinimumHeight(scaled(72))
         self.memo_edit.setMinimumHeight(scaled(48))
         self.memo_edit.setMaximumHeight(scaled(110))
-        # Labels in the wrapping playback row line up with the 32px buttons beside them.
-        for index in range(self.playback_row.flow.count()):
-            widget = self.playback_row.flow.itemAt(index).widget()
-            if isinstance(widget, QLabel):
-                widget.setMinimumHeight(scaled(32))
-                widget.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        # Row names line up with the 32px buttons beside them.
+        for row in range(self._record_grid.rowCount()):
+            item = self._record_grid.itemAtPosition(row, 0)
+            if item is not None and isinstance(item.widget(), QLabel):
+                item.widget().setMinimumHeight(scaled(32))
 
     # ----- job / message display -------------------------------------------------
 
@@ -707,11 +732,7 @@ class CandidateReviewPanel(QWidget):
         return True
 
     def _confirm_completion(self, message: str) -> bool:
-        box = QMessageBox(QMessageBox.Icon.Question, "분석 완료", message, parent=self)
-        accept = box.addButton("완료로 기록", QMessageBox.ButtonRole.AcceptRole)
-        box.addButton("취소", QMessageBox.ButtonRole.RejectRole)
-        box.exec()
-        return box.clickedButton() is accept
+        return confirm(self, "분석 완료", message, confirm_text="완료로 기록")
 
     def _refresh_completion_label(self) -> None:
         session = self._session
@@ -788,8 +809,6 @@ class CandidateReviewPanel(QWidget):
         if self._sort_key == SORT_TIME:
             indexes.sort(key=lambda i: (segments[i].start_sec, segments[i].end_sec, i))
         selected = self._filter_key
-        if selected == FILTER_BOOKMARKED:
-            return [i for i in indexes if self.record_for(i).bookmarked]
         if selected != FILTER_ALL:
             return [i for i in indexes if self.record_for(i).judgement.value == selected]
         return indexes
@@ -803,7 +822,6 @@ class CandidateReviewPanel(QWidget):
         current_row = -1
         for row, index in enumerate(self._visible_indexes()):
             item = QListWidgetItem(self._item_text(index))
-            item.setIcon(self._item_icon(index))
             item.setData(ROW_ROLE, self._item_row(index))
             item.setData(Qt.ItemDataRole.UserRole, self._segments()[index])
             item.setData(SEGMENT_INDEX_ROLE, index)
@@ -818,12 +836,6 @@ class CandidateReviewPanel(QWidget):
             self._sync_timing()
         self._refresh_status()
 
-    def _item_icon(self, index: int) -> QIcon:
-        """Bookmarked candidates carry the bookmark icon (no star glyph in the text)."""
-        if self.record_for(index).bookmarked:
-            return theme.icon("bookmark", theme.PRIMARY)
-        return QIcon()
-
     def _item_row(self, index: int) -> CandidateRow:
         segment = self._segments()[index]
         record = self.record_for(index)
@@ -833,10 +845,9 @@ class CandidateReviewPanel(QWidget):
             number=index + 1,
             time_text=f"{start}–{end}",
             length_text=length_text(segment.end_sec - segment.start_sec),
-            summary=segment.summary,
+            summary=tidy_seconds(segment.summary),
             judgement=record.judgement,
             judgement_label=JUDGEMENT_LABELS[record.judgement],
-            bookmarked=record.bookmarked,
             unsaved=index in self._drafts,
         )
 
@@ -846,8 +857,6 @@ class CandidateReviewPanel(QWidget):
         parts = [f"후보 #{row.number}", row.time_text, row.judgement_label]
         if row.unsaved:
             parts.append("저장 안 됨")
-        if row.bookmarked:
-            parts.append("북마크")
         return f"{' · '.join(parts)}\n{row.summary}"
 
     def _refresh_item(self, index: int) -> None:
@@ -855,7 +864,6 @@ class CandidateReviewPanel(QWidget):
             item = self.candidate_list.item(row)
             if item.data(SEGMENT_INDEX_ROLE) == index:
                 item.setText(self._item_text(index))
-                item.setIcon(self._item_icon(index))
                 item.setData(ROW_ROLE, self._item_row(index))
                 return
 
@@ -875,15 +883,12 @@ class CandidateReviewPanel(QWidget):
         if not segments:
             self._set_filter_counts(None)
             self.unsaved_label.setText("")
-            self._record_layout.setRowVisible(self.unsaved_label, False)
+            self.unsaved_label.setVisible(False)
             return
         counts = {judgement: 0 for judgement in ReviewJudgement}
-        bookmarks = 0
         for index in range(len(segments)):
-            record = self.record_for(index)
-            counts[record.judgement] += 1
-            bookmarks += int(record.bookmarked)
-        totals = {FILTER_ALL: len(segments), FILTER_BOOKMARKED: bookmarks}
+            counts[self.record_for(index).judgement] += 1
+        totals = {FILTER_ALL: len(segments)}
         totals.update({judgement.value: counts[judgement] for judgement in ReviewJudgement})
         self._set_filter_counts(totals)
         self._refresh_primary_action()
@@ -894,9 +899,7 @@ class CandidateReviewPanel(QWidget):
             else ""
         )
         # Typing waits a moment for its automatic save; the line is for saves that failed.
-        self._record_layout.setRowVisible(
-            self.unsaved_label, bool(unsaved) and (self._save_failed or self._save_blocked)
-        )
+        self.unsaved_label.setVisible(bool(unsaved) and (self._save_failed or self._save_blocked))
 
     @property
     def current_index(self) -> int | None:
@@ -915,7 +918,7 @@ class CandidateReviewPanel(QWidget):
         return False
 
     def set_filter(self, key: str) -> None:
-        """Show only the candidates in one review state (or bookmarked, or all)."""
+        """Show only the candidates in one review state (or all)."""
         self._filter_key = key
         self.filter_actions[key].setChecked(True)
         self._rebuild_list()
@@ -973,12 +976,14 @@ class CandidateReviewPanel(QWidget):
             else:
                 segment = self._segments()[index]
                 purpose = self._job.purpose if self._job is not None else None
-                # The formatter gives "label: value" lines; they are shown as a grid.
-                rows = [
-                    tuple(line.partition(": ")[::2])
-                    for line in self._detail_formatter(segment, purpose).splitlines()
-                    if line
-                ]
+                # The formatter gives (label, value) rows, or "label: value" lines.
+                detail = self._detail_formatter(segment, purpose)
+                rows = (
+                    list(detail)
+                    if not isinstance(detail, str)
+                    else [tuple(line.partition(": ")[::2]) for line in detail.splitlines() if line]
+                )
+                self.detail_view.setToolTip(precise_text(segment))
                 self.detail_view.setHtml(
                     f"<p><b>후보 #{index + 1}</b> "
                     f'<span style="color:{theme.TEXT_SUB};">AI 분석 결과 (수사관 확인 전)</span></p>'
@@ -991,9 +996,9 @@ class CandidateReviewPanel(QWidget):
             self.judgement_group.setExclusive(True)
             self.memo_edit.setPlainText(record.memo)
             self.tags_edit.setText(", ".join(record.tags))
-            if record.tags:
-                self.tags_toggle.setChecked(True)
-            self.bookmark_check.setChecked(record.bookmarked)
+            self._refresh_tag_chips()
+            self.tag_input.clear()
+            self._close_tag_input()
             self._update_buttons()
         finally:
             self._loading_editor = False
@@ -1007,8 +1012,62 @@ class CandidateReviewPanel(QWidget):
             judgement=judgement,
             memo=self.memo_edit.toPlainText(),
             tags=parse_tags(self.tags_edit.text()),
-            bookmarked=self.bookmark_check.isChecked(),
+            # Bookmarks are no longer offered; one saved earlier is kept as it was.
+            bookmarked=(
+                self.saved_record_for(self._current_index).bookmarked
+                if self._current_index is not None
+                else False
+            ),
         )
+
+    # ----- tags (chips) ------------------------------------------------------------
+
+    def _show_tag_input(self, shown: bool) -> None:
+        self._tag_input_open = shown
+        self.tags_add_button.setVisible(not shown)
+        self.tag_input.setVisible(shown)
+
+    def _open_tag_input(self) -> None:
+        self._show_tag_input(True)
+        self.tag_input.setFocus()
+
+    def _close_tag_input(self) -> None:
+        if self.tag_input.text().strip():
+            self._add_typed_tags()
+        self._show_tag_input(False)
+
+    def _add_typed_tags(self) -> None:
+        typed = parse_tags(self.tag_input.text())
+        self.tag_input.clear()
+        if typed:
+            tags = parse_tags(", ".join((*parse_tags(self.tags_edit.text()), *typed)))
+            self.tags_edit.setText(", ".join(tags))
+
+    def _remove_tag(self, tag: str) -> None:
+        tags = [item for item in parse_tags(self.tags_edit.text()) if item != tag]
+        self.tags_edit.setText(", ".join(tags))
+
+    def _refresh_tag_chips(self, *_args: object) -> None:
+        flow = self.tag_chips.flow
+        while flow.count():
+            widget = flow.takeAt(0).widget()
+            if widget is not None and widget.objectName() == "tagChip":
+                # Off the panel at once (deleteLater runs only later).
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+        for tag in parse_tags(self.tags_edit.text()):
+            chip = QPushButton(f"{tag}  ×")
+            chip.setObjectName("tagChip")
+            chip.setToolTip(f"태그 '{tag}' 빼기")
+            chip.setAccessibleName(f"태그 {tag} 빼기")
+            chip.clicked.connect(lambda _checked=False, value=tag: self._remove_tag(value))
+            flow.addWidget(chip)
+        flow.addWidget(self.tags_add_button)
+        flow.addWidget(self.tag_input)
+        # Re-adding to the layout may show them; keep whichever one is in use.
+        self._show_tag_input(getattr(self, "_tag_input_open", False))
+        self.tag_chips.updateGeometry()
 
     def _editor_changed(self, *_args: object) -> None:
         if self._loading_editor or self._current_index is None:

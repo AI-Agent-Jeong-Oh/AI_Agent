@@ -37,7 +37,6 @@ from video_agent.ui.datetime_field import DateTimeField
 from video_agent.ui.disclosure import DisclosureButton
 from video_agent.ui.flow_layout import FlowRow
 from video_agent.ui.focus_panel import CaseTypeChooser
-from video_agent.ui.popover import info_mark
 from video_agent.ui.wrap_label import WrapLabel
 
 
@@ -91,7 +90,7 @@ class CaseContextPanel(Card):
     case_type_chosen = Signal(str)
 
     def __init__(self) -> None:
-        super().__init__("사건·사전 정보")
+        super().__init__("사건 정보")
         self._editing_enabled = True
         self._loading = False
         self._build_ui()
@@ -101,16 +100,7 @@ class CaseContextPanel(Card):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self.body)
         layout.setContentsMargins(12, 8, 12, 8)
-        # Explanation behind a mark next to the title; loading (with "new case") is one
-        # menu beside saving, at the right of the header.
-        self.add_header_widget(
-            info_mark(
-                "사건명·관리 메모는 AI에 보내지 않습니다. 체크한 단서만 분석에 쓰며, "
-                "단서는 영상으로 확인한 사실이 아닙니다.",
-                "사건 정보 안내",
-            ),
-            after_title=True,
-        )
+        # Loading (with "new case") is one menu at the right of the header.
         self._saved_cases: tuple[tuple[str, str], ...] = ()
         self._selected_case_id: str | None = None
         self.load_button = QPushButton("불러오기")

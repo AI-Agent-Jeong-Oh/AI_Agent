@@ -28,6 +28,7 @@ from video_agent.contracts import (
     ReviewJudgement,
     ReviewSession,
 )
+from video_agent.review.wording import tidy_seconds
 from video_agent.video.files import format_milliseconds, seconds_to_milliseconds
 
 
@@ -389,7 +390,7 @@ def _scope_text(job: AnalysisJob, video_file_name: str | None) -> str:
     if job.mode is AnalysisMode.SAMPLE:
         method = "시연용 (실제 AI 분석 아님)"
     elif job.mode is AnalysisMode.LOCAL:
-        method = f"이 컴퓨터에서 AI 분석 (사용 모델 {job.model_id})"
+        method = f"AI 분석 (사용 모델 {job.model_id})"
     else:
         method = f"외부 AI 분석 (사용 모델 {job.model_id})"
     if job.range_start_sec is not None and job.range_end_sec is not None:
@@ -432,9 +433,11 @@ def _observations_text(
             f"확인 범위 {_time(segment.start_sec)}–{_time(segment.end_sec)}",
         ]
         if segment.source_timestamps_sec:
-            observed = ", ".join(f"{value:.3f}초" for value in segment.source_timestamps_sec)
-            lines.append(f"  관찰 프레임 시각: {observed}")
-        lines.append(f"  모델 요약 (모델 출력): {segment.summary}")
+            observed = " · ".join(
+                _time(value) for value in sorted(set(segment.source_timestamps_sec))
+            )
+            lines.append(f"  관찰 시각: {observed}")
+        lines.append(f"  모델 요약 (모델 출력): {tidy_seconds(segment.summary)}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 

@@ -53,6 +53,7 @@ class CaseTypeChooser(QWidget):
             button.setCheckable(True)
             button.setAccessibleName(f"사건 유형: {label}")
             theme.mark_compact(button)
+            theme.set_variant(button, "chip")
             self._group.addButton(button)
             self.buttons[label] = button
             row.addWidget(button)
@@ -120,6 +121,8 @@ class SituationTile(QFrame):
         self.tag.setObjectName("recommendTag")
         self.tag.setVisible(False)
         row.addWidget(self.check)
+        # A clear gap so "추천" does not read as part of the name.
+        row.addSpacing(8)
         row.addWidget(self.tag)
         row.addStretch(1)
         self.setToolTip(f"예: {examples}")

@@ -41,6 +41,9 @@ from video_agent.ui.judgement_marks import JUDGEMENT_MARKS
 from video_agent.ui.main_window import MainWindow
 from video_agent.video.probe import VideoMetadata
 
+# UI tests run without a model, so they use the demonstration (off for staff).
+os.environ.setdefault("VIDEO_AGENT_ENABLE_SAMPLE", "1")
+
 
 def metadata() -> VideoMetadata:
     return VideoMetadata(
@@ -140,10 +143,10 @@ class UiWorkflowTests(unittest.TestCase):
         window._update_post_run_buttons()
         window._make_plan()
         plan_text = window._plan_view.toPlainText()
-        self.assertIn("우선 확인", plan_text)
+        self.assertIn("중점 관찰", plan_text)
         self.assertIn("인물 간 상호작용, 자세·움직임 변화", plan_text)
         # How the situations are used is one click away, under "세부 조건".
-        self.assertIn("선택하지 않은 상황도 분석합니다", window._plan_details_view.toPlainText())
+        self.assertIn("고른 항목을 먼저 보되 다른 장면도 봄", window._plan_details_view.toPlainText())
         window._approve_plan()
         self.assertTrue(window._run_button.isEnabled())
 
@@ -299,7 +302,10 @@ class UiWorkflowTests(unittest.TestCase):
 
         self.window._select_mode(AnalysisMode.EXTERNAL)
         self.window._set_model_id("gpt-vision-test")
-        self.assertEqual(banner.text(), "외부 AI 분석 · 영상 일부를 외부로 보냄")
+        # Like local analysis, choosing external AI shows no line (the choice says it).
+        self.assertEqual(banner.text(), "")
+        self.assertTrue(self.window._status_row.isHidden())
+        self.assertIn("영상 일부를 외부로 보냄", banner.toolTip())
         self.assertIn("gpt-vision-test", banner.toolTip())
         self.assertIn("외부 전송 승인", banner.toolTip())
         self.window._select_mode(AnalysisMode.SAMPLE)
@@ -395,7 +401,7 @@ class UiWorkflowTests(unittest.TestCase):
         window._make_plan()
         self.assertEqual(window._approve_button.text(), "승인하고 실행")
         rows = window._plan_view.toPlainText()
-        for label in ("찾을 장면", "볼 영상", "우선 확인", "사용 단서", "분석 방식"):
+        for label in ("찾을 장면", "볼 영상", "중점 관찰", "사용 단서", "분석 방식"):
             self.assertIn(label, rows)
         for detail in ("한도", "표본", "범위 확대"):
             self.assertNotIn(detail, rows)
@@ -663,9 +669,10 @@ class UiWorkflowTests(unittest.TestCase):
         self.window._result_list.setCurrentRow(0)
 
         text = self.window._review_panel.detail_view.toPlainText()
-        self.assertIn("확인용 재생 범위", text)
-        self.assertIn("재생 시작\n00:00 (확인용 범위 시작 최대 1초 전", text)
-        self.assertIn("관찰 프레임 원본 시각\n2.000초", text)
+        # Minutes:seconds like the list and the player; playback start in brackets.
+        self.assertIn("확인 범위\n00:01–00:03 (00:00부터 재생)", text)
+        self.assertIn("관찰 시각\n00:02 (1장)", text)
+        self.assertNotIn("2.000초", text)
 
     def test_playback_bar_marks_candidates_and_a_click_selects_one(self) -> None:
         window = self.window
@@ -714,12 +721,10 @@ class UiWorkflowTests(unittest.TestCase):
 
         # A reviewer's saved judgement recolours the mark.
         window._review_panel.judgement_buttons[ReviewJudgement.RELEVANT].setChecked(True)
-        window._review_panel.bookmark_check.setChecked(True)
         window._review_panel.save_current()
         self.assertIn("관련 있음", window._timeline.marks[1].label)
         self.assertIs(window._timeline.marks[1].style, JUDGEMENT_MARKS[ReviewJudgement.RELEVANT])
-        self.assertTrue(window._timeline.marks[1].bookmarked)
-        self.assertIn("북마크", window._timeline.marks[1].label)
+        self.assertNotIn("북마크", window._timeline.marks[1].label)
 
         # Another video's playback bar shows no marks for this result.
         window._video_id = "video-other"
@@ -782,10 +787,10 @@ class UiWorkflowTests(unittest.TestCase):
             "출입문 앞에 5초 이상 머무르는 장면 찾기",
         )
 
-        self.assertIn("지속 시간 표본 근거", text)
-        self.assertIn("2개 관찰 시각", text)
-        self.assertIn("첫·마지막 표본 사이 8.000초", text)
-        self.assertIn("중간의 연속성은 원본 확인 필요", text)
+        self.assertIn("관찰 시각: 00:01 · 00:09 (2장, 8초 간격)", text)
+        self.assertIn("머문 시간: 첫·마지막 사진 사이 8초로 기준 5초 이상", text)
+        self.assertIn("중간에도 계속 있었는지는 원본에서 확인", text)
+        self.assertNotIn(".000", text)
 
     def test_completed_empty_model_result_is_not_presented_as_failure(self) -> None:
         job = AnalysisJob(
@@ -825,6 +830,18 @@ class UiWorkflowTests(unittest.TestCase):
         choice.setCurrentIndex(0)
         self.assertEqual(window._model_id(), "qwen3-vl:4b-instruct")
         self.assertIn("빠른 분석", window._mode_banner.toolTip())
+
+    def test_staff_are_not_offered_the_demonstration(self) -> None:
+        window = self.window
+        window._runtime_inventory = self.local_inventory()
+        with patch.dict(os.environ, {"VIDEO_AGENT_ENABLE_SAMPLE": ""}):
+            window._select_mode(AnalysisMode.LOCAL)
+        choice = window._analysis_choice
+        labels = [choice.itemText(index) for index in range(choice.count())]
+        self.assertEqual(labels, ["빠른 분석", "정확한 분석", "외부 AI 분석 (영상 일부를 외부로 보냄)"])
+        # A saved demonstration choice falls back to analysis on this computer.
+        choice.select(AnalysisMode.SAMPLE)
+        self.assertIs(window._current_mode(), AnalysisMode.LOCAL)
 
     def test_local_mode_refuses_a_cloud_model_and_can_reread_models(self) -> None:
         window = self.window
@@ -1040,7 +1057,7 @@ class UiWorkflowTests(unittest.TestCase):
 
         self.assertEqual(len(self.window._session.plan.sample_timestamps_sec), 12)
         self.assertAlmostEqual(self.window._session.plan.sampling_interval_sec, 0.25)
-        self.assertIn("최대 변화 시각 중심", self.window._plan_details_view.toPlainText())
+        self.assertIn("변화가 가장 큰 순간 주변", self.window._plan_details_view.toPlainText())
         self.assertEqual(
             self.window._session.plan.sampling_strategy,
             SamplingStrategy.MOTION_PEAK,
@@ -1091,7 +1108,7 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertGreater(plan.sample_timestamps_sec[-1], 7.5)
         self.assertTrue(plan.observation_guidance)
         plan_text = self.window._plan_details_view.toPlainText()
-        self.assertIn("각 구간 전체에 분산한 시간순 비교", plan_text)
+        self.assertIn("구간 전체에 시간순", plan_text)
         self.assertIn("관찰 기준", plan_text)
 
     def test_temporal_result_displays_observation_span_without_claiming_continuity(self) -> None:
@@ -1111,9 +1128,8 @@ class UiWorkflowTests(unittest.TestCase):
             "사람이 주변을 두리번거리는 장면 후보 찾기",
         )
 
-        self.assertIn("시간 변화 표본 근거", text)
-        self.assertIn("2개 관찰 시각", text)
-        self.assertIn("중간 동작과 실제 반복 횟수는 원본 확인 필요", text)
+        self.assertIn("관찰 시각: 00:02 · 00:06 (2장, 4초 간격)", text)
+        self.assertIn("확인 필요: 중간 동작과 실제 반복 횟수는 원본에서 확인", text)
 
     def test_top_three_motion_proposals_build_one_bounded_clustered_plan(self) -> None:
         self.window._runtime_inventory = RuntimeInventory(
@@ -1178,12 +1194,11 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertEqual(sum(3.0 <= value < 5.0 for value in plan.sample_timestamps_sec), 4)
         self.assertEqual(sum(6.0 <= value < 8.0 for value in plan.sample_timestamps_sec), 4)
         # The plan names the ranges in minutes:seconds; sampling detail is under "세부 조건".
-        self.assertIn("움직임 구간 3개: 0:00–0:02, 0:03–0:05, 0:06–0:08", self.window._plan_view.toPlainText())
+        self.assertIn("움직임 구간 3개: 00:00–00:02, 00:03–00:05, 00:06–00:08", self.window._plan_view.toPlainText())
         details = self.window._plan_details_view.toPlainText()
-        self.assertIn("등록된 분석 구간", details)
-        self.assertIn("1. 0.000~2.000초", details)
-        self.assertIn("2. 3.000~5.000초", details)
-        self.assertIn("3. 6.000~8.000초", details)
+        # The ranges are named once (above); the details say only how the photos are taken.
+        self.assertIn("움직임 구간 3개에서 12장", details)
+        self.assertNotIn("0.000", details)
 
     def test_stale_motion_scan_result_is_ignored(self) -> None:
         proposal = MotionProposal(

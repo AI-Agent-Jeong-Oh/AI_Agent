@@ -54,8 +54,12 @@ class VideoRowDelegate(QStyledItemDelegate):
         style = opt.widget.style() if opt.widget is not None else QApplication.style()
         style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, opt.widget)
         rect = opt.rect.adjusted(_PADDING_X, 0, -_PADDING_X // 2, 0)
-        painter.save()
         column = index.column()
+        if column == 0 and opt.features & QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator:
+            # Step ②'s check box (drawn above by the style) comes first; the name follows it.
+            check = style.subElementRect(QStyle.SubElement.SE_ItemViewItemCheckIndicator, opt, opt.widget)
+            rect.setLeft(check.right() + _GAP + 4)
+        painter.save()
         if column == 0:
             self._paint_file(painter, rect, opt.font, entry, bool(index.data(CURRENT_ROLE)))
         elif column == 1:
@@ -156,6 +160,8 @@ class VideoRowDelegate(QStyledItemDelegate):
             width = _DOT + _GAP + max(metrics.horizontalAdvance(main), small.horizontalAdvance(sub))
         else:
             width = metrics.horizontalAdvance(entry.file_name or "파일 다시 연결 필요")
+            if index.data(Qt.ItemDataRole.CheckStateRole) is not None:
+                width += 32
         return QSize(width + _PADDING_X * 2, height)
 
 

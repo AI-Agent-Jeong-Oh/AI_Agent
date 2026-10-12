@@ -1,5 +1,8 @@
-"""One plain-language choice of how to analyse: fast or accurate (on this computer), a
-demonstration that is not a real analysis, or an external AI service.
+"""One plain-language choice of how to analyse: fast or accurate (on this computer) or an
+external AI service.
+
+The demonstration (not a real analysis) is for development and tests only: it is listed
+when VIDEO_AGENT_ENABLE_SAMPLE is set, so staff never get example results by mistake.
 
 Users pick "빠른 분석" or "정확한 분석" instead of a mode plus a model ID; the model behind
 each local choice stays in the item data (and its tooltip, for staff). Cloud models are
@@ -8,6 +11,7 @@ not offered, since they would send frames off this computer.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -19,6 +23,11 @@ from video_agent.contracts import AnalysisMode
 SAMPLE_LABEL = "시연용 (실제 분석 아님)"
 EXTERNAL_LABEL = "외부 AI 분석 (영상 일부를 외부로 보냄)"
 UNLISTED_LABEL = "AI 분석 (확인되지 않은 프로그램)"
+
+
+def sample_enabled() -> bool:
+    """The demonstration choice is offered only when a developer turns it on."""
+    return os.environ.get("VIDEO_AGENT_ENABLE_SAMPLE", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +48,8 @@ class AnalysisChoice(QComboBox):
         self.set_local_models((), "")
 
     def set_local_models(self, models: Sequence[tuple[str, str]], missing_text: str) -> None:
-        """(model ID, label) pairs for this computer, then the demonstration and external."""
+        """(model ID, label) pairs for this computer, then external (and the demonstration
+        when enabled for development)."""
         keep = self.choice() if self.count() else None
         self.blockSignals(True)
         self.clear()
@@ -47,7 +57,8 @@ class AnalysisChoice(QComboBox):
             self._add(label, Choice(AnalysisMode.LOCAL, model_id), tooltip=model_id)
         if not models and missing_text:
             self._add(missing_text, Choice(AnalysisMode.LOCAL, ""))
-        self._add(SAMPLE_LABEL, Choice(AnalysisMode.SAMPLE))
+        if sample_enabled():
+            self._add(SAMPLE_LABEL, Choice(AnalysisMode.SAMPLE))
         self._add(EXTERNAL_LABEL, Choice(AnalysisMode.EXTERNAL))
         self.blockSignals(False)
         if keep is not None:
@@ -55,7 +66,7 @@ class AnalysisChoice(QComboBox):
 
     def choice(self) -> Choice:
         value = self.currentData()
-        return value if isinstance(value, Choice) else Choice(AnalysisMode.SAMPLE)
+        return value if isinstance(value, Choice) else Choice(AnalysisMode.LOCAL)
 
     def mode(self) -> AnalysisMode:
         return self.choice().mode

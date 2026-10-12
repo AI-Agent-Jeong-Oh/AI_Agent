@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtMultimedia import QMediaPlayer
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton
 
 from video_agent.contracts import (
     AnalysisJob,
@@ -31,6 +31,9 @@ from video_agent.ui.review_panel import (
     SEGMENT_INDEX_ROLE,
     parse_tags,
 )
+
+# UI tests run without a model, so they use the demonstration (off for staff).
+os.environ.setdefault("VIDEO_AGENT_ENABLE_SAMPLE", "1")
 
 
 def segment(start: float, end: float, summary: str) -> Segment:
@@ -105,18 +108,31 @@ class CandidateReviewPanelTests(unittest.TestCase):
         self.assertEqual(self.visible_indexes(), [0, 1, 2])
         self.assertTrue(self.panel.sort_actions["model"].isChecked())
 
-    def test_tags_are_folded_unless_used(self) -> None:
+    def test_tags_are_chips_added_with_plus_and_removed_with_x(self) -> None:
+        panel = self.panel
         self.select(0)
-        self.assertTrue(self.panel.tags_edit.isHidden())
-        self.panel.tags_toggle.click()
-        self.assertFalse(self.panel.tags_edit.isHidden())
-        self.panel.tags_toggle.click()
-        self.panel.tags_edit.setText("손 접촉")
-        self.panel.save_current()
+        # No chips yet; "+ 태그" opens a small input.
+        self.assertFalse([b for b in panel.tag_chips.findChildren(QPushButton) if b.objectName() == "tagChip"])
+        self.assertTrue(panel.tag_input.isHidden())
+        panel.tags_add_button.click()
+        self.assertFalse(panel.tag_input.isHidden())
+        panel.tag_input.setText("손 접촉, 재확인")
+        panel.tag_input.returnPressed.emit()
+        self.app.processEvents()  # removed chips are deleted later
+        chips = [b.text() for b in panel.tag_chips.findChildren(QPushButton) if b.objectName() == "tagChip"]
+        self.assertEqual(chips, ["손 접촉  ×", "재확인  ×"])
+        self.assertEqual(panel.tags_edit.text(), "손 접촉, 재확인")
+        panel.save_current()
         self.select(2)
         self.select(0)
-        self.assertTrue(self.panel.tags_toggle.isChecked())
-        self.assertFalse(self.panel.tags_edit.isHidden())
+        self.assertEqual(panel.tags_edit.text(), "손 접촉, 재확인")
+        # × on a chip takes that tag out.
+        self.app.processEvents()
+        next(
+            b for b in panel.tag_chips.findChildren(QPushButton)
+            if b.objectName() == "tagChip" and b.text().startswith("손")
+        ).click()
+        self.assertEqual(panel.tags_edit.text(), "재확인")
 
     def test_one_blue_button_moves_from_review_to_finish_to_summary(self) -> None:
         panel = self.panel
@@ -196,7 +212,7 @@ class CandidateReviewPanelTests(unittest.TestCase):
         self.panel.memo_edit.setPlainText("6초에 손이 상자에 닿음")
         self.panel.tags_edit.setText("손 접촉, 재확인, 손 접촉")
         self.assertTrue(self.panel.has_unsaved_changes())  # memo and tags wait for a pause
-        self.panel.bookmark_check.setChecked(True)  # a bookmark saves the whole record at once
+        self.panel.select_segment(0)  # moving to another candidate saves them
         self.assertFalse(self.panel.has_unsaved_changes())
 
         self.select(0)
@@ -206,10 +222,9 @@ class CandidateReviewPanelTests(unittest.TestCase):
         self.assertTrue(self.panel.judgement_buttons[ReviewJudgement.RELEVANT].isChecked())
         self.assertEqual(self.panel.memo_edit.toPlainText(), "6초에 손이 상자에 닿음")
         self.assertEqual(self.panel.tags_edit.text(), "손 접촉, 재확인")
-        self.assertTrue(self.panel.bookmark_check.isChecked())
         self.assertEqual(
             self.panel.saved_record_for(1),
-            ReviewRecord(ReviewJudgement.RELEVANT, "6초에 손이 상자에 닿음", ("손 접촉", "재확인"), True),
+            ReviewRecord(ReviewJudgement.RELEVANT, "6초에 손이 상자에 닿음", ("손 접촉", "재확인")),
         )
 
     def test_typed_memo_saves_after_a_pause_or_when_moving_on(self) -> None:
@@ -238,24 +253,19 @@ class CandidateReviewPanelTests(unittest.TestCase):
         self.panel.memo_edit.setPlainText("")
         self.assertFalse(self.panel.has_unsaved_changes())
 
-    def test_filters_by_judgement_and_bookmark(self) -> None:
+    def test_filters_by_judgement(self) -> None:
         self.select(0)
         self.panel.judgement_buttons[ReviewJudgement.NEEDS_CHECK].setChecked(True)
         self.panel.save_current()
-        self.select(2)
-        self.panel.bookmark_check.setChecked(True)
-        self.panel.save_current()
 
         actions = self.panel.filter_actions
+        self.assertNotIn("bookmarked", actions)  # no bookmark filter any more
         actions[ReviewJudgement.NEEDS_CHECK.value].trigger()
         self.assertEqual(self.visible_indexes(), [0])
-        actions["bookmarked"].trigger()
-        self.assertEqual(self.visible_indexes(), [2])
         actions[ReviewJudgement.UNREVIEWED.value].trigger()
         self.assertEqual(self.visible_indexes(), [1, 2])
         self.assertEqual(actions[ReviewJudgement.UNREVIEWED.value].text(), "미검토 2")
         self.assertEqual(actions[ReviewJudgement.NEEDS_CHECK.value].text(), "추가 확인 1")
-        self.assertEqual(actions["bookmarked"].text(), "북마크 1")
         self.assertEqual(actions["all"].text(), "전체 3")
         # One "보기" button names the shown set; progress counts saved judgements.
         self.assertEqual(self.panel.view_button.text(), "보기: 미검토 2")
@@ -264,7 +274,7 @@ class CandidateReviewPanelTests(unittest.TestCase):
     def test_view_menu_holds_filters_and_sort_in_one_button(self) -> None:
         menu = self.panel.view_button.menu()
         texts = [action.text() for action in menu.actions() if not action.isSeparator()]
-        self.assertEqual(texts, ["전체 3", "미검토 3", "관련 있음 0", "추가 확인 0", "제외 0", "북마크 0", "시간순", "모델 순서"])
+        self.assertEqual(texts, ["전체 3", "미검토 3", "관련 있음 0", "추가 확인 0", "제외 0", "시간순", "모델 순서"])
         self.assertEqual(self.panel.view_button.text(), "보기: 전체 3")
         self.assertEqual(self.panel.progress_label.text(), "확인 0/3 · 남은 후보 3")
 
@@ -409,7 +419,8 @@ class CandidateReviewPersistenceTests(unittest.TestCase):
         self.assertTrue(self.panel.judgement_buttons[ReviewJudgement.NEEDS_CHECK].isChecked())
         self.assertEqual(self.panel.memo_edit.toPlainText(), "불러온 메모")
         self.assertEqual(self.panel.tags_edit.text(), "재확인")
-        self.assertTrue(self.panel.bookmark_check.isChecked())
+        # A bookmark saved earlier stays in the record though it is no longer shown.
+        self.assertTrue(self.panel.saved_record_for(2).bookmarked)
         self.assertIn("1건을 불러왔습니다", self.panel.save_status_label.text())
         self.assertFalse(self.panel.has_unsaved_changes())
 
@@ -730,7 +741,7 @@ class MainWindowReviewIntegrationTests(unittest.TestCase):
         self.panel.judgement_buttons[ReviewJudgement.RELEVANT].setChecked(True)
         self.panel.memo_edit.setPlainText("파일에 저장")
         self.panel.tags_edit.setText("손 접촉")
-        self.panel.bookmark_check.setChecked(True)  # saves the record, memo included
+        self.panel.flush_pending()  # what was typed is saved before moving on
 
         self.assertFalse(self.panel.has_unsaved_changes())
 
@@ -743,7 +754,6 @@ class MainWindowReviewIntegrationTests(unittest.TestCase):
         self.panel.candidate_list.setCurrentRow(0)
         self.assertEqual(self.panel.memo_edit.toPlainText(), "파일에 저장")
         self.assertEqual(self.panel.tags_edit.text(), "손 접촉")
-        self.assertTrue(self.panel.bookmark_check.isChecked())
         self.assertTrue(self.panel.judgement_buttons[ReviewJudgement.RELEVANT].isChecked())
 
     def test_corrupt_review_file_is_not_overwritten(self) -> None:

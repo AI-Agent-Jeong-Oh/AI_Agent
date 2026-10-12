@@ -357,6 +357,12 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QWidget {{ font-family: "{family}", "{FALLBACK_FONT_FAMILY}"; font-size: {s(BODY_PX)}px;
                color: {TEXT}; }}
     QMainWindow, QDialog {{ background: {PAGE}; }}
+    QDialog#messageDialog {{ background: {SURFACE}; }}
+    QTextEdit#plainTable {{ border: none; background: transparent; padding: 0; }}
+    QLabel#messageTitle {{ font-size: {s(HEADING_PX)}px; font-weight: 700; color: {TEXT}; }}
+    QLabel#messageText {{ color: {TEXT}; }}
+    QWidget#messageDetails {{ background: {GRAY_5}; border-radius: {s(6)}px; }}
+    QLabel#messageDetail {{ font-size: {s(LABEL_PX)}px; color: {TEXT_SUB}; }}
     QScrollArea, QScrollArea > QWidget#qt_scrollarea_viewport,
     QScrollArea > QWidget#qt_scrollarea_viewport > QWidget {{ background: transparent; }}
     QSplitter::handle {{ background: transparent; }}
@@ -372,7 +378,7 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QWidget#stepBar {{ background: {SURFACE}; border-bottom: 1px solid {BORDER}; }}
     QLabel#placeholder {{ color: {TEXT_SUB}; border: 1px dashed {GRAY_30};
                           border-radius: {s(2)}px; padding: {s(16)}px; background: {SURFACE}; }}
-    QFrame#runBar {{ background: {SURFACE_ALT}; border: 1px solid {BORDER};
+    QFrame#runBar {{ background: {SURFACE}; border: 1px solid {BORDER};
                      border-radius: {s(4)}px; }}
     QLabel#emptyState {{ color: {TEXT_SUB}; padding: {s(8)}px 0; }}
     QLabel#modeBanner {{ background: transparent; border: none; padding: 0;
@@ -387,14 +393,26 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
                         left: {s(16)}px; top: {s(12)}px; padding: 0; color: {TEXT}; }}
 
     QPushButton {{ icon-size: {s(16)}px; }}
-    QPushButton {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {GRAY_30};
-                   border-radius: {s(4)}px; padding: {compact_pad}px {s(12)}px;
-                   min-height: {compact_min}px; font-size: {s(LABEL_PX)}px; }}
-    QPushButton:hover {{ background: {GRAY_5}; }}
-    QPushButton:pressed {{ background: {GRAY_10}; }}
+    /* Action buttons are flat grey with bold words, like the bottom [사건 저장]/[이전]. */
+    QPushButton {{ background: {GRAY_10}; color: {TEXT}; border: 1px solid {GRAY_10};
+                   border-radius: {s(6)}px; padding: {compact_pad}px {s(12)}px;
+                   min-height: {compact_min}px; font-size: {s(LABEL_PX)}px; font-weight: 700; }}
+    QPushButton:hover {{ background: {GRAY_20}; border-color: {GRAY_20}; }}
+    QPushButton:pressed {{ background: {GRAY_30}; border-color: {GRAY_30}; }}
     QPushButton:checked {{ background: {PRIMARY_SOFT}; color: {PRIMARY};
                            border-color: {PRIMARY_FILL}; font-weight: 700; }}
-    QPushButton:disabled {{ background: {GRAY_10}; color: {GRAY_50}; border-color: {GRAY_30}; }}
+    QPushButton:disabled {{ background: {GRAY_10}; color: {GRAY_40}; border-color: {GRAY_10}; }}
+    /* Choices and filters (case type, playback range, view menu) keep a white outlined
+       look, so they do not read as actions. */
+    QPushButton[variant="chip"], QPushButton[segment], QPushButton#viewButton {{
+        background: {SURFACE}; border-color: {GRAY_30}; font-weight: 400; }}
+    QPushButton[variant="chip"]:hover, QPushButton[segment]:hover, QPushButton#viewButton:hover {{
+        background: {GRAY_5}; border-color: {GRAY_50}; }}
+    QPushButton[variant="chip"]:checked, QPushButton[segment]:checked {{
+        background: {PRIMARY_SOFT}; color: {PRIMARY}; border-color: {PRIMARY_FILL};
+        font-weight: 700; }}
+    QPushButton[variant="chip"]:disabled, QPushButton[segment]:disabled,
+    QPushButton#viewButton:disabled {{ background: {GRAY_5}; border-color: {GRAY_20}; }}
     QPushButton[variant="primary"] {{ background: {PRIMARY_FILL}; color: {GRAY_0};
                                       border-color: {PRIMARY_FILL}; font-weight: 700; }}
     QPushButton[variant="primary"]:hover {{ background: {PRIMARY_HOVER}; border-color: {PRIMARY_HOVER}; }}
@@ -416,7 +434,7 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QPushButton#stepButton:hover {{ color: {TEXT}; background: transparent; }}
     QPushButton#stepButton:checked {{ color: {PRIMARY}; background: transparent; font-weight: 700; }}
     QPushButton[variant="chip"], QPushButton[segment], QPushButton#overviewToggle,
-    QPushButton#bookmarkButton, QPushButton#zoomButton, QPushButton[density="compact"] {{
+    QPushButton#zoomButton, QPushButton[density="compact"] {{
         padding: {compact_pad}px {s(12)}px; min-height: {compact_min}px;
         font-size: {s(LABEL_PX)}px; }}
 
@@ -477,37 +495,46 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QPushButton[segment="last"] {{ border-top-right-radius: {s(6)}px;
                                    border-bottom-right-radius: {s(6)}px; }}
 
-    QFrame#reviewCard {{ background: {SURFACE}; border: 1px solid {NAVY};
-                         border-radius: {s(2)}px; }}
-    QWidget#reviewCardHeader {{ background: {NAVY}; border-top-left-radius: {s(1)}px;
-                                border-top-right-radius: {s(1)}px; }}
-    QLabel#reviewCardTitle {{ font-size: {s(SUBHEADING_PX)}px; color: {GRAY_0}; font-weight: 700; }}
-    QLabel#reviewCardNote {{ font-size: {s(LABEL_PX)}px; color: {GRAY_20}; }}
-    QPushButton#bookmarkButton {{ background: transparent; color: {GRAY_0};
-                                  border: 1px solid {GRAY_40}; }}
-    QPushButton#bookmarkButton:hover {{ border-color: {GRAY_0}; }}
-    QPushButton#bookmarkButton:checked {{ background: {GRAY_0}; color: {NAVY};
-                                          border-color: {GRAY_0}; font-weight: 700; }}
-    QPushButton#bookmarkButton:disabled {{ color: {GRAY_40}; border-color: {GRAY_60}; }}
-    QRadioButton[variant="judgement"], QRadioButton[variant="judgementQuiet"] {{
-        background: {SURFACE}; border: 1px solid {INPUT_BORDER}; border-radius: {s(6)}px;
-        padding: {s(4)}px {s(12)}px; }}
-    QRadioButton[variant="judgementQuiet"] {{ background: {GRAY_5}; color: {TEXT_SUB}; }}
-    QRadioButton[variant="judgement"]:checked, QRadioButton[variant="judgementQuiet"]:checked {{
-        background: {PRIMARY_SOFT}; border-color: {PRIMARY_FILL}; color: {PRIMARY};
-        font-weight: 700; }}
-    QRadioButton[variant="judgement"]:disabled, QRadioButton[variant="judgementQuiet"]:disabled {{
-        color: {TEXT_FAINT}; border-color: {GRAY_20}; }}
+    /* Reviewer's record: a light grey panel under the AI result (no border). */
+    QFrame#recordPanel {{ background: {GRAY_5}; border: none; border-radius: {s(8)}px; }}
+    QLabel#recordTitle {{ font-size: {s(SUBHEADING_PX)}px; font-weight: 700; color: {TEXT}; }}
+    QFrame#recordPanel QPushButton[segment] {{ background: {SURFACE}; }}
+    QFrame#recordPanel QPushButton[segment]:checked {{ background: {PRIMARY_SOFT}; }}
+    /* Judgement: four round buttons with their mark; the chosen one is navy. */
+    QRadioButton[variant="pill"] {{ background: {SURFACE}; border: 1px solid {GRAY_20};
+        border-radius: {s(16)}px; padding: {s(5)}px {s(14)}px {s(5)}px {s(8)}px;
+        font-size: {s(LABEL_PX)}px; spacing: 0; }}
+    QRadioButton[variant="pill"]::indicator {{ width: 0; height: 0; border: none;
+        background: transparent; image: none; }}
+    QRadioButton[variant="pill"]:hover {{ border-color: {GRAY_50}; }}
+    QRadioButton[variant="pill"]:checked {{ background: {PRIMARY_FILL}; border-color: {PRIMARY_FILL};
+        color: {GRAY_0}; font-weight: 700; }}
+    QRadioButton[variant="pill"]:disabled {{ color: {TEXT_FAINT}; border-color: {GRAY_10}; }}
+    QTextEdit#memo, QFrame#recordPanel QPlainTextEdit {{ background: {SURFACE}; border-color: {GRAY_20}; }}
+    /* Tags: small chips (× removes) and a dashed "+ 태그". */
+    QPushButton#tagChip {{ background: {SURFACE}; color: {PRIMARY}; border: 1px solid {SECONDARY_10};
+        border-radius: {s(11)}px; padding: {s(2)}px {s(10)}px; min-height: {s(18)}px;
+        font-size: {s(CAPTION_PX)}px; font-weight: 400; }}
+    QPushButton#tagChip:hover {{ border-color: {PRIMARY_FILL}; }}
+    QPushButton#tagAdd {{ background: {SURFACE}; border: 1px solid {GRAY_20};
+        border-radius: {s(12)}px; padding: 0; min-width: {s(24)}px; max-width: {s(24)}px;
+        min-height: {s(24)}px; max-height: {s(24)}px; icon-size: {s(14)}px; }}
+    QPushButton#tagAdd:hover {{ border-color: {PRIMARY_FILL}; background: {SECONDARY_5}; }}
+    QLineEdit#tagInput {{ background: {SURFACE}; border: 1px solid {PRIMARY_FILL};
+        border-radius: {s(12)}px; padding: 0 {s(10)}px; min-height: {s(22)}px;
+        max-height: {s(24)}px; font-size: {s(CAPTION_PX)}px; }}
 
     QCheckBox, QRadioButton {{ spacing: {s(8)}px; }}
-    QCheckBox::indicator, QListView::indicator {{
+    QCheckBox::indicator, QListView::indicator, QTableView::indicator {{
         width: {s(20)}px; height: {s(20)}px; border: 1px solid {INPUT_BORDER};
         border-radius: {s(4)}px; background: {SURFACE}; }}
-    QCheckBox::indicator:checked, QListView::indicator:checked {{
+    QCheckBox::indicator:checked, QListView::indicator:checked, QTableView::indicator:checked {{
         background: {PRIMARY_FILL}; border-color: {PRIMARY_FILL}; image: url("{check}"); }}
-    QCheckBox::indicator:disabled, QListView::indicator:disabled {{
+    QCheckBox::indicator:disabled, QListView::indicator:disabled,
+    QTableView::indicator:disabled {{
         background: {GRAY_10}; border-color: {GRAY_30}; }}
-    QCheckBox::indicator:checked:disabled, QListView::indicator:checked:disabled {{
+    QCheckBox::indicator:checked:disabled, QListView::indicator:checked:disabled,
+    QTableView::indicator:checked:disabled {{
         background: {GRAY_30}; border-color: {GRAY_30}; }}
     QRadioButton::indicator {{ width: {s(20)}px; height: {s(20)}px;
                                border: 1px solid {INPUT_BORDER}; border-radius: {s(10)}px;

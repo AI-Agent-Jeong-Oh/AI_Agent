@@ -11,10 +11,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
+    QStyle,
+    QStyleOptionViewItem,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -56,6 +58,8 @@ class CaseVideoList(Card):
     video_activated = Signal(str)
     relink_requested = Signal(str)
     remove_requested = Signal(str)
+    # Step ②: which linked videos to analyse (one is the usual run, several a batch).
+    targets_changed = Signal(object)
 
     def __init__(self) -> None:
         super().__init__("CCTV 영상")
@@ -65,6 +69,8 @@ class CaseVideoList(Card):
         self._locked = False
         self._refreshing = False
         self._select_only = False
+        self._choosing_targets = False
+        self._targets: tuple[str, ...] = ()
 
         layout = QVBoxLayout(self.body)
         layout.setContentsMargins(12, 8, 12, 12)
@@ -99,7 +105,12 @@ class CaseVideoList(Card):
         self.metadata_label = QLabel("영상 정보 확인 전")
         self.metadata_label.setObjectName("subsectionHelp")
         self.metadata_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # Step ②: check or clear every linked video at once.
+        self.all_button = QPushButton("모두 선택")
+        theme.mark_compact(self.all_button)
+        self.all_button.setVisible(False)
         footer.addWidget(self.add_button)
+        footer.addWidget(self.all_button)
         footer.addStretch(1)
         footer.addWidget(self.metadata_label)
         layout.addLayout(footer)
@@ -107,8 +118,12 @@ class CaseVideoList(Card):
         layout.addStretch(1)
 
         self.add_button.clicked.connect(self.add_requested.emit)
+        self.all_button.clicked.connect(self._toggle_all_targets)
         self.list.currentCellChanged.connect(self._current_changed)
         self.list.itemDoubleClicked.connect(self._item_double_clicked)
+        self.list.itemChanged.connect(self._item_check_changed)
+        # A click on a row's check box only checks it (it does not open that video).
+        self.list.viewport().installEventFilter(self)
 
     def set_select_only(self, select_only: bool) -> None:
         """Steps ② and ③ only pick a registered video: no adding, editing or removing."""
@@ -116,6 +131,79 @@ class CaseVideoList(Card):
         self.add_button.setVisible(not select_only)
         for column in _DETAIL_COLUMNS:
             self.list.setColumnHidden(column, select_only)
+
+    def set_target_choice(self, enabled: bool) -> None:
+        """Show the check boxes that choose the videos to analyse (step ② only)."""
+        if enabled == self._choosing_targets:
+            return
+        self._choosing_targets = enabled
+        self.set_entries(self._entries, getattr(self, "_current_id", None))
+
+    def targets(self) -> tuple[str, ...]:
+        return self._targets
+
+    def set_targets(self, video_ids: tuple[str, ...], *, redraw: bool = True) -> None:
+        """The checked videos (the window keeps the choice; redraw=False before set_entries)."""
+        self._targets = tuple(video_ids)
+        if redraw:
+            self.set_entries(self._entries, getattr(self, "_current_id", None))
+
+    def _emit_targets(self, video_ids: tuple[str, ...]) -> None:
+        linked = [entry.video_id for entry in self._entries if entry.linked]
+        self.targets_changed.emit(tuple(video_id for video_id in linked if video_id in video_ids))
+
+    def _toggle_all_targets(self) -> None:
+        linked = tuple(entry.video_id for entry in self._entries if entry.linked)
+        everything = set(self._targets) >= set(linked)
+        # Clearing keeps the open video, so there is always something to analyse.
+        keep = tuple(v for v in linked if v == self._current_id) if everything else linked
+        self._emit_targets(keep)
+
+    def _check_rect(self, index) -> object:
+        option = QStyleOptionViewItem()
+        option.initFrom(self.list)
+        option.rect = self.list.visualRect(index)
+        option.features |= QStyleOptionViewItem.ViewItemFeature.HasCheckIndicator
+        return self.list.style().subElementRect(
+            QStyle.SubElement.SE_ItemViewItemCheckIndicator, option, self.list
+        ).adjusted(-6, -6, 6, 6)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 - Qt API
+        if (
+            watched is self.list.viewport()
+            and self._choosing_targets
+            and event.type()
+            in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease, QEvent.Type.MouseButtonDblClick)
+        ):
+            index = self.list.indexAt(event.position().toPoint())
+            item = self.list.item(index.row(), 0) if index.isValid() else None
+            if (
+                item is not None
+                and index.column() == 0
+                and item.flags() & Qt.ItemFlag.ItemIsUserCheckable
+                and self._check_rect(index).contains(event.position().toPoint())
+            ):
+                if event.type() == QEvent.Type.MouseButtonPress and self.list.isEnabled():
+                    self._toggle_target(item.data(VIDEO_ID_ROLE))
+                return True
+        return super().eventFilter(watched, event)
+
+    def _toggle_target(self, video_id: str) -> None:
+        targets = list(self._targets)
+        if video_id in targets:
+            targets.remove(video_id)
+        else:
+            targets.append(video_id)
+        self._emit_targets(tuple(targets))
+
+    def _item_check_changed(self, item: QTableWidgetItem) -> None:
+        """Space on a focused row toggles its check box too."""
+        if self._refreshing or not self._choosing_targets or item.column() != 0:
+            return
+        video_id = item.data(VIDEO_ID_ROLE)
+        checked = item.checkState() == Qt.CheckState.Checked
+        if checked != (video_id in self._targets):
+            self._toggle_target(video_id)
 
     def apply_scale(self, scaled) -> None:
         self.list.verticalHeader().setDefaultSectionSize(row_height(self.list.font()))
@@ -155,6 +243,8 @@ class CaseVideoList(Card):
         """Redraw the list and select the video that is currently open."""
         self._entries = entries
         self._current_id = current_id
+        # With one video there is nothing to choose: no check boxes.
+        linked_count = sum(entry.linked for entry in entries)
         self._refreshing = True
         try:
             keep = self.selected_video_id()
@@ -163,7 +253,20 @@ class CaseVideoList(Card):
             select_row = -1
             for row, entry in enumerate(entries):
                 current = entry.video_id == current_id
-                for column, item in enumerate(self._row_items(entry, current)):
+                items = self._row_items(entry, current)
+                if self._choosing_targets and entry.linked and linked_count >= 2:
+                    name = items[0]
+                    name.setFlags(name.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                    name.setCheckState(
+                        Qt.CheckState.Checked
+                        if entry.video_id in self._targets
+                        else Qt.CheckState.Unchecked
+                    )
+                    name.setData(
+                        Qt.ItemDataRole.AccessibleDescriptionRole,
+                        "분석할 영상" if entry.video_id in self._targets else "분석에서 뺀 영상",
+                    )
+                for column, item in enumerate(items):
                     self.list.setItem(row, column, item)
                 self.list.setCellWidget(row, _ACTIONS_COLUMN, self._row_actions(entry, current))
                 if current:
@@ -180,7 +283,12 @@ class CaseVideoList(Card):
         description = self.summary_text()
         if self._select_only:
             description += " · 목록에서 고르면 그 영상을 엽니다"
+        if self._choosing_targets:
+            description += f" · 분석할 영상 {len(self._targets)}개 (체크 상자로 고름)"
         self.list.setAccessibleDescription(description)
+        linked = [entry.video_id for entry in entries if entry.linked]
+        self.all_button.setVisible(self._choosing_targets and len(linked) >= 2)
+        self.all_button.setText("선택 해제" if linked and set(self._targets) >= set(linked) else "모두 선택")
 
     def set_locked(self, locked: bool) -> None:
         """Block switching, relinking and removing while background work runs."""

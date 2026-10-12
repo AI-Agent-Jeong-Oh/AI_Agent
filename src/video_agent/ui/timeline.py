@@ -153,7 +153,7 @@ class TimelineLegend(QWidget):
     def __init__(self) -> None:
         super().__init__()
         self.setAccessibleName(
-            "후보 표시 범례: " + ", ".join(label for _judgement, label in LEGEND_ITEMS) + ", 북마크"
+            "후보 표시 범례: " + ", ".join(label for _judgement, label in LEGEND_ITEMS)
         )
 
     def _font(self) -> QFont:
@@ -164,7 +164,7 @@ class TimelineLegend(QWidget):
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
         metrics = QFontMetrics(self._font())
         width = sum(metrics.horizontalAdvance(label) + 30 for _j, label in LEGEND_ITEMS)
-        return QSize(width + metrics.horizontalAdvance("북마크") + 30, metrics.height() + 2)
+        return QSize(width, metrics.height() + 2)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
         return QSize(0, self.sizeHint().height())
@@ -184,12 +184,4 @@ class TimelineLegend(QWidget):
             painter.drawText(QRect(x, 0, metrics.horizontalAdvance(label) + 2, self.height()),
                              Qt.AlignmentFlag.AlignVCenter, label)
             x += metrics.horizontalAdvance(label) + 14
-        icon = round(metrics.height() * 0.75)
-        theme.icon("bookmark", theme.NAVY).paint(
-            painter, QRect(x, round((self.height() - icon) / 2), icon, icon)
-        )
-        x += icon + 4
-        painter.setPen(QColor(theme.TEXT_SUB))
-        painter.drawText(QRect(x, 0, metrics.horizontalAdvance("북마크") + 2, self.height()),
-                         Qt.AlignmentFlag.AlignVCenter, "북마크")
         painter.end()

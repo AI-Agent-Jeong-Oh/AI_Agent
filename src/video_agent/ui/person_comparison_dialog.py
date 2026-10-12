@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -31,6 +30,7 @@ from video_agent.identity.comparison import (
 )
 from video_agent.identity.worker import PersonComparisonWorker
 from video_agent.ui import theme
+from video_agent.ui.message import confirm, notify
 from video_agent.ui.time_field import format_time
 from video_agent.video.frames import ExtractedFrame
 
@@ -62,21 +62,14 @@ class PersonComparisonDialog(QDialog):
         self._evidence_frames: dict[str, tuple[ExtractedFrame, ...]] = {}
 
         layout = QVBoxLayout(self)
-        notice = QLabel(
-            "각 영상에서 비교할 사건 후보를 하나씩 선택하세요. 전체 프레임의 복장·소지품·보이는 "
-            "외형만 대조하며 얼굴 검출이나 추적 모델은 사용하지 않습니다. 사진은 실제 비교에 사용한 "
-            "전체 근거 프레임입니다. 외형 유사도 참고값은 신원 일치 확률이 아니며, 결과는 사람이 "
-            "원본을 확인할 후보입니다."
-        )
-        notice.setWordWrap(True)
-        layout.addWidget(notice)
-        model = QLabel(f"비교 모델: {model_label}")
+        # Only what the choice needs; the result column says the score is not identity.
+        model = QLabel(f"사용 모델 {model_label}")
         model.setObjectName("fieldLabel")
         layout.addWidget(model)
 
         self.source_table = QTableWidget(len(candidates), 5)
         self.source_table.setHorizontalHeaderLabels(
-            ("선택", "영상", "후보", "구간", "관찰 요약")
+            ("선택", "영상", "후보", "구간", "요약")
         )
         self.source_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.source_table.verticalHeader().setVisible(False)
@@ -119,7 +112,7 @@ class PersonComparisonDialog(QDialog):
         self.progress.setRange(0, 100)
         self.progress.setValue(0)
         self.progress.setVisible(False)
-        self.status = QLabel("서로 다른 영상에서 후보를 선택하세요.")
+        self.status = QLabel("영상마다 후보를 하나씩 고르세요.")
         self.status.setWordWrap(True)
         layout.addWidget(self.progress)
         layout.addWidget(self.status)
@@ -130,7 +123,7 @@ class PersonComparisonDialog(QDialog):
 
         self.result_table = QTableWidget(0, 3)
         self.result_table.setHorizontalHeaderLabels(
-            ("영상 비교", "결과", "외형 유사도 · 근거 품질")
+            ("영상", "결과", "외형 유사도 · 근거")
         )
         self.result_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.result_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -151,22 +144,22 @@ class PersonComparisonDialog(QDialog):
         result_detail_layout = QVBoxLayout(result_detail)
         result_detail_layout.setContentsMargins(0, 8, 0, 0)
 
-        self.result_detail_group = QGroupBox("선택한 비교 상세")
+        self.result_detail_group = QGroupBox("비교 상세")
         detail_layout = QVBoxLayout(self.result_detail_group)
-        self.result_detail_title = QLabel("결과 행을 선택하면 전체 내용을 표시합니다.")
+        self.result_detail_title = QLabel("결과를 고르세요.")
         self.result_detail_title.setObjectName("fieldLabel")
         self.result_detail_title.setWordWrap(True)
         self.result_detail_title.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         detail_layout.addWidget(self.result_detail_title)
-        self.similarities_detail = self._detail_text("유사하게 관찰된 점")
-        self.differences_detail = self._detail_text("다르게 관찰된 점")
-        self.limitations_detail = self._detail_text("판단 한계 · 원본 확인 사항")
+        self.similarities_detail = self._detail_text("비슷한 점")
+        self.differences_detail = self._detail_text("다른 점")
+        self.limitations_detail = self._detail_text("확인 필요")
         for title, value in (
-            ("유사하게 관찰된 점", self.similarities_detail),
-            ("다르게 관찰된 점", self.differences_detail),
-            ("판단 한계 · 원본 확인 사항", self.limitations_detail),
+            ("비슷한 점", self.similarities_detail),
+            ("다른 점", self.differences_detail),
+            ("확인 필요", self.limitations_detail),
         ):
             heading = QLabel(title)
             heading.setObjectName("fieldLabel")
@@ -175,7 +168,7 @@ class PersonComparisonDialog(QDialog):
         result_detail_layout.addWidget(self.result_detail_group)
 
         self.photo_title = QLabel(
-            "비교에 사용한 후보 인물 근거 사진 · 자동 인물 잘라내기 아님"
+            "근거 사진"
         )
         self.photo_title.setObjectName("fieldLabel")
         self.photo_title.setVisible(False)
@@ -214,7 +207,7 @@ class PersonComparisonDialog(QDialog):
         layout.addWidget(self.result_splitter, 2)
 
         buttons = QHBoxLayout()
-        self.run_button = QPushButton("선택 후보 인물 비교")
+        self.run_button = QPushButton("비교 실행")
         self.cancel_button = QPushButton("취소")
         self.close_button = QPushButton("닫기")
         theme.mark_primary(self.run_button)
@@ -273,27 +266,25 @@ class PersonComparisonDialog(QDialog):
     def _run(self) -> None:
         selected = self.selected_candidates()
         if len(selected) < 2:
-            QMessageBox.warning(self, "인물 비교", "서로 다른 영상의 후보를 두 개 이상 선택해 주세요.")
+            notify(self, "인물 비교", "서로 다른 영상의 후보를 두 개 이상 선택해 주세요.")
             return
         video_ids = tuple(item.video_id for item in selected)
         if len(video_ids) != len(set(video_ids)):
-            QMessageBox.warning(self, "인물 비교", "한 영상에서는 후보를 하나만 선택해 주세요.")
+            notify(self, "인물 비교", "한 영상에서는 후보를 하나만 선택해 주세요.")
             return
         pair_count = len(selected) * (len(selected) - 1) // 2
-        answer = QMessageBox.question(
+        if not confirm(
             self,
             "인물 비교 실행",
-            f"{len(selected)}개 영상의 근거 프레임을 {pair_count}쌍으로 비교할까요?\n\n"
-            "결과는 동일 인물 또는 범죄자 확정이 아니며 원본 확인이 필요합니다.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
+            f"영상 {len(selected)}개의 근거 사진을 {pair_count}쌍으로 비교합니다. "
+            "결과는 동일 인물 확정이 아니며 원본 확인이 필요합니다.",
+            confirm_text="비교 실행",
+        ):
             return
         try:
             worker = self._worker_factory(selected)
         except Exception as exc:
-            QMessageBox.critical(self, "인물 비교", str(exc) or exc.__class__.__name__)
+            notify(self, "인물 비교", str(exc) or exc.__class__.__name__, error=True)
             return
         self._worker = worker
         worker.progress_changed.connect(self._on_progress)
@@ -346,8 +337,8 @@ class PersonComparisonDialog(QDialog):
             self.result_table.selectRow(0)
             self._show_result_evidence(0, 0)
         self.status.setText(
-            f"인물 후보 비교 {report.completed_pair_count}/{report.attempted_pair_count}쌍 완료"
-            + (" · 일부 비교 오류 있음" if report.error else "")
+            f"끝남 · {report.completed_pair_count}/{report.attempted_pair_count}쌍"
+            + (" · 일부 오류" if report.error else "")
         )
         if report.error:
             self.status.setToolTip(report.error)
@@ -371,9 +362,7 @@ class PersonComparisonDialog(QDialog):
         left_name = candidate_names.get(candidate_ids[0], candidate_ids[0])
         right_name = candidate_names.get(candidate_ids[1], candidate_ids[1])
         self.result_detail_title.setText(
-            f"{left_name} ↔ {right_name} · {DECISION_LABELS[comparison.decision]} · "
-            f"외형 유사도 {comparison.appearance_similarity_score}/100 · "
-            f"근거 품질 {QUALITY_LABELS[comparison.evidence_quality]}"
+            f"{left_name} ↔ {right_name} · {DECISION_LABELS[comparison.decision]}"
         )
         self.similarities_detail.setText(
             self._format_detail_lines(comparison.observable_similarities)
@@ -421,7 +410,7 @@ class PersonComparisonDialog(QDialog):
         return "\n".join(f"• {value}" for value in values) if values else "관찰 내용 없음"
 
     def _clear_result_detail(self) -> None:
-        self.result_detail_title.setText("결과 행을 선택하면 전체 내용을 표시합니다.")
+        self.result_detail_title.setText("결과를 고르세요.")
         self.similarities_detail.setText("—")
         self.differences_detail.setText("—")
         self.limitations_detail.setText("—")
@@ -430,7 +419,7 @@ class PersonComparisonDialog(QDialog):
 
     def _on_error(self, message: str) -> None:
         self.status.setText(message)
-        QMessageBox.warning(self, "인물 비교", message)
+        notify(self, "인물 비교", message, error=True)
 
     def _on_finished(self) -> None:
         self._worker = None
@@ -440,7 +429,7 @@ class PersonComparisonDialog(QDialog):
         if self._worker is not None and self._worker.isRunning():
             self._worker.request_cancel()
             self.cancel_button.setEnabled(False)
-            self.status.setText("현재 비교를 정리하고 있습니다.")
+            self.status.setText("멈추는 중")
 
     def _set_running(self, running: bool) -> None:
         self.run_button.setEnabled(not running)
@@ -454,7 +443,7 @@ class PersonComparisonDialog(QDialog):
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt override name
         if self.is_running:
-            QMessageBox.information(self, "인물 비교", "비교를 취소한 뒤 창을 닫아 주세요.")
+            notify(self, "인물 비교", "비교를 취소한 뒤 창을 닫아 주세요.")
             event.ignore()
             return
         event.accept()

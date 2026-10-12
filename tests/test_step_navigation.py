@@ -15,6 +15,9 @@ from video_agent.ui.main_window import MainWindow
 from test_review_panel import job as review_job
 from test_ui_workflow import metadata
 
+# UI tests run without a model, so they use the demonstration (off for staff).
+os.environ.setdefault("VIDEO_AGENT_ENABLE_SAMPLE", "1")
+
 
 class StepNavigationTests(unittest.TestCase):
     @classmethod
@@ -181,7 +184,7 @@ class StepNavigationTests(unittest.TestCase):
 
     def test_section_titles_have_no_step_numbers(self) -> None:
         titles = [box.title() for box in self.window.findChildren(QGroupBox)]
-        self.assertIn("사건·사전 정보", titles)
+        self.assertIn("사건 정보", titles)
         self.assertIn("CCTV 영상", titles)
         self.assertIn("중요 구간 후보", titles)
         for title in titles:

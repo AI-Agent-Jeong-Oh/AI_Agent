@@ -39,6 +39,9 @@ from video_agent.storage.paths import AppPaths
 from video_agent.ui.main_window import MainWindow
 from video_agent.ui.summary_dialog import ResultSummaryDialog
 
+# UI tests run without a model, so they use the demonstration (off for staff).
+os.environ.setdefault("VIDEO_AGENT_ENABLE_SAMPLE", "1")
+
 CLUE = AnalysisClue(
     clue_id="clue-1",
     text="신고자는 문 앞 상자가 사라졌다고 설명함",
@@ -182,7 +185,7 @@ class SummaryBuilderTests(unittest.TestCase):
     def test_scope_section_uses_file_name_and_video_id_only(self) -> None:
         text = reviewed_summary().section("scope").body
         self.assertIn("영상: front_door.mp4 (영상 ID video-sum)", text)
-        self.assertIn("분석 방식: 이 컴퓨터에서 AI 분석 (사용 모델 qwen3-vl:8b-instruct)", text)
+        self.assertIn("분석 방식: AI 분석 (사용 모델 qwen3-vl:8b-instruct)", text)
         self.assertIn("분석 범위: 00:00–01:00", text)
         self.assertIn("결과 상태: 완료", text)
         self.assertNotIn("/", text.replace("12/12", ""))
@@ -194,7 +197,7 @@ class SummaryBuilderTests(unittest.TestCase):
         self.assertLess(text.index("후보 #1"), text.index("후보 #4"))
         self.assertNotIn("후보 #2", text)
         self.assertNotIn("후보 #3", text)
-        self.assertIn("관찰 프레임 시각: 41.000초", text)
+        self.assertIn("관찰 시각: 00:41", text)
         self.assertIn("모델 요약 (모델 출력): 손이 상자 가까이에 있음", text)
 
     def test_opinions_list_memos_and_exclusion_reasons(self) -> None:

@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -23,6 +22,7 @@ from PySide6.QtWidgets import (
 from video_agent.contracts import ResultOrigin
 from video_agent.review.summary import ResultSummary, render_html
 from video_agent.ui import theme
+from video_agent.ui.message import confirm
 
 
 SCOPE_CASE = "case"
@@ -214,14 +214,12 @@ class ResultSummaryDialog(QDialog):
         self.export_status_label.setText("")
 
     def _confirm_regenerate(self) -> bool:
-        answer = QMessageBox.question(
+        return confirm(
             self,
             "초안 다시 만들기",
-            "고친 문구가 사라지고 저장된 검토 기록으로 다시 작성됩니다. 계속할까요?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-            QMessageBox.StandardButton.Cancel,
+            "고친 문구가 사라지고 저장된 검토 기록으로 다시 작성됩니다.",
+            confirm_text="다시 만들기",
         )
-        return answer == QMessageBox.StandardButton.Yes
 
     def export_html(self) -> Path | None:
         filename, _ = QFileDialog.getSaveFileName(

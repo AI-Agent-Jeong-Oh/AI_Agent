@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication, QLabel
 from video_agent.contracts import CaseRecord, InformationCertainty
 from video_agent.ui.case_panel import CaseContextPanel
 from video_agent.ui.datetime_field import DateTimeField, parse_date_time
+from video_agent.ui.message import MessageDialog
 from video_agent.ui.popover import InfoPopover, info_mark
 
 
@@ -21,6 +22,27 @@ class PopupTests(unittest.TestCase):
         for widget in self.app.topLevelWidgets():
             if isinstance(widget, InfoPopover):
                 widget.close()
+
+    def test_confirm_window_has_no_question_picture_and_app_buttons(self) -> None:
+        dialog = MessageDialog(
+            None,
+            "일괄 분석 실행",
+            "영상 2개를 차례로 분석합니다.",
+            details=("a.mp4 · 0:00–2:00 · 사진 12장",),
+            confirm_text="실행",
+            cancel_text="취소",
+        )
+        texts = [label.text() for label in dialog.findChildren(QLabel) if label.text()]
+        self.assertEqual(
+            texts, ["일괄 분석 실행", "영상 2개를 차례로 분석합니다.", "a.mp4 · 0:00–2:00 · 사진 12장"]
+        )
+        # No picture at all (Qt's boxes add a large "?"); [취소] then the navy action.
+        self.assertFalse(any(label.pixmap() and not label.pixmap().isNull() for label in dialog.findChildren(QLabel)))
+        self.assertEqual(dialog.cancel_button.text(), "취소")
+        self.assertEqual(dialog.confirm_button.text(), "실행")
+        self.assertEqual(dialog.confirm_button.property("variant"), "primary")
+        dialog.confirm_button.click()
+        self.assertEqual(dialog.result(), MessageDialog.DialogCode.Accepted)
 
     def test_info_mark_opens_a_titled_help_box(self) -> None:
         mark = info_mark("첫 문장입니다. 두 번째 문장입니다.", "사건 정보 안내")
