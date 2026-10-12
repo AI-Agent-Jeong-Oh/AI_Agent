@@ -280,12 +280,16 @@ class UiWorkflowTests(unittest.TestCase):
         self.window._set_model_id("qwen3-vl:8b-instruct")
         banner = self.window._mode_banner
         # Plain words on the line; program and model names only in the tooltip.
-        self.assertEqual(banner.text(), "정확한 분석 · 이 컴퓨터에서 처리")
+        self.assertEqual(banner.text(), "")
+        self.assertTrue(self.window._status_row.isHidden())
+        self.assertIn("정확한 분석", banner.toolTip())
         self.assertIn("qwen3-vl:8b-instruct", banner.toolTip())
         self.assertIn("자동 전환하지 않습니다", banner.toolTip())
 
         self.window._set_model_id("qwen3-vl:4b-instruct")
-        self.assertEqual(banner.text(), "빠른 분석 · 이 컴퓨터에서 처리")
+        self.assertEqual(banner.text(), "")
+        self.assertTrue(self.window._status_row.isHidden())
+        self.assertIn("빠른 분석", banner.toolTip())
         self.window._set_model_id("kimi-k3:cloud")
         self.assertEqual(banner.text(), "외부 서버에서 실행되는 프로그램 · 이 컴퓨터 분석에 쓸 수 없음")
         self.assertIn("외부 서버", banner.toolTip())
@@ -416,9 +420,9 @@ class UiWorkflowTests(unittest.TestCase):
         for widget in (
             window._external_model_edit,
             window._external_api_key_edit,
-            window._external_vision_confirm,
         ):
             self.assertFalse(widget.isHidden())
+        self.assertFalse(hasattr(window, "_external_vision_confirm"))
 
     def test_changing_checked_candidates_after_a_plan_requires_a_new_plan(self) -> None:
         window = self.window
@@ -551,7 +555,6 @@ class UiWorkflowTests(unittest.TestCase):
     def test_external_transfer_approval_is_separate(self) -> None:
         self.window._select_mode(AnalysisMode.EXTERNAL)
         self.window._set_model_id("vision-model")
-        self.window._external_vision_confirm.setChecked(True)
         self.window._external_api_key_edit.setText("sk-test-not-real")
         self.window._purpose_edit.setPlainText("출입문 앞에 사람이 30초 이상 머무르는 장면 후보 찾기")
         self.window._make_plan()
@@ -568,7 +571,6 @@ class UiWorkflowTests(unittest.TestCase):
     def test_openai_key_is_masked_memory_only_and_required_for_external_run(self) -> None:
         self.window._select_mode(AnalysisMode.EXTERNAL)
         self.window._set_model_id("vision-model")
-        self.window._external_vision_confirm.setChecked(True)
         self.window._purpose_edit.setPlainText(
             "출입문 앞에 사람이 30초 이상 머무르는 장면 후보 찾기"
         )
@@ -815,11 +817,11 @@ class UiWorkflowTests(unittest.TestCase):
         )
         # "정확한 분석" (the largest model) is the default.
         self.assertEqual(window._model_id(), "qwen3-vl:8b-instruct")
-        self.assertEqual(window._mode_banner.text(), "정확한 분석 · 이 컴퓨터에서 처리")
+        self.assertIn("정확한 분석", window._mode_banner.toolTip())
 
         choice.setCurrentIndex(0)
         self.assertEqual(window._model_id(), "qwen3-vl:4b-instruct")
-        self.assertEqual(window._mode_banner.text(), "빠른 분석 · 이 컴퓨터에서 처리")
+        self.assertIn("빠른 분석", window._mode_banner.toolTip())
 
     def test_local_mode_refuses_a_cloud_model_and_can_reread_models(self) -> None:
         window = self.window

@@ -351,13 +351,14 @@ class CaseSummaryBuilderTests(unittest.TestCase):
             **kwargs,
         )
 
-    def test_case_section_lists_cameras_with_clock_as_entered(self) -> None:
+    def test_case_section_lists_cameras_without_clock_differences(self) -> None:
         text = self.build().section("case").body
         self.assertIn("사건명: 문 앞 택배 이동 확인", text)
         self.assertIn("CCTV 영상 3대:", text)
         self.assertIn(
-            "- 문앞 CCTV: front_door.mp4 (영상 ID video-sum) · 카메라 시각 오차 -3.5초 (추정)", text
+            "- 문앞 CCTV: front_door.mp4 (영상 ID video-sum)", text
         )
+        self.assertNotIn("시각 오차", text)
         self.assertIn("- 복도 CCTV: 파일명 미확인 (영상 ID video-side)", text)
         self.assertIn("카메라 사이의 시간 순서는 비교하지 않았습니다", text)
         # Shared clues are listed once, still marked as user information.

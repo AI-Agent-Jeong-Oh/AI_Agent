@@ -54,7 +54,7 @@ class StepNavigationTests(unittest.TestCase):
         self.assertEqual(self.step(), 0)
         self.assertTrue(self.window._step_buttons[0].isChecked())
         self.assertFalse(self.window._prev_step_button.isEnabled())
-        self.assertEqual(self.window._next_step_button.text(), "영상 분석")
+        self.assertEqual(self.window._next_step_button.text(), "다음: 영상 분석")
         self.assertTrue(self.window._prev_step_button.isHidden())
 
     def test_each_step_holds_its_sections(self) -> None:
@@ -80,7 +80,7 @@ class StepNavigationTests(unittest.TestCase):
         self.window._next_step_button.click()
         self.assertEqual(self.step(), 1)
         self.assertEqual(self.window._prev_step_button.text(), "이전")
-        self.assertEqual(self.window._next_step_button.text(), "결과 검토")
+        self.assertEqual(self.window._next_step_button.text(), "다음: 결과 검토")
         self.window._next_step_button.click()
         self.assertEqual(self.step(), 2)
         self.assertFalse(self.window._next_step_button.isEnabled())

@@ -4,7 +4,7 @@ Paths are kept only for the running app. A case stores video IDs and camera deta
 videos of a reopened case show as "파일 다시 연결 필요" until the same file is chosen again.
 
 As on the demo page, the table comes first (no card title) and each row carries its own
-small actions: edit the camera clock difference, link the file again, remove from the case.
+small actions: link the file again, remove from the case.
 """
 
 from __future__ import annotations
@@ -14,8 +14,6 @@ from dataclasses import dataclass
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QComboBox,
-    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -27,25 +25,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from video_agent.contracts import InformationCertainty
 from video_agent.ui import theme
 from video_agent.ui.card import Card
-from video_agent.ui.popover import place_below
-from video_agent.ui.video_table import (
-    CLOCK_TEXT,
-    CURRENT_ROLE,
-    ENTRY_ROLE,
-    VideoRowDelegate,
-    clock_text,
-    row_height,
-)
+from video_agent.ui.video_table import CURRENT_ROLE, ENTRY_ROLE, VideoRowDelegate, row_height
 
 VIDEO_ID_ROLE = Qt.ItemDataRole.UserRole + 1
 
 # Columns of the video table; steps ② and ③ keep only the file and its status.
-COLUMNS = ("영상", "기준 시각", "분석 상태", "")
-_ACTIONS_COLUMN = 3
-_DETAIL_COLUMNS = (1, _ACTIONS_COLUMN)
+COLUMNS = ("영상", "분석 상태", "")
+_ACTIONS_COLUMN = 2
+_DETAIL_COLUMNS = (_ACTIONS_COLUMN,)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,72 +43,12 @@ class VideoEntry:
     file_name: str | None
     camera_location: str = ""
     duration_seconds: float | None = None
-    clock_certainty: InformationCertainty = InformationCertainty.UNKNOWN
     analysis_status: str = "분석 전"
     analyzed: bool = False
-    clock_offset_seconds: float = 0.0
 
     @property
     def linked(self) -> bool:
         return self.file_name is not None
-
-
-class ClockEditor(QFrame):
-    """Small popup to enter one camera's clock difference and how sure it is."""
-
-    applied = Signal(float, object)
-
-    def __init__(self, parent: QWidget) -> None:
-        super().__init__(parent, Qt.WindowType.Popup)
-        self.setObjectName("datePopover")
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-        self.title = QLabel()
-        self.title.setObjectName("popoverTitle")
-        row = QHBoxLayout()
-        self.offset = QDoubleSpinBox()
-        self.offset.setRange(-86400.0, 86400.0)
-        self.offset.setDecimals(1)
-        self.offset.setSuffix(" 초")
-        self.offset.setAccessibleName("카메라 시각 오차")
-        theme.polish_spin_box(self.offset)
-        self.certainty = QComboBox()
-        self.certainty.setAccessibleName("시각 오차 확실성")
-        for value, (label, _color) in CLOCK_TEXT.items():
-            self.certainty.addItem(label, value)
-        theme.polish_combo(self.certainty)
-        label = QLabel("시각 오차")
-        label.setObjectName("fieldLabel")
-        row.addWidget(label)
-        row.addWidget(self.offset, 1)
-        row.addWidget(self.certainty)
-        actions = QHBoxLayout()
-        actions.addStretch(1)
-        cancel = QPushButton("취소")
-        apply = QPushButton("적용")
-        for button in (cancel, apply):
-            theme.mark_compact(button)
-        theme.mark_primary(apply)
-        actions.addWidget(cancel)
-        actions.addWidget(apply)
-        layout.addWidget(self.title)
-        layout.addLayout(row)
-        layout.addLayout(actions)
-        cancel.clicked.connect(self.close)
-        apply.clicked.connect(self._apply)
-
-    def open_for(self, entry: VideoEntry, anchor: QWidget) -> None:
-        self.title.setText(entry.file_name or "파일 다시 연결 필요")
-        self.offset.setValue(entry.clock_offset_seconds)
-        self.certainty.setCurrentIndex(max(0, self.certainty.findData(entry.clock_certainty)))
-        self.move(place_below(self, anchor))
-        self.show()
-        self.offset.setFocus()
-
-    def _apply(self) -> None:
-        self.applied.emit(self.offset.value(), InformationCertainty(self.certainty.currentData()))
-        self.close()
 
 
 class CaseVideoList(Card):
@@ -127,7 +56,6 @@ class CaseVideoList(Card):
     video_activated = Signal(str)
     relink_requested = Signal(str)
     remove_requested = Signal(str)
-    clock_changed = Signal(str, float, object)
 
     def __init__(self) -> None:
         super().__init__("CCTV 영상")
@@ -137,7 +65,6 @@ class CaseVideoList(Card):
         self._locked = False
         self._refreshing = False
         self._select_only = False
-        self._editing_id: str | None = None
 
         layout = QVBoxLayout(self.body)
         layout.setContentsMargins(12, 8, 12, 12)
@@ -179,8 +106,6 @@ class CaseVideoList(Card):
         # Spare height (beside the taller settings card in step ②) stays below the card.
         layout.addStretch(1)
 
-        self._clock_editor = ClockEditor(self)
-        self._clock_editor.applied.connect(self._clock_applied)
         self.add_button.clicked.connect(self.add_requested.emit)
         self.list.currentCellChanged.connect(self._current_changed)
         self.list.itemDoubleClicked.connect(self._item_double_clicked)
@@ -264,10 +189,9 @@ class CaseVideoList(Card):
 
     @staticmethod
     def _row_items(entry: VideoEntry, current: bool) -> list[QTableWidgetItem]:
-        """One row: file, clock check and status (plain text for screen readers)."""
+        """One row: file and status (plain text for screen readers)."""
         values = (
             entry.file_name or "파일 다시 연결 필요",
-            clock_text(entry.clock_certainty, entry.clock_offset_seconds),
             entry.analysis_status,
             "",
         )
@@ -292,7 +216,7 @@ class CaseVideoList(Card):
         row.setContentsMargins(0, 0, 4, 0)
         row.setSpacing(2)
         name = entry.file_name or "연결 안 된 영상"
-        actions = [("pencil", f"{name} 시각 오차 입력", lambda: self._edit_clock(entry, box), True)]
+        actions = []
         if not entry.linked:
             actions.append(
                 (
@@ -324,14 +248,6 @@ class CaseVideoList(Card):
             button.clicked.connect(handler)
             row.addWidget(button)
         return box
-
-    def _edit_clock(self, entry: VideoEntry, anchor: QWidget) -> None:
-        self._editing_id = entry.video_id
-        self._clock_editor.open_for(entry, anchor)
-
-    def _clock_applied(self, offset: float, certainty: object) -> None:
-        if self._editing_id is not None:
-            self.clock_changed.emit(self._editing_id, offset, certainty)
 
     def _entry(self, video_id: str | None) -> VideoEntry | None:
         return next((entry for entry in self._entries if entry.video_id == video_id), None)

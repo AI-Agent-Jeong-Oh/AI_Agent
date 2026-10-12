@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import time
-from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -28,7 +27,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QAbstractSpinBox,
     QButtonGroup,
-    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -52,6 +50,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QStyle,
+    QStyleOptionComboBox,
+    QStylePainter,
     QTabBar,
     QVBoxLayout,
     QWidget,
@@ -74,7 +74,6 @@ from video_agent.contracts import (
     AnalysisMode,
     CaseRecord,
     CaseVideoLink,
-    InformationCertainty,
     JobStatus,
     ReviewJudgement,
     ReviewSession,
@@ -134,6 +133,20 @@ from video_agent.video.worker import MetadataWorker, MotionScanWorker
 
 # Playback speeds offered under the video (1× is the default).
 PLAYBACK_RATES = (0.5, 1.0, 1.5, 2.0)
+
+
+class _SpeedCombo(QComboBox):
+    """The small "1×" speed tag: its frame from the style sheet, its text centred."""
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        option = QStyleOptionComboBox()
+        self.initStyleOption(option)
+        text = option.currentText
+        option.currentText = ""
+        painter = QStylePainter(self)
+        painter.drawComplexControl(QStyle.ComplexControl.CC_ComboBox, option)
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, text)
 
 class _StepIndicator(QWidget):
     """One-line step indicator: a small dot before each step name, steps joined by "›".
@@ -371,8 +384,10 @@ class MainWindow(QMainWindow):
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        # One short status line: analysis mode and model, or the run/result state.
+        # One short status line for what needs attention (sample/test results, external AI,
+        # a missing program, a run); hidden when a local analysis is simply ready.
         status_row = QWidget()
+        self._status_row = status_row
         status_layout = QHBoxLayout(status_row)
         status_layout.setContentsMargins(0, 0, 0, 0)
         status_layout.setSpacing(8)
@@ -458,12 +473,14 @@ class MainWindow(QMainWindow):
         theme.set_icon(self._next_step_button, "arrow-right")
         # The arrow follows the step name, as on the demo page.
         self._next_step_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
-        for button in (self._prev_step_button, self._next_step_button):
-            # Keep each button at its text width when the other one is hidden.
-            button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        # Large flat buttons: grey "이전", light navy "다음: …" (solid navy once the step is done).
+        self._next_step_button.setProperty("nav", "next")
         # [사건 저장] sits here in step ①, after the form is filled (not at the card top).
         save = self._case_panel.save_button
-        save.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        for button in (save, self._prev_step_button, self._next_step_button):
+            button.setObjectName("stepNav")
+            # Keep each button at its text width when the other one is hidden.
+            button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         row.addWidget(save)
         row.addWidget(self._prev_step_button)
         row.addWidget(self._next_step_button)
@@ -583,13 +600,15 @@ class MainWindow(QMainWindow):
         time_font = self._time_label.font()
         time_font.setFeature(QFont.Tag("tnum"), 1)  # digits keep their width while playing
         self._time_label.setFont(time_font)
-        self._speed_combo = QComboBox()
+        self._speed_combo = _SpeedCombo()
         self._speed_combo.setToolTip("재생 속도")
         self._speed_combo.setAccessibleName("재생 속도")
         for rate in PLAYBACK_RATES:
             self._speed_combo.addItem(f"{rate:g}×", rate)
         self._speed_combo.setCurrentIndex(PLAYBACK_RATES.index(1.0))
-        theme.mark_compact(self._speed_combo)
+        # A small "1×" tag (no arrow) that opens the speed list, not a full-size field.
+        self._speed_combo.setObjectName("speedCombo")
+        self._speed_combo.setCursor(Qt.CursorShape.PointingHandCursor)
         controls.addWidget(self._start_button)
         controls.addWidget(self._back_button)
         controls.addWidget(self._play_button)
@@ -645,16 +664,6 @@ class MainWindow(QMainWindow):
         self._external_api_key_edit.setToolTip(
             "키는 설정·결과·로그에 저장하지 않습니다. OPENAI_API_KEY 환경 변수도 사용할 수 있습니다."
         )
-        # Two lines so the narrower settings card beside the video list keeps its width.
-        self._external_vision_confirm = QCheckBox(
-            "이 외부 AI가 사진을 읽을 수 있음을\n확인했습니다"
-        )
-        self._external_vision_confirm.setAccessibleName(
-            "이 외부 AI가 사진을 읽을 수 있음을 확인했습니다"
-        )
-        self._external_vision_confirm.setToolTip(
-            "텍스트 전용 모델을 영상 분석 모델처럼 사용하지 않기 위한 명시적 확인입니다."
-        )
         self._purpose_edit = QPlainTextEdit()
         self._purpose_edit.setPlaceholderText(
             "예: 출입문 앞에 30초 이상 머무는 사람"
@@ -680,7 +689,6 @@ class MainWindow(QMainWindow):
         purpose_layout.addRow("분석 방식", choice_row)
         purpose_layout.addRow("외부 AI", self._external_model_edit)
         purpose_layout.addRow("인증키", self._external_api_key_edit)
-        purpose_layout.addRow("사진 입력", self._external_vision_confirm)
         self._last_mode: AnalysisMode | None = None
         self._purpose_form_layout = purpose_layout
         # Labels move above their fields only when a row would not fit (large text).
@@ -807,11 +815,13 @@ class MainWindow(QMainWindow):
             theme.mark_compact(button)
         run_layout.setContentsMargins(12, 8, 12, 8)
         run_layout.setSpacing(6)
-        # One always-visible place for the main action: plan, then approve, then run.
+        # One always-visible place for the main action (plan, then approve, then run), at
+        # the right end as in a work program's button row.
         approve_row = QHBoxLayout()
-        approve_row.addWidget(self._make_plan_button, 1)
-        approve_row.addWidget(self._approve_button, 1)
-        approve_row.addWidget(self._run_button, 1)
+        approve_row.addStretch(1)
+        approve_row.addWidget(self._make_plan_button)
+        approve_row.addWidget(self._approve_button)
+        approve_row.addWidget(self._run_button)
         run_layout.addLayout(approve_row)
         # Only external mode needs the separate transfer approval.
         run_layout.addWidget(self._transfer_button)
@@ -960,7 +970,6 @@ class MainWindow(QMainWindow):
         self._video_list.video_activated.connect(self._activate_listed_video)
         self._video_list.relink_requested.connect(self._relink_video)
         self._video_list.remove_requested.connect(self._remove_video)
-        self._video_list.clock_changed.connect(self._set_video_clock)
         self._camera_tabs.currentChanged.connect(self._camera_tab_changed)
         # A click on the already selected tab still opens its result when none is shown.
         self._camera_tabs.tabBarClicked.connect(self._camera_tab_changed)
@@ -983,9 +992,6 @@ class MainWindow(QMainWindow):
         self._external_model_edit.textChanged.connect(self._model_changed)
         self._model_refresh_button.clicked.connect(self._refresh_local_models)
         self._external_api_key_edit.textChanged.connect(self._external_credential_changed)
-        self._external_vision_confirm.checkStateChanged.connect(
-            self._external_credential_changed
-        )
         self._range_start.valueChanged.connect(self._range_changed)
         self._range_end.valueChanged.connect(self._range_changed)
         self._motion_scan_button.clicked.connect(self._start_motion_scan)
@@ -1383,20 +1389,6 @@ class MainWindow(QMainWindow):
         self._refresh_video_list()
         self._switch_to_video(path, video_id)
 
-    def _set_video_clock(
-        self, video_id: str, offset_seconds: float, certainty: InformationCertainty
-    ) -> None:
-        """Each video keeps its own camera clock difference (edited from its table row)."""
-        if self._background_work_running():
-            self._show_error("작업 중에는 시각 오차를 바꿀 수 없습니다.")
-            return
-        self._link_drafts[video_id] = replace(
-            self._link_for(video_id),
-            clock_offset_seconds=offset_seconds,
-            clock_certainty=certainty,
-        )
-        self._case_inputs_changed()
-
     def _remove_video(self, video_id: str) -> None:
         if self._background_work_running():
             self._show_error("작업 중에는 영상을 뺄 수 없습니다.")
@@ -1483,8 +1475,6 @@ class MainWindow(QMainWindow):
                     file_name=path.name if path is not None else None,
                     camera_location=link.camera_location,
                     duration_seconds=self._video_durations.get(video_id),
-                    clock_certainty=link.clock_certainty,
-                    clock_offset_seconds=link.clock_offset_seconds,
                     analysis_status=status,
                     analyzed=analyzed,
                 )
@@ -2090,14 +2080,12 @@ class MainWindow(QMainWindow):
             widget.setEnabled(enabled)
 
     def _refresh_attention(self) -> None:
-        """Videos that still need a file or a checked clock, shown at the bottom left."""
+        """Videos that still need their file linked again, shown at the bottom left."""
         items = []
         for video_id, path in self._case_videos.items():
             name = path.name if path is not None else self._camera_name(video_id)
             if path is None:
                 items.append(f"{name} 파일 연결 필요")
-            elif self._link_for(video_id).clock_certainty is InformationCertainty.UNKNOWN:
-                items.append(f"{name} 기준 시각 미확인")
         self._attention_label.setVisible(bool(items))
         if not items:
             return
@@ -2141,7 +2129,6 @@ class MainWindow(QMainWindow):
     def _analysis_choice_changed(self) -> None:
         mode = self._current_mode()
         if mode is not self._last_mode:
-            self._external_vision_confirm.setChecked(False)
             self._last_mode = mode
         self._update_external_controls()
         self._apply_ui_zoom()
@@ -2175,8 +2162,6 @@ class MainWindow(QMainWindow):
             self._analysis_choice.select(AnalysisMode.LOCAL, model_id)
 
     def _model_changed(self, *_args: object) -> None:
-        if self._current_mode() is AnalysisMode.EXTERNAL:
-            self._external_vision_confirm.setChecked(False)
         self._inputs_changed()
 
     def _external_credential_changed(self, *_args: object) -> None:
@@ -2189,7 +2174,6 @@ class MainWindow(QMainWindow):
         for widget in (
             self._external_model_edit,
             self._external_api_key_edit,
-            self._external_vision_confirm,
         ):
             form.setRowVisible(widget, external)
         self._refresh_next_action()
@@ -2197,7 +2181,6 @@ class MainWindow(QMainWindow):
         for widget in (
             self._external_model_edit,
             self._external_api_key_edit,
-            self._external_vision_confirm,
         ):
             widget.setEnabled(editable)
 
@@ -2225,7 +2208,9 @@ class MainWindow(QMainWindow):
         return None
 
     def _external_vision_confirmed(self) -> bool:
-        return self._external_vision_confirm.isChecked() or (
+        """Approving the transfer (the plan lists the photos sent to this AI and their times)
+        is the user's confirmation that the external AI takes images."""
+        return self._session.state is WorkflowState.APPROVED or (
             os.environ.get("VIDEO_AGENT_EXTERNAL_MODEL_SUPPORTS_VISION", "").strip().lower()
             in {"1", "true", "yes", "on"}
         )
@@ -2433,12 +2418,6 @@ class MainWindow(QMainWindow):
                 self._show_error(
                     "이 컴퓨터에 AI 분석 프로그램이 없습니다. 담당자에게 설치를 요청하세요."
                 )
-            return
-        if mode is AnalysisMode.EXTERNAL and not self._external_vision_confirmed():
-            self._show_error(
-                "이 외부 AI가 사진을 읽을 수 있는지 확인한 뒤 "
-                "'사진 입력' 항목을 체크해 주세요."
-            )
             return
         if not self._sync_motion_selection():
             return
@@ -2724,7 +2703,6 @@ class MainWindow(QMainWindow):
             self._model_refresh_button,
             self._external_model_edit,
             self._external_api_key_edit,
-            self._external_vision_confirm,
             self._range_start,
             self._range_end,
             self._clarification_edit,
@@ -2868,7 +2846,7 @@ class MainWindow(QMainWindow):
         self._next_step_button.setEnabled(next_exists)
         self._next_step_button.setVisible(next_exists)
         self._next_step_button.setText(
-            self.STEP_TITLES[index + 1] if next_exists else "다음"
+            f"다음: {self.STEP_TITLES[index + 1]}" if next_exists else "다음"
         )
         self._step_navigation.adjustSize()
         self._refresh_review_empty_state()
@@ -2987,11 +2965,7 @@ class MainWindow(QMainWindow):
         )
         can_run = self._session.state is WorkflowState.APPROVED
         if self._current_mode() is AnalysisMode.EXTERNAL:
-            can_run = (
-                can_run
-                and self._external_api_key_value() is not None
-                and self._external_vision_confirmed()
-            )
+            can_run = can_run and self._external_api_key_value() is not None
         self._run_button.setEnabled(can_run)
         self._refresh_next_action()
 
@@ -3139,6 +3113,7 @@ class MainWindow(QMainWindow):
         self._mode_dot.setPixmap(theme.dot_pixmap(dot_color, 8))
         self._mode_banner.setToolTip(detail)
         self._mode_banner.setAccessibleDescription(detail)
+        self._status_row.setVisible(bool(text))
 
     def _set_result_banner(self, origin: ResultOrigin, model_id: str | None) -> None:
         if origin is ResultOrigin.SAMPLE:
@@ -3220,10 +3195,11 @@ class MainWindow(QMainWindow):
                     f"{model_id}: Ollama를 거쳐 외부 서버에서 실행되는 모델입니다.\n{detail}",
                 )
             else:
+                # Ready on this computer is the normal case: no line (the choice is in the plan).
                 self._show_status(
                     "local",
-                    f"{self._analysis_choice.currentText()} · 이 컴퓨터에서 처리",
-                    f"{model_id}\n{detail}",
+                    "",
+                    f"{self._analysis_choice.currentText()} · {model_id}\n{detail}",
                 )
         else:
             key_status = (

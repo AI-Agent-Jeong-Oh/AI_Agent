@@ -115,18 +115,13 @@ class CaseVideoListTests(unittest.TestCase):
 
         def buttons(video_id: str) -> list[QPushButton]:
             row = next(i for i, entry in enumerate(card.entries) if entry.video_id == video_id)
-            return card.list.cellWidget(row, 3).findChildren(QPushButton)
+            return card.list.cellWidget(row, 2).findChildren(QPushButton)
 
-        pencil, remove = buttons(build_video_id(self.cam_b))
-        self.assertTrue(pencil.isEnabled())
+        (remove,) = buttons(build_video_id(self.cam_b))
         self.assertTrue(remove.isEnabled())
-        current_pencil, current_remove = buttons(build_video_id(self.cam_a))
-        self.assertTrue(current_pencil.isEnabled())
+        (current_remove,) = buttons(build_video_id(self.cam_a))
         self.assertFalse(current_remove.isEnabled())  # the open video cannot be removed
 
-        pencil.click()
-        self.assertTrue(card._clock_editor.isVisible())
-        card._clock_editor.close()
         remove.click()
         self.assertEqual([entry.video_id for entry in card.entries], [build_video_id(self.cam_a)])
 
@@ -167,32 +162,15 @@ class CaseVideoListTests(unittest.TestCase):
 
         self.assertEqual(self.window._video_id, build_video_id(self.cam_a))
 
-    def test_each_video_row_edits_its_own_clock_difference(self) -> None:
+    def test_video_table_has_no_clock_column_or_clock_editing(self) -> None:
         self.add(self.cam_a, self.cam_b)
         card = self.window._video_list
-        a, b = build_video_id(self.cam_a), build_video_id(self.cam_b)
-        # The pencil on a row opens the editor for that video, even if it is not open.
-        card._edit_clock(next(e for e in card.entries if e.video_id == b), card)
-        card._clock_editor.offset.setValue(-2.0)
-        card._clock_editor.certainty.setCurrentIndex(
-            card._clock_editor.certainty.findData(InformationCertainty.ESTIMATED)
-        )
-        card._clock_editor._apply()
-        self.window._set_video_clock(a, 3.0, InformationCertainty.CONFIRMED)
-
-        entries = {entry.video_id: entry for entry in card.entries}
-        self.assertEqual(entries[a].clock_offset_seconds, 3.0)
-        self.assertEqual(entries[b].clock_offset_seconds, -2.0)
-        self.assertEqual(entries[b].clock_certainty, InformationCertainty.ESTIMATED)
-        row = next(r for r in range(card.list.rowCount()) if card.list.item(r, 0).data(VIDEO_ID_ROLE) == b)
-        self.assertEqual(card.list.item(row, 1).text(), "추정 · 오차 -2.0초")
-        offsets = {
-            link.video_id: link.clock_offset_seconds
-            for link in self.window._case_from_panel(1).video_links
-        }
-        self.assertEqual(
-            offsets, {build_video_id(self.cam_a): 3.0, build_video_id(self.cam_b): -2.0}
-        )
+        headers = [card.list.horizontalHeaderItem(c).text() for c in range(card.list.columnCount())]
+        self.assertEqual(headers, ["영상", "분석 상태", ""])
+        self.assertFalse(hasattr(card, "_clock_editor"))
+        self.assertFalse(hasattr(self.window, "_set_video_clock"))
+        # A new video needs nothing more at the bottom line.
+        self.assertTrue(self.window._attention_label.isHidden())
 
     def test_camera_location_is_not_asked_but_an_old_one_is_kept(self) -> None:
         self.assertFalse(hasattr(self.window._case_panel, "camera_location_edit"))
@@ -202,12 +180,10 @@ class CaseVideoListTests(unittest.TestCase):
             self.window._case_record,
             video_links=(CaseVideoLink(video_id=video_id, camera_location="문앞 CCTV"),),
         )
-        self.window._set_video_clock(video_id, 1.0, InformationCertainty.CONFIRMED)
         self.assertEqual(self.window._link_for(video_id).camera_location, "문앞 CCTV")
 
     def test_saved_case_links_all_videos_and_relinks_the_same_file_only(self) -> None:
         self.add(self.cam_a, self.cam_b)
-        self.window._set_video_clock(build_video_id(self.cam_a), 3.0, InformationCertainty.CONFIRMED)
         self.window._case_panel.title_edit.setText("문 앞 택배 이동")
         self.window._save_case()
         saved = self.window._case_record
@@ -220,9 +196,6 @@ class CaseVideoListTests(unittest.TestCase):
         reopened._case_panel.set_saved_cases((saved,), saved.case_id)
         reopened._load_case()
         self.assertEqual([entry.file_name for entry in self.entries(reopened)], [None, None])
-        # Each row shows its saved clock difference even before the file is linked again.
-        offsets = {entry.video_id: entry.clock_offset_seconds for entry in self.entries(reopened)}
-        self.assertEqual(offsets[build_video_id(self.cam_a)], 3.0)
         self.assertEqual(
             reopened._video_list.summary_text(), "영상 2건 · 파일 연결 필요 2건"
         )
@@ -242,7 +215,6 @@ class CaseVideoListTests(unittest.TestCase):
             reopened._relink_video(build_video_id(self.cam_a))
         self.assertEqual(reopened._case_videos[build_video_id(self.cam_a)], self.cam_a)
         self.assertEqual(reopened._video_id, build_video_id(self.cam_a))
-        self.assertEqual(reopened._link_for(build_video_id(self.cam_a)).clock_offset_seconds, 3.0)
 
     def test_removing_a_video_drops_its_link_but_not_the_open_one(self) -> None:
         self.add(self.cam_a, self.cam_b)
@@ -336,10 +308,8 @@ class CaseVideoListTests(unittest.TestCase):
 
         self.add(self.cam_a, self.cam_b)
         self.assertEqual(window._video_stack.currentIndex(), 1)
-        # New videos have no checked clock yet: listed at the bottom until someone checks it.
-        self.assertFalse(window._attention_label.isHidden())
-        self.assertIn("확인 필요 2건", window._attention_label.text())
-        self.assertIn("기준 시각 미확인", window._attention_label.toolTip())
+        # Linked videos need nothing more (no camera clock check).
+        self.assertTrue(window._attention_label.isHidden())
 
         window._case_panel.title_edit.setText("문 앞 택배 이동")
         window._save_case()
@@ -510,9 +480,9 @@ class CaseVideoListTests(unittest.TestCase):
         self.window._show_step(1)
 
         self.assertTrue(card.add_button.isHidden())
-        # Clock column and the row buttons (edit, link, remove) belong to step ① only.
-        self.assertTrue(card.list.isColumnHidden(1))
-        self.assertTrue(card.list.isColumnHidden(3))
+        # The row buttons (link, remove) belong to step ① only.
+        self.assertFalse(card.list.isColumnHidden(1))
+        self.assertTrue(card.list.isColumnHidden(2))
         self.select(build_video_id(self.cam_b))
         self.assertEqual(self.window._video_id, build_video_id(self.cam_b))
 
@@ -520,7 +490,7 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertTrue(card.add_button.isHidden())
         self.window._show_step(0)
         self.assertFalse(card.add_button.isHidden())
-        self.assertFalse(card.list.isColumnHidden(3))
+        self.assertFalse(card.list.isColumnHidden(2))
 
     def test_unlinked_video_is_not_relinked_from_later_steps(self) -> None:
         self.add(self.cam_a, self.cam_b)

@@ -556,14 +556,8 @@ def _case_wide_text(case: CaseRecord | None, cameras: Sequence[CameraSummaryInpu
     lines.append("")
     lines.append(f"CCTV 영상 {len(cameras)}대:")
     for camera in cameras:
-        if camera.link is not None:
-            certainty = _CERTAINTY_LABELS[camera.link.clock_certainty]
-            clock = f"카메라 시각 오차 {camera.link.clock_offset_seconds:+.1f}초 ({certainty})"
-        else:
-            clock = "카메라 시각 오차 미입력"
         lines.append(
-            f"- {camera.camera}: {camera.file_name or '파일명 미확인'} "
-            f"(영상 ID {camera.video_id}) · {clock}"
+            f"- {camera.camera}: {camera.file_name or '파일명 미확인'} (영상 ID {camera.video_id})"
         )
     lines.append(_TIMELINE_NOTE)
     lines.append("")

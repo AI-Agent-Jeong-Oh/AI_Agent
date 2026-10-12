@@ -99,7 +99,7 @@ class CaseTypeChooser(QWidget):
 
 
 class SituationTile(QFrame):
-    """One bordered tile: check box, group name and a "추천" tag (as on the demo page)."""
+    """One check: check box, group name and a "추천" tag; a checked one reads bold navy."""
 
     toggled = Signal(bool)
 
@@ -110,7 +110,7 @@ class SituationTile(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         row = QHBoxLayout(self)
-        row.setContentsMargins(12, 6, 12, 6)
+        row.setContentsMargins(0, 4, 8, 4)
         row.setSpacing(8)
         self.check = QCheckBox(SITUATION_LABELS[situation])
         examples = ", ".join(SITUATION_PATTERNS[situation])
@@ -120,8 +120,8 @@ class SituationTile(QFrame):
         self.tag.setObjectName("recommendTag")
         self.tag.setVisible(False)
         row.addWidget(self.check)
-        row.addStretch(1)
         row.addWidget(self.tag)
+        row.addStretch(1)
         self.setToolTip(f"예: {examples}")
         self.check.toggled.connect(self._update_state)
         # Only user clicks count as a choice (not checks set from a recommendation).
@@ -141,8 +141,10 @@ class SituationTile(QFrame):
 
     def _update_state(self, checked: bool) -> None:
         self.setProperty("checked", checked)
-        self.style().unpolish(self)
-        self.style().polish(self)
+        # The check box's own look (bold navy when checked) follows the tile's property.
+        for widget in (self, self.check):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
 
 
 class FocusSection(QWidget):

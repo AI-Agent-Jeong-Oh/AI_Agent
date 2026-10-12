@@ -102,11 +102,11 @@ SURFACE = GRAY_0
 SURFACE_ALT = GRAY_5
 VIDEO_BACKGROUND = "#1b2026"
 NAVY = SECONDARY_80  # police navy, KRDS secondary-80
-# Boxes are square (radius xsmall 2px) with a 2px navy line on top, as on government
-# boards and tables; table headers follow the KRDS data table (secondary-5, bold).
-BOX_ACCENT = SECONDARY_70
-TABLE_HEAD = SECONDARY_5
-TABLE_HEAD_LINE = SECONDARY_10
+# Boxes are thin grey frames (radius 4px) with a title row over a divider, as in work
+# programs; table headers are grey (gray-5, bold). Navy is kept for actions and choices.
+BOX_ACCENT = BORDER
+TABLE_HEAD = GRAY_5
+TABLE_HEAD_LINE = BORDER
 
 SUCCESS = "#267337"  # success-60
 DANGER = "#bd2c0f"  # danger-60
@@ -372,8 +372,8 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QWidget#stepBar {{ background: {SURFACE}; border-bottom: 1px solid {BORDER}; }}
     QLabel#placeholder {{ color: {TEXT_SUB}; border: 1px dashed {GRAY_30};
                           border-radius: {s(2)}px; padding: {s(16)}px; background: {SURFACE}; }}
-    QFrame#runBar {{ background: {SURFACE}; border: 1px solid {BORDER};
-                     border-top: 2px solid {BOX_ACCENT}; border-radius: {s(2)}px; }}
+    QFrame#runBar {{ background: {SURFACE_ALT}; border: 1px solid {BORDER};
+                     border-radius: {s(4)}px; }}
     QLabel#emptyState {{ color: {TEXT_SUB}; padding: {s(8)}px 0; }}
     QLabel#modeBanner {{ background: transparent; border: none; padding: 0;
                          font-size: {s(LABEL_PX)}px; font-weight: 700; }}
@@ -381,15 +381,15 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
 
     QGroupBox {{ font-size: {s(HEADING_PX)}px; font-weight: 700; color: {TEXT};
                  background: {SURFACE}; border: 1px solid {BORDER};
-                 border-top: 2px solid {BOX_ACCENT}; border-radius: {s(2)}px;
+                 border-radius: {s(4)}px;
                  margin-top: 0; padding: {s(40)}px {s(4)}px {s(4)}px {s(4)}px; }}
     QGroupBox::title {{ subcontrol-origin: border; subcontrol-position: top left;
                         left: {s(16)}px; top: {s(12)}px; padding: 0; color: {TEXT}; }}
 
     QPushButton {{ icon-size: {s(16)}px; }}
-    QPushButton {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {GRAY_60};
-                   border-radius: {s(6)}px; padding: {field_pad}px {s(16)}px;
-                   min-height: {field_min}px; }}
+    QPushButton {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {GRAY_30};
+                   border-radius: {s(4)}px; padding: {compact_pad}px {s(12)}px;
+                   min-height: {compact_min}px; font-size: {s(LABEL_PX)}px; }}
     QPushButton:hover {{ background: {GRAY_5}; }}
     QPushButton:pressed {{ background: {GRAY_10}; }}
     QPushButton:checked {{ background: {PRIMARY_SOFT}; color: {PRIMARY};
@@ -401,6 +401,14 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QPushButton[variant="primary"]:pressed {{ background: {PRIMARY_DARK}; border-color: {PRIMARY_DARK}; }}
     QPushButton[variant="primary"]:disabled {{ background: {GRAY_20}; border-color: {GRAY_30};
                                                color: {GRAY_50}; }}
+    QPushButton#stepNav {{ border: none; border-radius: {s(8)}px; background: {GRAY_10};
+        color: {TEXT}; font-weight: 700; font-size: {s(BODY_PX)}px;
+        padding: {field_pad}px {s(18)}px; min-height: {field_min}px; }}
+    QPushButton#stepNav:hover {{ background: {GRAY_20}; }}
+    QPushButton#stepNav[nav="next"] {{ background: {SECONDARY_10}; color: {PRIMARY}; }}
+    QPushButton#stepNav[nav="next"]:hover {{ background: {SECONDARY_20}; }}
+    QPushButton#stepNav[variant="primary"] {{ background: {PRIMARY_FILL}; color: {GRAY_0}; }}
+    QPushButton#stepNav[variant="primary"]:hover {{ background: {PRIMARY_HOVER}; }}
     QPushButton#stepButton {{ border: none; background: transparent; color: {TEXT_SUB};
                               padding: {s(4)}px {s(4)}px {s(4)}px {s(26)}px; min-height: {s(28)}px;
                               font-size: {s(CONTENT_PX)}px; font-weight: 400; }}
@@ -428,7 +436,7 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
         color: {PRIMARY}; font-size: {s(LABEL_PX)}px; padding: 0 {s(4)}px; min-height: 0; }}
     QGroupBox[card="true"] {{ padding: 0; }}
     QGroupBox[card="true"]::title {{ color: transparent; padding: 0; }}
-    QWidget#cardHeader {{ background: transparent; }}
+    QWidget#cardHeader {{ background: transparent; min-height: {s(40)}px; }}
     QLabel#cardTitle {{ font-size: {s(HEADING_PX)}px; font-weight: 700; color: {TEXT}; }}
     QLabel#cardAside {{ font-size: {s(LABEL_PX)}px; color: {TEXT_SUB}; }}
     QHeaderView::section {{ background: {TABLE_HEAD}; color: {TEXT_BOLDER}; border: none;
@@ -438,12 +446,12 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
         selection-background-color: {PRIMARY_SOFT}; selection-color: {TEXT};
         gridline-color: {LINE}; }}
     QTableWidget::item {{ padding: 0 {s(8)}px; border-bottom: 1px solid {LINE}; }}
-    QTableWidget#videoList {{ border: none; border-top: 1px solid {LINE}; border-radius: 0;
+    QTableWidget#videoList {{ border: none; border-radius: 0;
         background: {SURFACE}; selection-background-color: {PRIMARY_SOFT}; }}
-    QTableWidget#videoList::item {{ border-bottom: 1px solid {LINE}; padding: 0; }}
-    QTableWidget#videoList QHeaderView::section {{ background: {TABLE_HEAD}; color: {TEXT_BOLDER};
-        font-weight: 700; border: none; border-bottom: 1px solid {TABLE_HEAD_LINE};
-        padding: {s(6)}px {s(12)}px; }}
+    QTableWidget#videoList::item {{ border: none; padding: 0; }}
+    QTableWidget#videoList QHeaderView::section {{ background: {SURFACE}; color: {TEXT_SUB};
+        font-weight: 400; border: none; border-bottom: 1px solid {LINE};
+        padding: {s(4)}px {s(12)}px {s(6)}px {s(12)}px; font-size: {s(LABEL_PX)}px; }}
     QPushButton#rowAction {{ border: none; background: transparent; min-height: 0;
         padding: {s(6)}px; border-radius: {s(4)}px; }}
     QPushButton#rowAction:hover {{ background: {GRAY_10}; }}
@@ -526,6 +534,12 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
         min-height: {compact_min}px; font-size: {s(LABEL_PX)}px; }}
     QComboBox::drop-down {{ border: none; width: {s(28)}px; subcontrol-origin: padding;
                             subcontrol-position: center right; }}
+    QComboBox#speedCombo {{ border: 1px solid {GRAY_30}; border-radius: {s(4)}px;
+        padding: {s(1)}px {s(8)}px; min-height: {s(20)}px; font-size: {s(CAPTION_PX)}px;
+        color: {TEXT_SUB}; }}
+    QComboBox#speedCombo:hover {{ border-color: {GRAY_50}; color: {TEXT}; }}
+    QComboBox#speedCombo::drop-down {{ width: 0; }}
+    QComboBox#speedCombo::down-arrow {{ image: none; width: 0; height: 0; }}
     QComboBox::down-arrow {{ image: url("{down}"); width: {s(12)}px; height: {s(12)}px; }}
     QAbstractSpinBox::up-button {{ subcontrol-origin: border;
         subcontrol-position: top right; width: {s(20)}px; border: none; }}
@@ -549,9 +563,8 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QMenu::item:selected {{ background: {PRIMARY_SOFT}; color: {PRIMARY}; }}
     QMenu::item:disabled {{ color: {GRAY_50}; }}
     QMenu::separator {{ height: 1px; background: {LINE}; margin: {s(4)}px {s(8)}px; }}
-    QFrame#situationTile {{ background: {SURFACE}; border: 1px solid {GRAY_30};
-        border-radius: {s(6)}px; }}
-    QFrame#situationTile[checked="true"] {{ background: {PRIMARY_SOFT}; border-color: {PRIMARY_FILL}; }}
+    QFrame#situationTile {{ background: transparent; border: none; }}
+    QFrame#situationTile[checked="true"] QCheckBox {{ color: {PRIMARY}; font-weight: 700; }}
     QLabel#recommendTag {{ font-size: {s(CAPTION_PX)}px; color: {TEXT_SUB}; }}
     QFrame#datePopover {{ background: {SURFACE}; border: 1px solid {GRAY_30}; }}
     QLabel#popoverTitle {{ font-size: {s(HEADING_PX)}px; font-weight: 700; color: {TEXT}; }}
@@ -617,7 +630,7 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
                                   width: {knob}px; margin: -{knob_margin}px 0;
                                   border-radius: {(knob + 4) // 2}px; }}
 
-    QStatusBar {{ background: {SURFACE}; color: transparent; border-top: 1px solid {BORDER};
+    QStatusBar {{ background: {SURFACE_ALT}; color: transparent; border-top: 1px solid {BORDER};
                   min-height: {s(56)}px; }}
     QLabel#statusMessage {{ color: {TEXT_SUB}; padding-left: {s(24)}px; }}
     QStatusBar::item {{ border: none; }}
