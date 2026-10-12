@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 from video_agent.analysis.vision import build_prompt
 from video_agent.contracts import (
+    AnalysisMode,
     CaseVideoLink,
     InformationCertainty,
     JobStatus,
@@ -135,6 +136,8 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertEqual(
             self.window._video_list.summary_text(), "영상 2건"
         )
+        self.assertFalse(self.window._batch_button.isHidden())
+        self.assertTrue(self.window._batch_button.isEnabled())
 
     def test_selecting_another_video_opens_it(self) -> None:
         self.add(self.cam_a, self.cam_b)
@@ -247,6 +250,40 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertEqual(self.status_of(self.cam_b), "분석 완료(테스트 응답) · 후보 3")
         self.assertEqual(
             self.window._video_list.summary_text(), "영상 2건 · 분석 1건"
+        )
+
+    def test_person_comparison_enables_only_for_real_candidates_from_two_videos(self) -> None:
+        self.add(self.cam_a, self.cam_b)
+        self.assertFalse(self.window._person_compare_button.isEnabled())
+        model_id = "vision-model"
+        self.window._runtime_inventory = RuntimeInventory(
+            "/opt/homebrew/bin/ollama",
+            (model_id,),
+            None,
+            None,
+            (model_id,),
+        )
+        self.window._refresh_analysis_choices()
+        self.window._select_mode(AnalysisMode.LOCAL)
+        self.window._set_model_id(model_id)
+        for number, path in enumerate((self.cam_a, self.cam_b), start=1):
+            video_id = build_video_id(path)
+            base = review_job(ResultOrigin.REAL_MODEL)
+            job = replace(
+                base,
+                job_id=f"job-real-{number}",
+                video_id=video_id,
+                segments=tuple(replace(item, video_id=video_id) for item in base.segments),
+            )
+            self.window._result_store.save(job)
+        self.window._refresh_video_statuses()
+        self.window._refresh_video_list()
+
+        self.assertFalse(self.window._person_compare_button.isHidden())
+        self.assertTrue(self.window._person_compare_button.isEnabled())
+        self.assertEqual(
+            {item.video_id for item in self.window._person_comparison_candidates()},
+            {build_video_id(self.cam_a), build_video_id(self.cam_b)},
         )
 
     def test_partial_and_sample_results_are_named(self) -> None:

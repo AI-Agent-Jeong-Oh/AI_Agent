@@ -278,8 +278,11 @@ class UiWorkflowTests(unittest.TestCase):
         )
         self.window._select_mode(AnalysisMode.LOCAL)
         self.window._set_model_id("qwen3-vl:8b-instruct")
+        self.window._update_selected_model_label()
+        self.assertEqual(self.window._selected_model_label.text(), "qwen3-vl:8b-instruct")
         banner = self.window._mode_banner
-        # Plain words on the line; program and model names only in the tooltip.
+        # No status line when local analysis is simply ready; the explicit model ID is
+        # shown in the setting row, and choice and model are in the line's tooltip.
         self.assertEqual(banner.text(), "")
         self.assertTrue(self.window._status_row.isHidden())
         self.assertIn("정확한 분석", banner.toolTip())

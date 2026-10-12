@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from video_agent.contracts import AnalysisJob, AnalysisMode, CaseRecord, JobStatus, ReviewSession
+from video_agent.identity.comparison import PersonComparisonReport
 from video_agent.storage.paths import AppPaths
 
 
@@ -160,6 +161,43 @@ class ReviewStore:
         if session.job_id != job_id:
             raise ValueError("stored review file belongs to a different job")
         return session
+
+
+class PersonComparisonStore:
+    """Case-level cross-video appearance reports, separate from event analysis jobs."""
+
+    def __init__(self, paths: AppPaths) -> None:
+        self._directory = paths.comparisons_dir
+
+    def save(self, report: PersonComparisonReport) -> Path:
+        if not _SAFE_JOB_ID.fullmatch(report.report_id):
+            raise ValueError("comparison report ID contains unsafe path characters")
+        path = self._directory / f"{report.report_id}.json"
+        _atomic_json_write(path, report.to_dict())
+        return path
+
+    def load(self, report_id: str) -> PersonComparisonReport:
+        if not _SAFE_JOB_ID.fullmatch(report_id):
+            raise ValueError("comparison report ID contains unsafe path characters")
+        return PersonComparisonReport.from_dict(
+            _read_json_object(self._directory / f"{report_id}.json")
+        )
+
+    def list_for_case(self, case_id: str) -> tuple[PersonComparisonReport, ...]:
+        if not self._directory.exists():
+            return ()
+        reports = []
+        for path in self._directory.glob("*.json"):
+            if not path.is_file():
+                continue
+            try:
+                report = PersonComparisonReport.from_dict(_read_json_object(path))
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if report.case_id == case_id:
+                reports.append((path.stat().st_mtime, report))
+        reports.sort(key=lambda item: (item[0], item[1].report_id), reverse=True)
+        return tuple(item[1] for item in reports)
 
 
 def _read_json_object(path: Path) -> dict[str, Any]:

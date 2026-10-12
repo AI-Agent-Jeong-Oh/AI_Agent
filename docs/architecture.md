@@ -45,6 +45,8 @@
 | `video/process.py` | shell 없는 subprocess, 취소·timeout·프로세스 종료 | 승재 |
 | `analysis/sample.py` | 실제 장면을 보지 않는 샘플 후보 | 승재 |
 | `analysis/vision.py` | 프레임 추출, VLM prompt, 엄격한 출력 검증 | 승재 |
+| `analysis/batch.py`, `ui/batch_dialog.py` | 사건의 여러 로컬 영상을 계획 준비와 승인 뒤 순차 분석 | 승재 |
+| `identity/comparison.py`, `ui/person_comparison_dialog.py` | 영상별 사용자 선택 후보의 근거 프레임을 쌍별로 비교하고 한계가 포함된 검토 후보 생성 | 승재 |
 | `models/` | 설정 검증, 로컬/외부 HTTP 어댑터, 런타임 조사 | 승재 |
 | `storage/` | 사용자 설정·결과·앱 소유 캐시 | 승재 |
 | `ui/case_panel.py` | 사건 관리 정보와 분석 단서의 최소 입력·선택 UI | 승재 연결 / 팀원 UI 개선 |
@@ -86,6 +88,12 @@ completed 등 ─► expansion_proposed (자동 실행 없음)
 
 UI 취소는 active job을 먼저 해제한 뒤 worker에 cancel event를 보냅니다. 이후 같은 job ID의 결과 signal은 `AgentSession.accept_result()`에서 거부하므로 늦은 결과가 화면을 덮거나 저장되지 않습니다. HTTP 요청을 중간에 확실히 중단할 수 있다고 가정하지 않으므로 worker가 응답 또는 timeout으로 끝날 때까지 입력과 새 실행을 계속 잠급니다.
 
+## 여러 영상 일괄 분석과 인물 후보 비교
+
+`BatchPreparationWorker`는 파일이 연결된 임의 개수의 영상을 한 번에 메모리에 디코딩하지 않고 순서대로 FFprobe와 FFmpeg 움직임 탐색에 보냅니다. 영상마다 상위 3개 제안으로 별도 `AgentSession`과 `AnalysisPlan`을 만들지만 승인하거나 모델을 호출하지 않습니다. UI가 모든 영상의 모델·구간·프레임 수를 표시한 다음 사용자 승인으로 `BatchExecutionWorker`가 각 계획을 순차 실행합니다. 한 영상의 실패는 다음 영상 계획을 시연 결과로 바꾸지 않으며 다른 대기 항목은 계속할 수 있습니다. 외부 모드는 영상별 전송 승인 계약 때문에 이 대기열에서 제외합니다.
+
+인물 비교는 이벤트 분석과 분리합니다. 각 영상의 최신 `origin=real_model` 결과에서 사용자가 후보 하나를 고르면 `PersonComparisonAnalyzer`가 그 후보의 실제 근거 PTS 첫·마지막 시각(없으면 확인 범위 중간)을 영상당 최대 2장, 최대 1280px로 추출합니다. 선택한 영상의 모든 쌍을 로컬 VLM으로 순차 비교하며 쌍당 120초, 전체 1800초 한도를 공유합니다. worker는 추출 프레임을 일회성 UI signal로 전달해 결과 행을 선택할 때 A/B 사진을 표시하지만, 파일 경로를 보고서 JSON에는 저장하지 않습니다. 현재 얼굴 검출기·인물 추적기·재식별 임베딩·YOLO는 없고 전체 프레임을 비교하므로, 0~100 외형 유사도는 보정된 신원 일치 확률이 아닌 검토 참고값입니다. 결과는 사람 검토 대상을 좁히는 용도일 뿐 신원이나 동일 범죄자를 판정하지 않습니다.
+
 ## 모델 연결
 
 - `sample`: 모델/프레임 해석 없음.
@@ -121,6 +129,7 @@ macOS 기본 위치는 다음과 같습니다.
 
 - 설정·결과: `~/Library/Application Support/VideoAnalysisAgent/`
 - 사건 정보: `~/Library/Application Support/VideoAnalysisAgent/cases/`
+- 영상 간 인물 비교 보고서: `~/Library/Application Support/VideoAnalysisAgent/person_comparisons/`
 - 추출 프레임 캐시: `~/Library/Caches/VideoAnalysisAgent/`
 
 설정에는 API key 환경 변수 이름만 저장하고 key 값은 저장·로그하지 않습니다. 결과에는 원본 경로가 없으며 영상 ID, 목적·범위, 모델 설정, 요청/실제 입력 시각·해상도, 공급자 요청 수·시간 지표와 출처를 저장합니다. 캐시 정리는 root marker와 job marker가 모두 있는 앱 생성 디렉터리만 대상으로 합니다.
