@@ -112,7 +112,7 @@ from video_agent.review.summary import (
     build_summary,
 )
 from video_agent.ui.case_overview import CaseCandidateOverview, OverviewRow
-from video_agent.ui.review_panel import JUDGEMENT_LABELS, CandidateReviewPanel
+from video_agent.ui.review_panel import JUDGEMENT_LABELS, SHORTCUT_HELP, CandidateReviewPanel
 from video_agent.ui.summary_dialog import ResultSummaryDialog
 from video_agent.ui.wrap_label import WrapLabel
 from video_agent.video.files import (
@@ -222,8 +222,8 @@ class MainWindow(QMainWindow):
     )
     MOTION_EMPTY_NO_VIDEO = "등록된 CCTV 영상이 없습니다."
     MOTION_EMPTY_NOT_SCANNED = ""
-    MOTION_EMPTY_SCANNING = "움직임 후보를 찾는 중입니다."
-    MOTION_EMPTY_NONE_FOUND = "현재 분석 범위에서 발견된 움직임 후보가 없습니다."
+    MOTION_EMPTY_SCANNING = "움직임 구간을 찾는 중입니다."
+    MOTION_EMPTY_NONE_FOUND = "현재 분석 범위에서 발견된 움직임 구간이 없습니다."
     OPENAI_PROVIDER_ID = "openai"
     OPENAI_CHAT_COMPLETIONS_ENDPOINT = "https://api.openai.com/v1/chat/completions"
     OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
@@ -449,6 +449,10 @@ class MainWindow(QMainWindow):
         for button in (self._prev_step_button, self._next_step_button):
             # Keep each button at its text width when the other one is hidden.
             button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        # [사건 저장] sits here in step ①, after the form is filled (not at the card top).
+        save = self._case_panel.save_button
+        save.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        row.addWidget(save)
         row.addWidget(self._prev_step_button)
         row.addWidget(self._next_step_button)
         # QStatusBar paints messages 6px from its left edge; its own text is transparent in
@@ -675,12 +679,12 @@ class MainWindow(QMainWindow):
         plan_layout = QVBoxLayout(self._plan_group.body)
         plan_layout.setContentsMargins(12, 12, 12, 12)
         self._motion_help = WrapLabel(self.MOTION_HELP_GENERAL)
-        self._motion_note = WrapLabel("움직임 후보는 AI의 행동 판정 결과가 아닙니다.")
+        self._motion_note = WrapLabel("움직임 구간은 AI의 행동 판정 결과가 아닙니다.")
         self._motion_note.setObjectName("subsectionHelp")
         # Shown instead of the empty candidate lists (see _refresh_motion_empty_state).
         self._motion_empty_label = WrapLabel("")
         self._motion_empty_label.setObjectName("emptyState")
-        self._motion_scan_button = QPushButton("움직임 후보 찾기")
+        self._motion_scan_button = QPushButton("움직임 구간 찾기")
         self._motion_list = QListWidget()
         self._motion_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         # Rows drawn in columns under a header, like a table (see motion_table).
@@ -705,7 +709,7 @@ class MainWindow(QMainWindow):
         self._plan_view.setVisible(False)
         self._make_plan_button = QPushButton("분석 계획 만들기")
         self._make_plan_button.setToolTip(
-            "체크한 움직임 후보와 입력한 목적·구간으로 계획을 만듭니다. 추가 질문이 있으면 먼저 표시합니다."
+            "체크한 움직임 구간과 입력한 목적·구간으로 계획을 만듭니다. 추가 질문이 있으면 먼저 표시합니다."
         )
         # What to look at first is part of the plan, as on the demo page; the case type
         # chosen in step ① marks its recommendations. Three columns fit the wide card.
@@ -728,7 +732,7 @@ class MainWindow(QMainWindow):
         self._motion_info_button = QPushButton("안내")
         self._motion_info_button.setObjectName("infoMark")
         theme.set_icon(self._motion_info_button, "info", theme.PRIMARY)
-        self._motion_info_button.setAccessibleName("움직임 후보 안내")
+        self._motion_info_button.setAccessibleName("움직임 구간 안내")
         self._motion_info_button.clicked.connect(self._show_motion_help)
         range_part.add_header_widget(self._motion_info_button)
         range_line = QHBoxLayout()
@@ -762,7 +766,7 @@ class MainWindow(QMainWindow):
                 divider.setObjectName("sectionDivider")
                 plan_layout.addWidget(divider)
             plan_layout.addWidget(part)
-            part.open_requested.connect(lambda value=number: self._open_plan_part(value))
+            part.open_requested.connect(lambda value=number: self._toggle_plan_part(value))
         self._open_plan_part(0)
         self._plan_was_ready = False
         layout.addWidget(self._plan_group, 1)
@@ -823,7 +827,8 @@ class MainWindow(QMainWindow):
         help_text = (
             "후보를 선택하면 맥락 확인을 위해 원본 영상이 확인용 범위 시작의 최대 1초 전으로 이동하고, "
             "표시된 근거 범위를 지나 계속 재생합니다. "
-            "입력한 분석 구간 수와 결과 후보 수는 같지 않을 수 있으며, 결과는 0개·1개·여러 개이거나 중복 정리로 합쳐질 수 있습니다."
+            "입력한 분석 구간 수와 결과 후보 수는 같지 않을 수 있으며, 결과는 0개·1개·여러 개이거나 중복 정리로 합쳐질 수 있습니다.\n"
+            + SHORTCUT_HELP
         )
         # Kept as a tooltip (like the demo's info marks) so the review step fits one screen.
         help_label = info_mark(help_text, "후보 재생과 결과 수 안내", "재생 안내")
@@ -948,6 +953,7 @@ class MainWindow(QMainWindow):
         self._timeline.sliderPressed.connect(self._slider_pressed)
         self._timeline.mark_clicked.connect(self._timeline_mark_clicked)
         self._review_panel.selection_changed.connect(self._refresh_timeline_marks)
+        self._review_panel.play_toggle_requested.connect(self._toggle_playback)
         self._timeline.sliderReleased.connect(self._slider_released)
         self._purpose_edit.textChanged.connect(self._purpose_changed)
         self._analysis_choice.choice_changed.connect(self._analysis_choice_changed)
@@ -1779,7 +1785,7 @@ class MainWindow(QMainWindow):
             self._last_progress_message = "반복 변화 찾는 중"
         else:
             self._motion_help.setText(self.MOTION_HELP_GENERAL)
-            self._last_progress_message = "움직임 후보 찾는 중"
+            self._last_progress_message = "움직임 구간 찾는 중"
         self._motion_scan_state = "scanning"
         self._refresh_motion_empty_state()
         self._refresh_elapsed_status()
@@ -1817,13 +1823,13 @@ class MainWindow(QMainWindow):
             profile_text = (
                 "국소 반복 변화 후보"
                 if result.profile is MotionScanProfile.REPEATED_SUBTLE
-                else "큰 움직임 후보"
+                else "큰 움직임 구간"
             )
             message = (
                 f"{profile_text} {len(result.proposals)}개, 상위 {min(3, len(result.proposals))}개 선택"
             )
         else:
-            message = "움직임 후보 없음"
+            message = "움직임 구간 없음"
         self._motion_list.blockSignals(False)
         self._motion_scan_state = "found" if result.proposals else "none_found"
         self._refresh_motion_selection_display()
@@ -1882,7 +1888,7 @@ class MainWindow(QMainWindow):
             changed_item.setCheckState(Qt.CheckState.Unchecked)
             self._motion_list.blockSignals(False)
             self.statusBar().showMessage(
-                "한 계획에는 움직임 후보를 최대 3개까지 선택할 수 있습니다.",
+                "한 계획에는 움직임 구간을 최대 3개까지 선택할 수 있습니다.",
                 5000,
             )
         self._refresh_motion_selection_display()
@@ -1936,13 +1942,13 @@ class MainWindow(QMainWindow):
     def _apply_motion_proposal(self, *, announce: bool = True) -> bool:
         proposals = self._checked_motion_proposals()
         if not proposals:
-            self._show_error("먼저 움직임 후보를 선택해 주세요.")
+            self._show_error("먼저 움직임 구간을 선택해 주세요.")
             return False
         if len(proposals) > 3:
-            self._show_error("한 계획에는 움직임 후보를 최대 3개까지 선택할 수 있습니다.")
+            self._show_error("한 계획에는 움직임 구간을 최대 3개까지 선택할 수 있습니다.")
             return False
         if any(proposal.video_id != self._video_id for proposal in proposals):
-            self._show_error("현재 영상과 다른 움직임 후보입니다. 다시 탐색해 주세요.")
+            self._show_error("현재 영상과 다른 움직임 구간입니다. 다시 탐색해 주세요.")
             return False
         proposals = tuple(sorted(proposals, key=lambda item: (item.start_sec, item.end_sec)))
         try:
@@ -1974,7 +1980,7 @@ class MainWindow(QMainWindow):
         self._player.setPosition(min(position_ms, self._duration_ms))
         if announce:
             self.statusBar().showMessage(
-                f"선택한 움직임 후보 {len(proposals)}개와 총 {len(timestamps)}개 원본 시각을 "
+                f"선택한 움직임 구간 {len(proposals)}개와 총 {len(timestamps)}개 원본 시각을 "
                 f"{sampling_strategy.value} 전략으로 적용했습니다. "
                 "새 계획을 만들고 다시 승인해 주세요.",
                 7000,
@@ -2463,7 +2469,7 @@ class MainWindow(QMainWindow):
                 else "최대 변화 시각 중심의 촘촘한 비교"
             )
             sampling = (
-                f"움직임 후보 {len(self._applied_motion_proposals)}개 구간에서 원본 시각 "
+                f"움직임 구간 {len(self._applied_motion_proposals)}개에서 원본 시각 "
                 f"{len(plan.sample_timestamps_sec)}개 ({strategy_text}, "
                 f"최소 {plan.sampling_interval_sec:.3f}초 간격)\n"
                 f"등록된 분석 구간:\n{proposal_ranges}\n"
@@ -2711,7 +2717,7 @@ class MainWindow(QMainWindow):
             self._active_motion_scan_id = None
             self._motion_worker.request_cancel()
             self._cancel_button.setEnabled(False)
-            self._last_progress_message = "움직임 후보 찾기 취소 중"
+            self._last_progress_message = "움직임 구간 찾기 취소 중"
             self._refresh_elapsed_status()
             self.statusBar().showMessage("움직임 탐색을 취소하고 있습니다.", 5000)
             return
@@ -2800,6 +2806,7 @@ class MainWindow(QMainWindow):
         self._step_buttons[index].setChecked(True)
         # Videos are added and linked in step ①; later steps only choose among them.
         self._video_list.set_select_only(index != 0)
+        self._case_panel.save_button.setVisible(index == 0)
         previous_exists = index > 0
         next_exists = index < len(self.STEP_TITLES) - 1
         self._prev_step_button.setEnabled(previous_exists)
@@ -2870,7 +2877,7 @@ class MainWindow(QMainWindow):
 
         if self._applied_motion_proposals:
             found = (
-                f"선택한 움직임 후보 {len(self._applied_motion_proposals)}개 구간"
+                f"선택한 움직임 구간 {len(self._applied_motion_proposals)}개"
                 f"({clock(start)}–{clock(end)})에 프레임을 모아 분석했지만 후보를 찾지 못했습니다."
             )
         elif narrowed:
@@ -2993,6 +3000,13 @@ class MainWindow(QMainWindow):
         for number, part in enumerate(self._plan_parts):
             part.set_open(number == index)
 
+    def _toggle_plan_part(self, index: int) -> None:
+        """Header click: › opens that part (folding the others), ⌄ folds it again."""
+        if self._plan_parts[index].is_open():
+            self._plan_parts[index].set_open(False)
+        else:
+            self._open_plan_part(index)
+
     def _show_motion_help(self) -> None:
         text = "\n".join(
             item
@@ -3003,7 +3017,7 @@ class MainWindow(QMainWindow):
             )
             if item
         )
-        InfoPopover("움직임 후보 안내", text, self._motion_info_button).show_below(
+        InfoPopover("움직임 구간 안내", text, self._motion_info_button).show_below(
             self._motion_info_button
         )
 
@@ -3019,7 +3033,7 @@ class MainWindow(QMainWindow):
         )
         chosen = len(self._checked_motion_proposals())
         if chosen:
-            range_part.set_summary(f"움직임 후보 {chosen}개")
+            range_part.set_summary(f"움직임 구간 {chosen}개")
         else:
             start = format_milliseconds(seconds_to_milliseconds(self._range_start.value()))
             end_value = self._range_end.value()
@@ -3467,6 +3481,9 @@ class MainWindow(QMainWindow):
         return cameras
 
     def _confirm_discard_unsaved_reviews(self, action: str = "닫을까요?") -> bool:
+        # Typing still waiting for its automatic save is saved first; only a save that
+        # failed is left to ask about.
+        self._review_panel.flush_pending()
         unsaved = self._review_panel.unsaved_indexes()
         if not unsaved:
             return True

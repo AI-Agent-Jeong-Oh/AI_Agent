@@ -149,6 +149,16 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertFalse(window._run_button.isEnabled())
         self.assertIsNone(window._session.analysis_approval)
 
+    def test_case_save_button_sits_in_the_bottom_bar_on_step_one(self) -> None:
+        window = self.window
+        save = window._case_panel.save_button
+        self.assertTrue(window._step_navigation.isAncestorOf(save))
+        self.assertFalse(window._case_panel.isAncestorOf(save))
+        window._show_step(0)
+        self.assertFalse(save.isHidden())
+        window._show_step(1)
+        self.assertTrue(save.isHidden())
+
     def test_new_case_name_starts_empty_and_is_needed_to_save(self) -> None:
         window = self.window
         panel = window._case_panel
@@ -328,6 +338,10 @@ class UiWorkflowTests(unittest.TestCase):
         range_part.header.clicked.emit()
         self.assertTrue(range_part.is_open())
         self.assertFalse(find_part.is_open())
+        range_part.header.clicked.emit()  # ⌄ on an open part folds it
+        self.assertFalse(range_part.is_open())
+        range_part.header.clicked.emit()
+        self.assertTrue(range_part.is_open())
         self.assertIn("상황", find_part.summary_label.text())
         self.assertEqual(range_part.summary_label.text(), "")
         self.assertIn("계획 없음", plan_part.summary_label.text())
@@ -428,7 +442,7 @@ class UiWorkflowTests(unittest.TestCase):
             window._motion_help.text(),
             "영상 내 움직임이 큰 구간을 후보로 제안합니다. 최대 3개까지 선택할 수 있습니다.",
         )
-        self.assertEqual(window._motion_note.text(), "움직임 후보는 AI의 행동 판정 결과가 아닙니다.")
+        self.assertEqual(window._motion_note.text(), "움직임 구간은 AI의 행동 판정 결과가 아닙니다.")
         self.assertEqual(window._motion_note.objectName(), "subsectionHelp")
 
     def test_motion_candidates_show_short_empty_states(self) -> None:
@@ -447,7 +461,7 @@ class UiWorkflowTests(unittest.TestCase):
         window._active_motion_scan_id = "scan-empty"
         window._on_motion_scan_result(MotionScanResult(scan_id="scan-empty", proposals=(), **result))
         self.assertEqual(
-            window._motion_empty_label.text(), "현재 분석 범위에서 발견된 움직임 후보가 없습니다."
+            window._motion_empty_label.text(), "현재 분석 범위에서 발견된 움직임 구간이 없습니다."
         )
         self.assertTrue(window._motion_list.isHidden())
 
@@ -1135,7 +1149,7 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertEqual(sum(0.0 <= value < 2.0 for value in plan.sample_timestamps_sec), 4)
         self.assertEqual(sum(3.0 <= value < 5.0 for value in plan.sample_timestamps_sec), 4)
         self.assertEqual(sum(6.0 <= value < 8.0 for value in plan.sample_timestamps_sec), 4)
-        self.assertIn("움직임 후보 3개", self.window._plan_view.toPlainText())
+        self.assertIn("움직임 구간 3개", self.window._plan_view.toPlainText())
         self.assertIn("등록된 분석 구간", self.window._plan_view.toPlainText())
         self.assertIn("1. 0.000~2.000초", self.window._plan_view.toPlainText())
         self.assertIn("2. 3.000~5.000초", self.window._plan_view.toPlainText())
@@ -1252,7 +1266,7 @@ class UiWorkflowTests(unittest.TestCase):
             self.finish_run(0.0, 10.0)
 
         self.assertTrue(self.expansion_shown())
-        self.assertIn("선택한 움직임 후보 1개 구간", self.window._expansion_label.text())
+        self.assertIn("선택한 움직임 구간 1개(", self.window._expansion_label.text())
 
     def test_no_expansion_when_widening_would_not_help(self) -> None:
         candidate = Segment(

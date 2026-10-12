@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -97,11 +97,37 @@ def length_text(seconds: float) -> str:
         return f"{minutes}분 {rest}초"
     return f"{minutes}분" if minutes else f"{rest}초"
 
+SHORTCUT_JUDGEMENTS = {
+    Qt.Key.Key_1: ReviewJudgement.RELEVANT,
+    Qt.Key.Key_2: ReviewJudgement.NEEDS_CHECK,
+    Qt.Key.Key_3: ReviewJudgement.EXCLUDED,
+    Qt.Key.Key_0: ReviewJudgement.UNREVIEWED,
+}
+SHORTCUT_HELP = "단축키(목록을 누른 뒤): 1 관련 있음 · 2 추가 확인 · 3 제외 · 0 미검토 · Space 재생 · ↑↓ 이동"
+
+
 class _CompactListWidget(QListWidget):
-    """Prefers its minimum height and grows only into spare space."""
+    """Prefers its minimum height and grows only into spare space.
+
+    While the list has focus, number keys set the judgement and Space plays or pauses;
+    the memo and tag fields keep their keys, since these work only on the list.
+    """
+
+    judgement_key = Signal(object)
+    play_key = Signal()
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
         return QSize(super().sizeHint().width(), self.minimumHeight())
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        key = Qt.Key(event.key())
+        if key in SHORTCUT_JUDGEMENTS and not event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier:
+            self.judgement_key.emit(SHORTCUT_JUDGEMENTS[key])
+            return
+        if key == Qt.Key.Key_Space and not event.modifiers():
+            self.play_key.emit()
+            return
+        super().keyPressEvent(event)
 
 
 class _CompactTextView(QPlainTextEdit):
@@ -135,6 +161,7 @@ class CandidateReviewPanel(QWidget):
     records_changed = Signal()
     # The selected candidate changed (or none is selected any more).
     selection_changed = Signal()
+    play_toggle_requested = Signal()
     summary_requested = Signal()
 
     def __init__(
@@ -159,6 +186,13 @@ class CandidateReviewPanel(QWidget):
         self._save_blocked = False
         self._saved: dict[int, ReviewRecord] = {}
         self._drafts: dict[int, ReviewRecord] = {}
+        # Records save themselves: a judgement or bookmark at once, memo and tags once
+        # typing pauses, and anything pending when another candidate is chosen.
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(1000)
+        self._autosave_timer.timeout.connect(self.save_current)
+        self._save_failed = False
         self._current_index: int | None = None
         self._loading_editor = False
         self._build_ui()
@@ -235,6 +269,8 @@ class CandidateReviewPanel(QWidget):
         self.candidate_list.setResizeMode(QListView.ResizeMode.Adjust)
         self.candidate_list.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self.candidate_list.setAccessibleName("중요 구간 후보 목록")
+        self.candidate_list.setAccessibleDescription(SHORTCUT_HELP)
+        self.candidate_list.setToolTip(SHORTCUT_HELP)
         layout.addWidget(self.candidate_list, 1)
 
         self.detail_view = _CompactRichView()
@@ -392,6 +428,8 @@ class CandidateReviewPanel(QWidget):
             lambda shown: self._record_layout.setRowVisible(self.tags_edit, shown)
         )
         self.candidate_list.currentItemChanged.connect(self._current_item_changed)
+        self.candidate_list.judgement_key.connect(self._judgement_shortcut)
+        self.candidate_list.play_key.connect(self.play_toggle_requested.emit)
         self.judgement_group.buttonToggled.connect(self._editor_changed)
         self.memo_edit.textChanged.connect(self._editor_changed)
         self.tags_edit.textChanged.connect(self._editor_changed)
@@ -569,7 +607,11 @@ class CandidateReviewPanel(QWidget):
                 "error",
                 detail=str(exc),
             )
+            self._save_failed = True
+            self._refresh_status()
+            self._update_buttons()
             return False
+        self._save_failed = False
         del self._drafts[index]
         self._saved = saved
         self._session = session
@@ -814,6 +856,7 @@ class CandidateReviewPanel(QWidget):
     ) -> None:
         index = current.data(SEGMENT_INDEX_ROLE) if current is not None else None
         valid = isinstance(index, int) and 0 <= index < len(self._segments())
+        self.flush_pending()
         self._current_index = index if valid else None
         self._sync_timing()
         self._show_editor_for(self._current_index)
@@ -842,7 +885,10 @@ class CandidateReviewPanel(QWidget):
             if unsaved
             else ""
         )
-        self._record_layout.setRowVisible(self.unsaved_label, bool(unsaved))
+        # Typing waits a moment for its automatic save; the line is for saves that failed.
+        self._record_layout.setRowVisible(
+            self.unsaved_label, bool(unsaved) and (self._save_failed or self._save_blocked)
+        )
 
     @property
     def current_index(self) -> int | None:
@@ -968,11 +1014,35 @@ class CandidateReviewPanel(QWidget):
         self._refresh_item(index)
         self._refresh_status()
         self._update_buttons()
+        if index not in self._drafts:
+            self._autosave_timer.stop()
+        elif self.sender() in (self.memo_edit, self.tags_edit):
+            self._autosave_timer.start()
+        else:
+            self._autosave_timer.stop()
+            self.save_current()
+
+    def _judgement_shortcut(self, judgement: ReviewJudgement) -> None:
+        if self._current_index is not None and self.record_group.isEnabled():
+            self.judgement_buttons[judgement].setChecked(True)
+
+    def flush_pending(self) -> None:
+        """Save what was typed into the shown candidate before moving away from it."""
+        if self._autosave_timer.isActive() or (
+            self._current_index is not None and self._current_index in self._drafts
+        ):
+            self._autosave_timer.stop()
+            self.save_current()
 
     def _update_buttons(self) -> None:
         dirty = self._current_index is not None and self._current_index in self._drafts
         self.save_button.setEnabled(dirty and not self._save_blocked)
         self.revert_button.setEnabled(dirty)
+        # Saving is automatic; the buttons appear only when a save did not go through.
+        stuck = dirty and (self._save_failed or self._save_blocked)
+        self.save_button.setText("다시 저장")
+        self.save_button.setVisible(stuck)
+        self.revert_button.setVisible(stuck)
         self._refresh_primary_action()
 
     def _refresh_primary_action(self) -> None:

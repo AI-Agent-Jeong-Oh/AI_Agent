@@ -125,9 +125,9 @@ class CaseContextPanel(Card):
         self.load_button.setAccessibleName("사건 불러오기 또는 새 사건")
         self.save_button = QPushButton("사건 저장")
         theme.set_icon(self.save_button, "save")
-        for button in (self.load_button, self.save_button):
-            theme.mark_compact(button)
-            self.add_header_widget(button)
+        # The card top keeps [불러오기]; the window puts [사건 저장] in the bottom bar.
+        theme.mark_compact(self.load_button)
+        self.add_header_widget(self.load_button)
 
         form = QFormLayout()
         theme.polish_form(form)
@@ -392,8 +392,8 @@ class CaseContextPanel(Card):
         )
         self._append_clue(clue)
         self.clue_text.clear()
-        # Each clue gets its own source and certainty choice.
-        self._clear_clue_choices()
+        # The next clue usually comes from the same report, so the choice stays.
+        self._last_clue_choice = (clue.source, clue.certainty)
         self._update_clue_count()
         self.changed.emit()
 
@@ -412,7 +412,7 @@ class CaseContextPanel(Card):
             self._set_combo_value(self.clue_certainty, clue.certainty)
         else:
             self.clue_text.clear()
-            self._clear_clue_choices()
+            self._restore_clue_choices()
         self.add_clue_button.setText("변경 저장" if editing else "단서 추가")
         self.cancel_clue_edit_button.setVisible(editing)
         self.remove_clue_button.setVisible(editing)
@@ -423,6 +423,15 @@ class CaseContextPanel(Card):
     def _clear_clue_choices(self) -> None:
         for combo in (self.clue_source, self.clue_certainty):
             combo.setCurrentIndex(-1)
+
+    def _restore_clue_choices(self) -> None:
+        """Back to the last added clue's source and certainty (blank before the first)."""
+        last = getattr(self, "_last_clue_choice", None)
+        if last is None:
+            self._clear_clue_choices()
+            return
+        self._set_combo_value(self.clue_source, last[0])
+        self._set_combo_value(self.clue_certainty, last[1])
 
     def _clue_choices_made(self) -> bool:
         return self.clue_source.currentIndex() >= 0 and self.clue_certainty.currentIndex() >= 0
@@ -558,6 +567,7 @@ class CaseContextPanel(Card):
             if record.management_notes:
                 self.admin_toggle.setChecked(True)
             self.clue_list.clear()
+            self._last_clue_choice = None  # a new or loaded case starts with a blank choice
             self._cancel_clue_edit()
             for clue in record.clues:
                 self._append_clue(clue)

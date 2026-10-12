@@ -229,9 +229,15 @@ class CaseClueTests(unittest.TestCase):
         self.assertTrue(panel.clue_text.isEnabled())
         panel.add_clue_button.click()
         self.assertEqual(len(panel.clues()), 1)
-        # The next clue gets its own choice.
-        self.assertEqual(panel.clue_source.currentIndex(), -1)
-        self.assertFalse(panel.clue_text.isEnabled())
+        # The next clue usually comes from the same report: the choice stays.
+        self.assertEqual(panel.clue_source.currentData(), ClueSource.REPORT)
+        self.assertEqual(panel.clue_certainty.currentData(), InformationCertainty.ESTIMATED)
+        self.assertTrue(panel.clue_text.isEnabled())
+        # Editing another clue and leaving it returns to that choice, not to blank.
+        panel.clue_list.setCurrentRow(0)
+        panel.clue_certainty.setCurrentIndex(panel.clue_certainty.findData(InformationCertainty.CONFIRMED))
+        panel.cancel_clue_edit_button.click()
+        self.assertEqual(panel.clue_certainty.currentData(), InformationCertainty.ESTIMATED)
 
     def test_empty_case_name_is_asked_for(self) -> None:
         self.panel.show()

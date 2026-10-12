@@ -139,7 +139,7 @@ class MotionHeader(QWidget):
         super().__init__()
         self._candidates = candidates
         self.setObjectName("motionHeader")
-        self.setAccessibleName("움직임 후보 열: 번호, 구간, 최대 변화, 변화 크기")
+        self.setAccessibleName("움직임 구간 열: 번호, 구간, 최대 변화, 변화 크기")
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
         return QSize(200, self._candidates.fontMetrics().height() + 8)

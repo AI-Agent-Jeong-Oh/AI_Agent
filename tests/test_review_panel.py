@@ -118,7 +118,7 @@ class CandidateReviewPanelTests(unittest.TestCase):
         self.assertTrue(self.panel.tags_toggle.isChecked())
         self.assertFalse(self.panel.tags_edit.isHidden())
 
-    def test_one_blue_button_moves_from_save_to_finish_to_summary(self) -> None:
+    def test_one_blue_button_moves_from_review_to_finish_to_summary(self) -> None:
         panel = self.panel
 
         def blue() -> list:
@@ -128,13 +128,13 @@ class CandidateReviewPanelTests(unittest.TestCase):
         self.assertEqual(blue(), [])
         self.select(0)
         panel.judgement_buttons[ReviewJudgement.RELEVANT].setChecked(True)
-        self.assertEqual(blue(), [panel.save_button])
-        panel.save_current()
+        # A judgement saves itself, so there is no save button to press.
+        self.assertFalse(panel.has_unsaved_changes())
+        self.assertTrue(panel.save_button.isHidden())
         self.assertEqual(blue(), [])  # two candidates are still unreviewed
         for index in (1, 2):
             self.select(index)
             panel.judgement_buttons[ReviewJudgement.EXCLUDED].setChecked(True)
-            panel.save_current()
         self.assertEqual(blue(), [panel.complete_button])
         # Before finishing only [분석 완료] shows; the summary comes after it.
         self.assertTrue(panel.summary_button.isHidden())
@@ -157,6 +157,26 @@ class CandidateReviewPanelTests(unittest.TestCase):
         self.assertIs(row.judgement, ReviewJudgement.UNREVIEWED)
         self.assertFalse(row.unsaved)
 
+    def test_list_keys_set_the_judgement_and_play(self) -> None:
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+
+        played = []
+        self.panel.play_toggle_requested.connect(lambda: played.append(True))
+        self.select(1)
+        self.panel.candidate_list.setFocus()
+        QTest.keyClick(self.panel.candidate_list, Qt.Key.Key_2)
+        self.assertTrue(self.panel.judgement_buttons[ReviewJudgement.NEEDS_CHECK].isChecked())
+        QTest.keyClick(self.panel.candidate_list, Qt.Key.Key_0)
+        self.assertTrue(self.panel.judgement_buttons[ReviewJudgement.UNREVIEWED].isChecked())
+        QTest.keyClick(self.panel.candidate_list, Qt.Key.Key_Space)
+        self.assertEqual(played, [True])
+        # Typing in the memo keeps its digits.
+        self.panel.memo_edit.setFocus()
+        QTest.keyClicks(self.panel.memo_edit, "12")
+        self.assertEqual(self.panel.memo_edit.toPlainText(), "12")
+        self.assertTrue(self.panel.judgement_buttons[ReviewJudgement.UNREVIEWED].isChecked())
+
     def test_length_text(self) -> None:
         from video_agent.ui.review_panel import length_text
 
@@ -175,9 +195,8 @@ class CandidateReviewPanelTests(unittest.TestCase):
         self.panel.judgement_buttons[ReviewJudgement.RELEVANT].setChecked(True)
         self.panel.memo_edit.setPlainText("6초에 손이 상자에 닿음")
         self.panel.tags_edit.setText("손 접촉, 재확인, 손 접촉")
-        self.panel.bookmark_check.setChecked(True)
-        self.assertTrue(self.panel.has_unsaved_changes())
-        self.assertTrue(self.panel.save_current())
+        self.assertTrue(self.panel.has_unsaved_changes())  # memo and tags wait for a pause
+        self.panel.bookmark_check.setChecked(True)  # a bookmark saves the whole record at once
         self.assertFalse(self.panel.has_unsaved_changes())
 
         self.select(0)
@@ -193,25 +212,25 @@ class CandidateReviewPanelTests(unittest.TestCase):
             ReviewRecord(ReviewJudgement.RELEVANT, "6초에 손이 상자에 닿음", ("손 접촉", "재확인"), True),
         )
 
-    def test_unsaved_draft_is_kept_marked_and_revertible(self) -> None:
+    def test_typed_memo_saves_after_a_pause_or_when_moving_on(self) -> None:
         self.select(0)
         self.panel.judgement_buttons[ReviewJudgement.EXCLUDED].setChecked(True)
+        self.assertEqual(self.panel.saved_record_for(0).judgement, ReviewJudgement.EXCLUDED)
         self.panel.memo_edit.setPlainText("상자 아님")
-        self.select(2)
-        self.select(0)
-
-        self.assertEqual(self.panel.memo_edit.toPlainText(), "상자 아님")
+        # While typing the row says so; the timer then saves it.
         self.assertEqual(self.panel.unsaved_indexes(), (0,))
         self.assertTrue(self.panel.candidate_list.currentItem().data(ROW_ROLE).unsaved)
-        self.assertIn("후보 #1", self.panel.unsaved_label.text())
-        self.assertEqual(self.panel.saved_record_for(0), ReviewRecord())
-
-        self.panel.revert_current()
-
-        self.assertEqual(self.panel.memo_edit.toPlainText(), "")
-        self.assertTrue(self.panel.judgement_buttons[ReviewJudgement.UNREVIEWED].isChecked())
+        self.assertTrue(self.panel._autosave_timer.isActive())
+        self.panel._autosave_timer.timeout.emit()
+        self.assertEqual(self.panel.saved_record_for(0).memo, "상자 아님")
         self.assertFalse(self.panel.has_unsaved_changes())
-        self.assertFalse(self.panel.candidate_list.currentItem().data(ROW_ROLE).unsaved)
+
+        self.panel.memo_edit.setPlainText("상자 아님, 다른 사람")
+        self.select(2)  # moving to another candidate saves what was typed
+        self.assertEqual(self.panel.saved_record_for(0).memo, "상자 아님, 다른 사람")
+        self.assertFalse(self.panel.has_unsaved_changes())
+        self.select(0)
+        self.assertEqual(self.panel.memo_edit.toPlainText(), "상자 아님, 다른 사람")
 
     def test_editing_back_to_saved_value_clears_draft(self) -> None:
         self.select(0)
@@ -319,10 +338,12 @@ class CandidateReviewPersistenceTests(unittest.TestCase):
         self.assertIn("아직 파일에 저장한 기록 없음", self.panel.save_status_label.text())
         self.edit(0, ReviewJudgement.RELEVANT, "저장할 메모")
         self.panel.save_current()
-        self.edit(1, ReviewJudgement.EXCLUDED, "저장 안 한 메모")
+        saved_so_far = len(self.written)
+        self.panel.candidate_list.setCurrentRow(1)
+        self.panel.memo_edit.setPlainText("아직 입력 중인 메모")  # waits for a pause
 
         session = self.written[-1]
-        self.assertEqual(len(self.written), 1)
+        self.assertEqual(len(self.written), saved_so_far)
         self.assertEqual([r.segment_index for r in session.reviews], [1])
         self.assertEqual(session.reviews[0].memo, "저장할 메모")
         self.assertIsNotNone(session.reviews[0].reviewed_at)
@@ -351,12 +372,17 @@ class CandidateReviewPersistenceTests(unittest.TestCase):
     def test_invalid_record_is_reported_as_failure(self) -> None:
         self.panel.set_job(job(), persist=self.persist)
         self.edit(0, ReviewJudgement.RELEVANT, "가" * 4001)
+        written = len(self.written)  # the judgement alone was saved
 
         self.assertFalse(self.panel.save_current())
 
-        self.assertEqual(self.written, [])
+        self.assertEqual(len(self.written), written)
         self.assertIn("저장 실패", self.panel.save_status_label.text())
         self.assertIn("메모 4000자", self.panel.save_status_label.text())
+        # A save that did not go through shows the buttons to retry or undo.
+        self.assertFalse(self.panel.save_button.isHidden())
+        self.assertEqual(self.panel.save_button.text(), "다시 저장")
+        self.assertFalse(self.panel.revert_button.isHidden())
 
     def test_loaded_session_restores_records(self) -> None:
         stored = ReviewSession(
@@ -413,7 +439,12 @@ class CandidateReviewPersistenceTests(unittest.TestCase):
         self.panel.candidate_list.setCurrentRow(0)
         self.assertFalse(self.panel.unsaved_label.isVisible())
         self.panel.memo_edit.setPlainText("임시")
+        # Waiting for the automatic save is not a warning.
+        self.assertFalse(self.panel.unsaved_label.isVisible())
+        self.panel.memo_edit.setPlainText("가" * 4001)
+        self.assertFalse(self.panel.save_current())  # fails: too long
         self.assertTrue(self.panel.unsaved_label.isVisible())
+        self.panel.memo_edit.setPlainText("임시")
         self.panel.save_current()
         self.assertFalse(self.panel.unsaved_label.isVisible())
 
@@ -478,8 +509,7 @@ class ReviewTimingTests(unittest.TestCase):
         self.panel.set_job(self.timed_job, persist=self.persist)
         self.panel.candidate_list.setCurrentRow(0)
         self.clock.now += 40
-        self.panel.judgement_buttons[ReviewJudgement.RELEVANT].setChecked(True)
-        self.assertTrue(self.panel.save_current())
+        self.panel.judgement_buttons[ReviewJudgement.RELEVANT].setChecked(True)  # saves at once
         stored = self.written[-1]
         self.assertAlmostEqual(stored.total_review_seconds, 40)
         self.assertAlmostEqual(stored.review_for(1).review_seconds, 40)
@@ -699,9 +729,9 @@ class MainWindowReviewIntegrationTests(unittest.TestCase):
         self.panel.judgement_buttons[ReviewJudgement.RELEVANT].setChecked(True)
         self.panel.memo_edit.setPlainText("파일에 저장")
         self.panel.tags_edit.setText("손 접촉")
-        self.panel.bookmark_check.setChecked(True)
+        self.panel.bookmark_check.setChecked(True)  # saves the record, memo included
 
-        self.assertTrue(self.panel.save_current())
+        self.assertFalse(self.panel.has_unsaved_changes())
 
         stored = ReviewStore(paths).load("job-review")
         self.assertEqual(stored.review_for(1).memo, "파일에 저장")
