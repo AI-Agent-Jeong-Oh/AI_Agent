@@ -2,5 +2,5 @@
 window.DOWNLOAD_CONFIG = Object.freeze({
   owner: "AI-Agent-Jeong-Oh",
   repository: "AI_Agent",
-  assetName: "숭재수사대-다연캅-macOS-arm64.zip"
+  assetName: "dayeoncop-macOS-arm64.zip"
 });
