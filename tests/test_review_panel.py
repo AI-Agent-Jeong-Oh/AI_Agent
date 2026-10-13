@@ -25,10 +25,12 @@ from video_agent.storage.json_store import ResultStore, ReviewStore
 from video_agent.storage.paths import AppPaths
 from video_agent.ui.candidate_delegate import ROW_ROLE
 from video_agent.ui.main_window import MainWindow
+from video_agent.ui.popover import InfoPopover
 from video_agent.ui.review_panel import (
     CandidateReviewPanel,
     ReviewRecord,
     SEGMENT_INDEX_ROLE,
+    SHORTCUT_HELP,
     parse_tags,
 )
 
@@ -192,6 +194,20 @@ class CandidateReviewPanelTests(unittest.TestCase):
         QTest.keyClicks(self.panel.memo_edit, "12")
         self.assertEqual(self.panel.memo_edit.toPlainText(), "12")
         self.assertTrue(self.panel.judgement_buttons[ReviewJudgement.UNREVIEWED].isChecked())
+
+    def test_shortcut_help_opens_beside_the_record_title(self) -> None:
+        self.select(1)
+        self.assertEqual(self.panel.candidate_list.toolTip(), "")
+        self.assertEqual(self.panel.candidate_list.accessibleDescription(), SHORTCUT_HELP)
+        self.panel.record_group.show()
+        self.panel.shortcut_info_button.show()
+        self.panel.shortcut_info_button.click()
+        popover = next(
+            widget for widget in self.app.topLevelWidgets()
+            if isinstance(widget, InfoPopover) and widget.isVisible()
+        )
+        self.assertIn("Space 재생/일시정지", popover.accessibleDescription())
+        popover.close()
 
     def test_length_text(self) -> None:
         from video_agent.ui.review_panel import length_text

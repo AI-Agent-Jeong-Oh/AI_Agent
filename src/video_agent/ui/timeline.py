@@ -2,17 +2,17 @@
 
 Each candidate is a thin band on the bar, marked by the reviewer's saved judgement (see
 judgement_marks); the selected one is taller with a blue ring, and a bookmarked one has a
-small bookmark above it. Clicking a band selects that candidate, hovering names it, and
-`TimelineLegend` under the bar names the marks, so they are not told apart by colour alone.
+small bookmark above it. Clicking a band selects that candidate, and `TimelineLegend`
+under the bar names the marks, so they are not told apart by colour alone.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QFontInfo, QFontMetrics, QHelpEvent, QMouseEvent, QPainter, QPen
-from PySide6.QtWidgets import QSlider, QStyle, QStyleOptionSlider, QToolTip, QWidget
+from PySide6.QtCore import QPoint, QRect, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QFont, QFontInfo, QFontMetrics, QMouseEvent, QPainter, QPen
+from PySide6.QtWidgets import QSlider, QStyle, QStyleOptionSlider, QWidget
 
 from video_agent.contracts import ReviewJudgement
 from video_agent.ui import theme
@@ -127,17 +127,6 @@ class TimelineSlider(QSlider):
             self.mark_clicked.emit(index)
             return
         super().mousePressEvent(event)
-
-    def event(self, event: QEvent) -> bool:
-        if event.type() == QEvent.Type.ToolTip and isinstance(event, QHelpEvent):
-            index = self.mark_at(event.pos())
-            if index is not None:
-                QToolTip.showText(event.globalPos(), self._marks[index].label, self)
-            else:
-                QToolTip.hideText()
-            return True
-        return super().event(event)
-
 
 LEGEND_ITEMS = (
     (ReviewJudgement.UNREVIEWED, "AI 후보 (미검토)"),

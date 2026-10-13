@@ -4,10 +4,11 @@ import json
 import base64
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from video_agent.contracts import AnalysisMode, ResultOrigin, Segment
 from video_agent.identity.comparison import (
@@ -228,6 +229,26 @@ class PersonComparisonDialogTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
+    def test_dialog_fits_inside_the_main_window_before_and_after_results(self) -> None:
+        fixture = PersonComparisonTests()
+        fixture.setUp()
+        parent = QWidget()
+        parent.resize(980, 720)
+        dialog = None
+        try:
+            dialog = PersonComparisonDialog(fixture.candidates, lambda _selected: None, parent)
+            self.assertLess(dialog.width(), parent.width())
+            self.assertLess(dialog.height(), parent.height())
+            self.assertLessEqual(dialog.height(), 360)
+            dialog._fit_to_parent(result_visible=True)
+            self.assertLess(dialog.width(), parent.width())
+            self.assertLess(dialog.height(), parent.height())
+            self.assertIsInstance(dialog.result_detail_scroll, QWidget)
+        finally:
+            if dialog is not None:
+                dialog.close()
+            fixture.tearDown()
+
     def test_result_shows_similarity_reference_and_used_evidence_photos(self) -> None:
         fixture = PersonComparisonTests()
         fixture.setUp()
@@ -253,7 +274,6 @@ class PersonComparisonDialogTests(unittest.TestCase):
             )
             dialog = PersonComparisonDialog(
                 fixture.candidates,
-                "테스트 모델",
                 lambda _selected: None,
             )
             for candidate_id, frames in evidence:
@@ -262,11 +282,14 @@ class PersonComparisonDialogTests(unittest.TestCase):
 
             self.assertEqual(dialog.result_table.columnCount(), 3)
             self.assertIn("58/100", dialog.result_table.item(0, 2).text())
-            self.assertIn("신원 일치 확률 아님", dialog.result_table.item(0, 2).text())
-            self.assertIn("카메라 0", dialog.result_detail_title.text())
+            self.assertNotIn("신원 일치 확률", dialog.result_table.item(0, 2).text())
+            self.assertIn("신원 일치 확률", dialog.score_note.text())
             self.assertIn("어두운 상의", dialog.similarities_detail.text())
-            self.assertEqual(dialog.differences_detail.text(), "관찰 내용 없음")
+            self.assertEqual(dialog.differences_detail.text(), "—")
             self.assertIn("얼굴이 작고", dialog.limitations_detail.text())
+            self.assertNotIn(
+                "사용 모델", " ".join(label.text() for label in dialog.findChildren(QLabel))
+            )
             self.assertFalse(dialog.result_splitter.isHidden())
             self.assertFalse(dialog.photo_panel.isHidden())
             visible_images = [
@@ -276,6 +299,23 @@ class PersonComparisonDialogTests(unittest.TestCase):
             ]
             self.assertEqual(len(visible_images), 4)
             self.assertTrue(all(not image.pixmap().isNull() for image in visible_images))
+            self.assertIn("문장마다 45자 이내", provider.calls[0][0])
+
+            older_report = replace(
+                report,
+                comparisons=(
+                    replace(
+                        report.comparisons[0],
+                        observable_similarities=("어두운 상의가 관찰됨", "밝은 신발이 관찰됨"),
+                    ),
+                    *report.comparisons[1:],
+                ),
+            )
+            dialog._on_report(older_report)
+            self.assertIn("외 1건", dialog.similarities_detail.text())
+            self.assertFalse(dialog.detail_more_button.isHidden())
+            dialog.detail_more_button.click()
+            self.assertIn("밝은 신발", dialog.similarities_detail.text())
         finally:
             if dialog is not None:
                 dialog.close()

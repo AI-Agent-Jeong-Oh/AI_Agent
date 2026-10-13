@@ -74,7 +74,6 @@ class StepSection(QWidget):
 
     def set_summary(self, text: str) -> None:
         self._summary = text
-        self.header.setToolTip(text)
         self._refresh()
 
     def summary(self) -> str:

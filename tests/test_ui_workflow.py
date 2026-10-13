@@ -285,29 +285,30 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertEqual(self.window._selected_model_label.text(), "qwen3-vl:8b-instruct")
         banner = self.window._mode_banner
         # No status line when local analysis is simply ready; the explicit model ID is
-        # shown in the setting row, and choice and model are in the line's tooltip.
+        # shown in the setting row; screen readers still get the full model details.
         self.assertEqual(banner.text(), "")
         self.assertTrue(self.window._status_row.isHidden())
-        self.assertIn("정확한 분석", banner.toolTip())
-        self.assertIn("qwen3-vl:8b-instruct", banner.toolTip())
-        self.assertIn("자동 전환하지 않습니다", banner.toolTip())
+        self.assertEqual(banner.toolTip(), "")
+        self.assertIn("정확한 분석", banner.accessibleDescription())
+        self.assertIn("qwen3-vl:8b-instruct", banner.accessibleDescription())
+        self.assertIn("자동 전환하지 않습니다", banner.accessibleDescription())
 
         self.window._set_model_id("qwen3-vl:4b-instruct")
         self.assertEqual(banner.text(), "")
         self.assertTrue(self.window._status_row.isHidden())
-        self.assertIn("빠른 분석", banner.toolTip())
+        self.assertIn("빠른 분석", banner.accessibleDescription())
         self.window._set_model_id("kimi-k3:cloud")
         self.assertEqual(banner.text(), "외부 서버에서 실행되는 프로그램 · 이 컴퓨터 분석에 쓸 수 없음")
-        self.assertIn("외부 서버", banner.toolTip())
+        self.assertIn("외부 서버", banner.accessibleDescription())
 
         self.window._select_mode(AnalysisMode.EXTERNAL)
         self.window._set_model_id("gpt-vision-test")
         # Like local analysis, choosing external AI shows no line (the choice says it).
         self.assertEqual(banner.text(), "")
         self.assertTrue(self.window._status_row.isHidden())
-        self.assertIn("영상 일부를 외부로 보냄", banner.toolTip())
-        self.assertIn("gpt-vision-test", banner.toolTip())
-        self.assertIn("외부 전송 승인", banner.toolTip())
+        self.assertIn("영상 일부를 외부로 보냄", banner.accessibleDescription())
+        self.assertIn("gpt-vision-test", banner.accessibleDescription())
+        self.assertIn("외부 전송 승인", banner.accessibleDescription())
         self.window._select_mode(AnalysisMode.SAMPLE)
         self.assertEqual(banner.text(), "시연용 결과 (실제 AI 분석 아님)")
 
@@ -345,7 +346,7 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertTrue(plan_part.isAncestorOf(window._plan_view))
         # The left side of step ② is the video list and player, as in steps ① and ③.
         self.assertFalse(window._video_stack.parentWidget().isAncestorOf(window._purpose_edit))
-        # One part open at a time; what was chosen is in the header tooltip, not beside the title.
+        # One part open at a time; each part keeps its selected-value summary.
         self.assertTrue(find_part.is_open())
         self.assertFalse(range_part.is_open())
         range_part.header.clicked.emit()
@@ -355,9 +356,10 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertFalse(range_part.is_open())
         range_part.header.clicked.emit()
         self.assertTrue(range_part.is_open())
-        self.assertIn("관찰 항목", find_part.header.toolTip())
-        self.assertIn("영상 전체", range_part.header.toolTip())
-        self.assertIn("계획 없음", plan_part.header.toolTip())
+        self.assertEqual(find_part.header.toolTip(), "")
+        self.assertIn("관찰 항목", find_part.summary())
+        self.assertIn("영상 전체", range_part.summary())
+        self.assertIn("계획 없음", plan_part.summary())
         header_texts = [label.text() for label in plan_part.header.findChildren(QLabel)]
         self.assertNotIn("계획 없음 · 정확한 분석", header_texts)
         # No empty plan box and no idle progress line before there is a plan.
@@ -415,7 +417,7 @@ class UiWorkflowTests(unittest.TestCase):
 
     def test_every_drop_down_uses_the_styled_list(self) -> None:
         combos = self.window.findChildren(QComboBox)
-        self.assertGreaterEqual(len(combos), 5)
+        self.assertGreaterEqual(len(combos), 4)
         for combo in combos:
             self.assertIsInstance(combo.itemDelegate(), QStyledItemDelegate)
 
@@ -825,11 +827,16 @@ class UiWorkflowTests(unittest.TestCase):
         )
         # "정확한 분석" (the largest model) is the default.
         self.assertEqual(window._model_id(), "qwen3-vl:8b-instruct")
-        self.assertIn("정확한 분석", window._mode_banner.toolTip())
+        self.assertIn("정확한 분석", window._mode_banner.accessibleDescription())
 
         choice.setCurrentIndex(0)
         self.assertEqual(window._model_id(), "qwen3-vl:4b-instruct")
-        self.assertIn("빠른 분석", window._mode_banner.toolTip())
+        self.assertIn("빠른 분석", window._mode_banner.accessibleDescription())
+        self.assertEqual(sum(button.isChecked() for button in choice._buttons), 1)
+        self.assertTrue(all(not button.toolTip() for button in choice._buttons))
+        choice._buttons[-1].click()
+        self.assertIs(window._current_mode(), AnalysisMode.EXTERNAL)
+        self.assertEqual(sum(button.isChecked() for button in choice._buttons), 1)
 
     def test_staff_are_not_offered_the_demonstration(self) -> None:
         window = self.window
@@ -1235,6 +1242,7 @@ class UiWorkflowTests(unittest.TestCase):
         status: JobStatus = JobStatus.COMPLETED,
         origin: ResultOrigin = ResultOrigin.TEST_DOUBLE,
         segments: tuple[Segment, ...] = (),
+        elapsed_seconds: float | None = None,
     ) -> None:
         """Approve a plan for the range and deliver a crafted result for it."""
         window = self.window
@@ -1262,11 +1270,22 @@ class UiWorkflowTests(unittest.TestCase):
             analyzed_frame_count=6 if status is JobStatus.PARTIAL else 12,
             error="2번째 배치 시간 초과" if status is JobStatus.PARTIAL else None,
             segments=segments,
+            elapsed_seconds=elapsed_seconds,
         )
         window._on_analysis_result(job)
 
     def expansion_shown(self) -> bool:
         return not self.window._expansion_frame.isHidden()
+
+    def test_completed_run_shows_elapsed_time_beside_action(self) -> None:
+        self.finish_run(0.0, 10.0, elapsed_seconds=22.4)
+        window = self.window
+        self.assertEqual(window._progress_label.text(), "완료 (22.4초)")
+        action_row = window._approval_group.layout().itemAt(0).layout()
+        self.assertEqual(action_row.indexOf(window._progress_label), 0)
+        self.assertGreater(action_row.indexOf(window._make_plan_button), 0)
+        self.assertFalse(window._progress_label.isHidden())
+        self.assertIn("후보를 찾지 못했습니다", window._result_list.item(0).text())
 
     def test_empty_result_over_part_of_video_proposes_expansion_without_running(self) -> None:
         self.finish_run(2.0, 5.0)

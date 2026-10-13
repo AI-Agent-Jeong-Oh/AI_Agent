@@ -284,6 +284,7 @@ class CaseVideoListTests(unittest.TestCase):
 
         self.assertFalse(self.window._person_compare_button.isHidden())
         self.assertTrue(self.window._person_compare_button.isEnabled())
+        self.assertIs(self.window._person_compare_button.parent(), self.window._camera_row)
         self.assertEqual(
             {item.video_id for item in self.window._person_comparison_candidates()},
             {build_video_id(self.cam_a), build_video_id(self.cam_b)},

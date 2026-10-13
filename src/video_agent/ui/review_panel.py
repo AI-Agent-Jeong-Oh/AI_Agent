@@ -43,7 +43,8 @@ from video_agent.contracts import (
 )
 from video_agent.ui import theme
 from video_agent.ui.message import confirm
-from video_agent.ui.segment_detail import precise_text, tidy_seconds
+from video_agent.ui.popover import info_mark
+from video_agent.ui.segment_detail import tidy_seconds
 from video_agent.ui.candidate_delegate import ROW_ROLE, CandidateDelegate, CandidateRow
 from video_agent.ui.flow_layout import FlowLayout, FlowRow
 from video_agent.ui.judgement_marks import JUDGEMENT_MARKS, MarkStyle, paint_mark
@@ -103,7 +104,13 @@ SHORTCUT_JUDGEMENTS = {
     Qt.Key.Key_3: ReviewJudgement.EXCLUDED,
     Qt.Key.Key_0: ReviewJudgement.UNREVIEWED,
 }
-SHORTCUT_HELP = "단축키(목록을 누른 뒤): 1 관련 있음 · 2 추가 확인 · 3 제외 · 0 미검토 · Space 재생 · ↑↓ 이동"
+SHORTCUT_HELP = (
+    "후보 목록을 누른 뒤 사용합니다.\n"
+    "1 관련 있음   2 추가 확인\n"
+    "3 제외   0 미검토\n"
+    "Space 재생/일시정지\n"
+    "↑↓ 후보 이동"
+)
 
 
 class _CompactListWidget(QListWidget):
@@ -293,7 +300,6 @@ class CandidateReviewPanel(QWidget):
         self.candidate_list.setVerticalScrollMode(QListView.ScrollMode.ScrollPerPixel)
         self.candidate_list.setAccessibleName("중요 구간 후보 목록")
         self.candidate_list.setAccessibleDescription(SHORTCUT_HELP)
-        self.candidate_list.setToolTip(SHORTCUT_HELP)
         list_layout.addWidget(self.candidate_list, 1)
 
         self.detail_view = _CompactRichView()
@@ -314,7 +320,14 @@ class CandidateReviewPanel(QWidget):
         panel.setSpacing(8)
         title = QLabel("수사관 기록")
         title.setObjectName("recordTitle")
-        panel.addWidget(title)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(4)
+        title_row.addWidget(title)
+        self.shortcut_info_button = info_mark(SHORTCUT_HELP, "수사관 기록 단축키", label="")
+        title_row.addWidget(self.shortcut_info_button)
+        title_row.addStretch(1)
+        panel.addLayout(title_row)
         grid = QGridLayout()
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(8)
@@ -338,11 +351,6 @@ class CandidateReviewPanel(QWidget):
             theme.set_icon(button, "play")
             theme.mark_compact(button)
             self._playback_group.addButton(button)
-            button.setToolTip(
-                "선택 후보의 확인용 범위만 재생"
-                if padding == 0
-                else f"확인용 범위 앞뒤 {label[3:]}를 포함해 재생 (원본 길이 안으로 제한)"
-            )
             theme.set_segment(button, position, len(PLAYBACK_RANGES))
             button.clicked.connect(
                 lambda _checked=False, value=padding: self._request_playback(value)
@@ -381,16 +389,13 @@ class CandidateReviewPanel(QWidget):
         self.tags_add_button = QPushButton()
         self.tags_add_button.setObjectName("tagAdd")
         theme.set_icon(self.tags_add_button, "plus", theme.PRIMARY)
-        self.tags_add_button.setToolTip("태그 추가 (쉼표로 여러 개, Enter로 넣기)")
         self.tags_add_button.setAccessibleName("태그 추가")
         self.tag_input = QLineEdit()
         self.tag_input.setObjectName("tagInput")
-        self.tag_input.setToolTip("Enter로 넣기 · 쉼표로 여러 개")
         self.tag_input.setAccessibleName("새 태그")
         self.tag_input.setVisible(False)
         self.save_button = QPushButton("기록 저장")
         self.revert_button = QPushButton("되돌리기")
-        self.revert_button.setToolTip("마지막으로 저장한 기록으로 되돌립니다")
         self.unsaved_label = QLabel("")
         self.unsaved_label.setWordWrap(True)
         self.unsaved_label.setStyleSheet(f"color:{theme.WARNING_TEXT};")
@@ -445,7 +450,7 @@ class CandidateReviewPanel(QWidget):
         # The words say what happens (no tooltip box): mark the review done (it can still
         # be changed), and open the summary draft from the saved records.
         self.complete_button = QPushButton("검토 완료 기록")
-        self.summary_button = QPushButton("요약 초안 열기")
+        self.summary_button = QPushButton("결과 보고 열기")
         # Dense review card: KRDS xsmall buttons keep the step on one screen.
         for button in (self.save_button, self.revert_button, self.complete_button, self.summary_button):
             theme.mark_compact(button)
@@ -981,7 +986,6 @@ class CandidateReviewPanel(QWidget):
                     if not isinstance(detail, str)
                     else [tuple(line.partition(": ")[::2]) for line in detail.splitlines() if line]
                 )
-                self.detail_view.setToolTip(precise_text(segment))
                 self.detail_view.setHtml(
                     f"<p><b>후보 #{index + 1}</b> "
                     f'<span style="color:{theme.TEXT_SUB};">AI 분석 결과 (수사관 확인 전)</span></p>'
@@ -1057,7 +1061,6 @@ class CandidateReviewPanel(QWidget):
         for tag in parse_tags(self.tags_edit.text()):
             chip = QPushButton(f"{tag}  ×")
             chip.setObjectName("tagChip")
-            chip.setToolTip(f"태그 '{tag}' 빼기")
             chip.setAccessibleName(f"태그 {tag} 빼기")
             chip.clicked.connect(lambda _checked=False, value=tag: self._remove_tag(value))
             flow.addWidget(chip)

@@ -103,7 +103,6 @@ class CaseContextPanel(Card):
         self._selected_case_id: str | None = None
         self.load_button = QPushButton("불러오기")
         theme.set_icon(self.load_button, "folder-open")
-        self.load_button.setToolTip("저장한 사건을 불러오거나 새 사건을 시작합니다")
         self.load_button.setAccessibleName("사건 불러오기 또는 새 사건")
         self.save_button = QPushButton("사건 저장")
         theme.set_icon(self.save_button, "save")
@@ -215,9 +214,6 @@ class CaseContextPanel(Card):
         # Take the space left in the step instead of Qt's default list height, so the
         # larger clue rows scroll inside the list rather than the whole step.
         self.clue_list.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
-        self.clue_list.setToolTip(
-            "체크된 항목만 분석 계획과 모델 입력에 포함됩니다. 단서를 고르면 위에서 고칠 수 있습니다."
-        )
         self.clue_list.setAccessibleName("분석 단서 목록")
         self._clue_delegate = ClueItemDelegate(SOURCE_LABELS, self.clue_list)
         self.clue_list.setItemDelegate(self._clue_delegate)

@@ -38,11 +38,11 @@ _BANNER_KINDS = {
 
 
 class ResultSummaryDialog(QDialog):
-    """Editable report draft ("CCTV 영상 검토 결과 보고") with HTML export.
+    """Editable report ("CCTV 영상 검토 결과 보고") with HTML export.
 
     Edits live only in this window and in exported files; they are not stored by the app.
-    With `case_build`, the window opens on the case-wide draft and can switch to the
-    current camera's draft.
+    With `case_build`, the window opens on the case-wide report and can switch to the
+    current camera's report.
     """
 
     def __init__(
@@ -53,9 +53,9 @@ class ResultSummaryDialog(QDialog):
         case_build: Callable[[], ResultSummary] | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("결과 보고 (초안)")
+        self.setWindowTitle("결과 보고")
         self.setModal(True)
-        self.resize(760, 820)
+        self.resize(860, 820)
         self._builders = {SCOPE_CAMERA: build}
         if case_build is not None:
             self._builders[SCOPE_CASE] = case_build
@@ -71,6 +71,7 @@ class ResultSummaryDialog(QDialog):
         self.scope_buttons: dict[str, QPushButton] = {}
         if len(self._builders) > 1:
             scope_row = QHBoxLayout()
+            scope_row.setSpacing(0)
             scope_label = QLabel("요약 범위")
             scope_label.setObjectName("fieldLabel")
             scope_row.addWidget(scope_label)
@@ -151,8 +152,7 @@ class ResultSummaryDialog(QDialog):
         layout.addWidget(self.export_status_label)
 
         buttons = QHBoxLayout()
-        self.regenerate_button = QPushButton("초안 다시 만들기")
-        self.regenerate_button.setToolTip("지금 저장된 검토 기록으로 초안을 다시 만듭니다")
+        self.regenerate_button = QPushButton("보고 내용 다시 만들기")
         self.export_button = QPushButton("HTML로 내보내기")
         theme.mark_primary(self.export_button)
         self.close_button = QPushButton("닫기")
@@ -236,7 +236,7 @@ class ResultSummaryDialog(QDialog):
         return self._scope
 
     def set_scope(self, scope: str) -> bool:
-        """Rebuild the draft for another scope; edits are lost only after confirmation."""
+        """Rebuild the report for another scope; edits are lost only after confirmation."""
         if scope == self._scope or scope not in self._builders:
             return False
         if self.is_edited() and not self._confirm_regenerate():
@@ -258,7 +258,7 @@ class ResultSummaryDialog(QDialog):
     def _confirm_regenerate(self) -> bool:
         return confirm(
             self,
-            "초안 다시 만들기",
+            "보고 내용 다시 만들기",
             "고친 문구가 사라지고 저장된 검토 기록으로 다시 작성됩니다.",
             confirm_text="다시 만들기",
         )
@@ -283,9 +283,7 @@ class ResultSummaryDialog(QDialog):
         except OSError as exc:
             self.export_status_label.setText(f"내보내기 실패: {exc.strerror or exc}")
             self.export_status_label.setStyleSheet(f"color:{theme.status_color('error')};")
-            self.export_status_label.setToolTip(str(exc))
             return None
         self.export_status_label.setText(f"내보냄: {path.name}")
         self.export_status_label.setStyleSheet(f"color:{theme.status_color('ok')};")
-        self.export_status_label.setToolTip(str(path))
         return path

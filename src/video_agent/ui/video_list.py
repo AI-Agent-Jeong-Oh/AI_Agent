@@ -101,7 +101,6 @@ class CaseVideoList(Card):
         self.add_button = QPushButton("영상 추가")
         theme.set_icon(self.add_button, "plus")
         theme.mark_compact(self.add_button)
-        self.add_button.setToolTip("이 사건의 CCTV 영상을 하나 이상 고릅니다. 원본은 복사하거나 바꾸지 않습니다.")
         self.metadata_label = QLabel("영상 정보 확인 전")
         self.metadata_label.setObjectName("subsectionHelp")
         self.metadata_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -308,11 +307,9 @@ class CaseVideoList(Card):
             item = QTableWidgetItem(value)
             item.setData(ENTRY_ROLE, entry)
             item.setData(CURRENT_ROLE, current)
-            item.setToolTip(value)
             items.append(item)
         name = items[0]
         name.setData(VIDEO_ID_ROLE, entry.video_id)
-        name.setToolTip(f"{values[0]}\n영상 ID {entry.video_id}")
         if current:
             name.setData(Qt.ItemDataRole.AccessibleDescriptionRole, "재생 중인 영상")
         return items
@@ -348,7 +345,6 @@ class CaseVideoList(Card):
             button = QPushButton()
             button.setObjectName("rowAction")
             theme.set_icon(button, icon)
-            button.setToolTip(tip)
             button.setAccessibleName(tip)
             # Locking disables the whole list (and so these buttons); disabling them here
             # too would leave them off after the list is unlocked.

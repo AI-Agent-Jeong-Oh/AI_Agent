@@ -687,10 +687,6 @@ def render_html(
             content = body_html(section.body)
         css = ' class="appendix"' if section.key == "appendix" else ""
         parts.append(f"<section{css}><h2>{html.escape(section.title)}</h2>{content}</section>")
-    parts.append(
-        '<p class="foot">저장된 분석 결과와 검토 기록으로 자동 작성한 초안을 '
-        "수사관이 확인·수정한 문서임</p>"
-    )
     parts.append("</main></body></html>")
     return "\n".join(parts) + "\n"
 
@@ -727,7 +723,6 @@ section.appendix h2 { font-size: 13px; }
           font-weight: 700; font-size: 13px; }
 .warning { padding: 6px 10px; background: #fff6d8; color: #6e5200; border: 1px solid #d6b858;
            font-size: 13px; }
-.foot { margin-top: 24px; font-size: 12px; color: #666; }
 @media print { body { background: #fff; } main { box-shadow: none; margin: 0; }
                section { break-inside: avoid; } }
 """

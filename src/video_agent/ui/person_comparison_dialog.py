@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
+    QApplication,
     QDialog,
     QGridLayout,
     QGroupBox,
@@ -44,7 +45,6 @@ class PersonComparisonDialog(QDialog):
     def __init__(
         self,
         candidates: tuple[PersonCandidateInput, ...],
-        model_label: str,
         worker_factory: Callable[
             [tuple[PersonCandidateInput, ...]], PersonComparisonWorker
         ],
@@ -52,8 +52,7 @@ class PersonComparisonDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("영상 간 인물 비교")
-        self.resize(1280, 900)
-        self.setMinimumSize(980, 720)
+        self.setMinimumSize(700, 320)
         self.setModal(True)
         self._candidates = candidates
         self._worker_factory = worker_factory
@@ -62,10 +61,6 @@ class PersonComparisonDialog(QDialog):
         self._evidence_frames: dict[str, tuple[ExtractedFrame, ...]] = {}
 
         layout = QVBoxLayout(self)
-        # Only what the choice needs; the result column says the score is not identity.
-        model = QLabel(f"사용 모델 {model_label}")
-        model.setObjectName("fieldLabel")
-        layout.addWidget(model)
 
         self.source_table = QTableWidget(len(candidates), 5)
         self.source_table.setHorizontalHeaderLabels(
@@ -106,7 +101,14 @@ class PersonComparisonDialog(QDialog):
                 ),
             )
             self.source_table.setItem(row, 4, QTableWidgetItem(candidate.segment.summary))
-        layout.addWidget(self.source_table, 1)
+        # Keep the choice list close to its contents so the comparison and photos get
+        # most of the window. Larger cases scroll inside the table.
+        self.source_table.setMaximumHeight(
+            self.source_table.horizontalHeader().sizeHint().height()
+            + min(len(candidates), 5) * self.source_table.verticalHeader().defaultSectionSize()
+            + 28
+        )
+        layout.addWidget(self.source_table)
 
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
@@ -123,7 +125,7 @@ class PersonComparisonDialog(QDialog):
 
         self.result_table = QTableWidget(0, 3)
         self.result_table.setHorizontalHeaderLabels(
-            ("영상", "결과", "외형 유사도 · 근거")
+            ("영상", "판단", "유사도 · 근거")
         )
         self.result_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.result_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -143,28 +145,32 @@ class PersonComparisonDialog(QDialog):
         result_detail = QWidget()
         result_detail_layout = QVBoxLayout(result_detail)
         result_detail_layout.setContentsMargins(0, 8, 0, 0)
+        self.score_note = QLabel("유사도는 신원 일치 확률이 아닙니다.")
+        self.score_note.setObjectName("subsectionHelp")
+        result_detail_layout.addWidget(self.score_note)
 
-        self.result_detail_group = QGroupBox("비교 상세")
-        detail_layout = QVBoxLayout(self.result_detail_group)
-        self.result_detail_title = QLabel("결과를 고르세요.")
-        self.result_detail_title.setObjectName("fieldLabel")
-        self.result_detail_title.setWordWrap(True)
-        self.result_detail_title.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
-        detail_layout.addWidget(self.result_detail_title)
+        self.result_detail_group = QGroupBox("비교 내용")
+        detail_layout = QGridLayout(self.result_detail_group)
+        detail_layout.setColumnStretch(1, 1)
+        detail_layout.setVerticalSpacing(8)
         self.similarities_detail = self._detail_text("비슷한 점")
         self.differences_detail = self._detail_text("다른 점")
         self.limitations_detail = self._detail_text("확인 필요")
-        for title, value in (
+        for row, (title, value) in enumerate((
             ("비슷한 점", self.similarities_detail),
             ("다른 점", self.differences_detail),
             ("확인 필요", self.limitations_detail),
-        ):
+        )):
             heading = QLabel(title)
             heading.setObjectName("fieldLabel")
-            detail_layout.addWidget(heading)
-            detail_layout.addWidget(value)
+            detail_layout.addWidget(heading, row, 0, Qt.AlignmentFlag.AlignTop)
+            detail_layout.addWidget(value, row, 1)
+        self.detail_more_button = QPushButton("더 보기")
+        self.detail_more_button.setVisible(False)
+        self.detail_more_button.clicked.connect(self._toggle_full_detail)
+        detail_layout.addWidget(self.detail_more_button, 3, 1, Qt.AlignmentFlag.AlignLeft)
+        self._detail_values: tuple[tuple[str, ...], ...] = ((), (), ())
+        self._detail_expanded = False
         result_detail_layout.addWidget(self.result_detail_group)
 
         self.photo_title = QLabel(
@@ -184,7 +190,7 @@ class PersonComparisonDialog(QDialog):
             item_layout.setContentsMargins(0, 0, 0, 0)
             image = QLabel("근거 사진 없음")
             image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            image.setMinimumSize(360, 210)
+            image.setMinimumSize(300, 170)
             image.setStyleSheet(
                 f"background:{theme.GRAY_5}; border:1px solid {theme.GRAY_20};"
             )
@@ -203,8 +209,8 @@ class PersonComparisonDialog(QDialog):
         self.result_splitter.addWidget(self.result_detail_scroll)
         self.result_splitter.setStretchFactor(0, 1)
         self.result_splitter.setStretchFactor(1, 2)
-        self.result_splitter.setSizes((220, 480))
-        layout.addWidget(self.result_splitter, 2)
+        self.result_splitter.setSizes((160, 540))
+        layout.addWidget(self.result_splitter, 1)
 
         buttons = QHBoxLayout()
         self.run_button = QPushButton("비교 실행")
@@ -220,6 +226,20 @@ class PersonComparisonDialog(QDialog):
         self.run_button.clicked.connect(self._run)
         self.cancel_button.clicked.connect(self._cancel)
         self.close_button.clicked.connect(self.close)
+        self._fit_to_parent(result_visible=False)
+
+    def _fit_to_parent(self, *, result_visible: bool) -> None:
+        parent = self.parentWidget()
+        screen = parent.screen() if parent is not None else QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        parent_width = parent.width() if parent is not None else 1020
+        parent_height = parent.height() if parent is not None else 820
+        width = min(920, parent_width - 100)
+        height = min(680 if result_visible else 360, parent_height - 120)
+        if available is not None:
+            width = min(width, available.width() - 80)
+            height = min(height, available.height() - 80)
+        self.resize(max(self.minimumWidth(), width), max(self.minimumHeight(), height))
 
     @staticmethod
     def _detail_text(accessible_name: str) -> QLabel:
@@ -230,9 +250,6 @@ class PersonComparisonDialog(QDialog):
         value.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         value.setAccessibleName(accessible_name)
         value.setMinimumWidth(1)
-        value.setStyleSheet(
-            f"background:{theme.GRAY_5}; border:1px solid {theme.GRAY_20}; padding:12px;"
-        )
         return value
 
     @property
@@ -321,7 +338,7 @@ class PersonComparisonDialog(QDialog):
                 pair,
                 DECISION_LABELS[comparison.decision],
                 f"{comparison.appearance_similarity_score}/100 · "
-                f"{QUALITY_LABELS[comparison.evidence_quality]}\n신원 일치 확률 아님",
+                f"{QUALITY_LABELS[comparison.evidence_quality]}",
             )
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -333,6 +350,7 @@ class PersonComparisonDialog(QDialog):
                 self.result_table.setItem(row, column, item)
         self.result_table.resizeRowsToContents()
         self.result_splitter.setVisible(True)
+        self._fit_to_parent(result_visible=True)
         if report.comparisons:
             self.result_table.selectRow(0)
             self._show_result_evidence(0, 0)
@@ -359,18 +377,13 @@ class PersonComparisonDialog(QDialog):
             return
         comparison = self._report.comparisons[row]
         candidate_names = {item.candidate_id: item.video_name for item in self._candidates}
-        left_name = candidate_names.get(candidate_ids[0], candidate_ids[0])
-        right_name = candidate_names.get(candidate_ids[1], candidate_ids[1])
-        self.result_detail_title.setText(
-            f"{left_name} ↔ {right_name} · {DECISION_LABELS[comparison.decision]}"
+        self._detail_values = (
+            comparison.observable_similarities,
+            comparison.observable_differences,
+            comparison.limitations,
         )
-        self.similarities_detail.setText(
-            self._format_detail_lines(comparison.observable_similarities)
-        )
-        self.differences_detail.setText(
-            self._format_detail_lines(comparison.observable_differences)
-        )
-        self.limitations_detail.setText(self._format_detail_lines(comparison.limitations))
+        self._detail_expanded = False
+        self._render_detail()
         evidence = []
         for side, candidate_id in zip(("A", "B"), candidate_ids, strict=True):
             for frame in self._evidence_frames.get(candidate_id, ()):
@@ -405,15 +418,39 @@ class PersonComparisonDialog(QDialog):
         self.photo_title.setVisible(visible)
         self.photo_panel.setVisible(visible)
 
-    @staticmethod
-    def _format_detail_lines(values: tuple[str, ...]) -> str:
-        return "\n".join(f"• {value}" for value in values) if values else "관찰 내용 없음"
+    def _toggle_full_detail(self) -> None:
+        self._detail_expanded = not self._detail_expanded
+        self._render_detail()
+
+    def _render_detail(self) -> None:
+        needs_more = any(len(values) > 1 or (values and len(values[0]) > 72)
+                         for values in self._detail_values)
+        for label, values in zip(
+            (self.similarities_detail, self.differences_detail, self.limitations_detail),
+            self._detail_values,
+            strict=True,
+        ):
+            if not values:
+                display = "—"
+            elif self._detail_expanded:
+                display = "\n".join(f"• {value}" for value in values)
+            else:
+                first = values[0]
+                display = first if len(first) <= 72 else first[:71].rstrip() + "…"
+                if len(values) > 1:
+                    display += f"  외 {len(values) - 1}건"
+            label.setText(display)
+            label.setToolTip("\n".join(values))
+        self.detail_more_button.setVisible(needs_more)
+        self.detail_more_button.setText("접기" if self._detail_expanded else "더 보기")
 
     def _clear_result_detail(self) -> None:
-        self.result_detail_title.setText("결과를 고르세요.")
+        self._detail_values = ((), (), ())
+        self._detail_expanded = False
         self.similarities_detail.setText("—")
         self.differences_detail.setText("—")
         self.limitations_detail.setText("—")
+        self.detail_more_button.setVisible(False)
         self.photo_title.setVisible(False)
         self.photo_panel.setVisible(False)
 

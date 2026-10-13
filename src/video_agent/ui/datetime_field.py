@@ -90,7 +90,6 @@ class DateTimePopup(QFrame):
 
         actions = QHBoxLayout()
         clear = QPushButton("지우기")
-        clear.setToolTip("발생 시각을 비웁니다")
         cancel = QPushButton("취소")
         apply = QPushButton("적용")
         for button in (clear, cancel, apply):
@@ -136,7 +135,6 @@ class DateTimeField(QLineEdit):
         self._calendar_action = self.addAction(
             theme.icon("calendar"), QLineEdit.ActionPosition.TrailingPosition
         )
-        self._calendar_action.setToolTip("달력에서 고르기")
         self._calendar_action.triggered.connect(self.open_picker)
         self._picker: DateTimePopup | None = None
 

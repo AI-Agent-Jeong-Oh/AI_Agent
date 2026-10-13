@@ -129,6 +129,7 @@ from video_agent.review.summary import (
     build_summary,
 )
 from video_agent.ui.case_overview import CaseCandidateOverview, OverviewRow
+from video_agent.ui.flow_layout import FlowRow
 from video_agent.ui.review_panel import JUDGEMENT_LABELS, CandidateReviewPanel
 from video_agent.ui.summary_dialog import ResultSummaryDialog
 from video_agent.ui.wrap_label import WrapLabel
@@ -618,8 +619,6 @@ class MainWindow(QMainWindow):
             button.setObjectName("playerIcon")
             theme.set_icon(button, icon, theme.TEXT)
             button.setAccessibleName(name)
-        # Only "처음으로" needs a hover note (it returns to the played range first).
-        self._start_button.setToolTip("처음으로 (구간 재생 중이면 구간 처음)")
         # Icon only, like the buttons beside it; the name stays for screen readers.
         self._play_button = QPushButton()
         self._play_button.setObjectName("playerIcon")
@@ -632,7 +631,6 @@ class MainWindow(QMainWindow):
         time_font.setFeature(QFont.Tag("tnum"), 1)  # digits keep their width while playing
         self._time_label.setFont(time_font)
         self._speed_combo = _SpeedCombo()
-        self._speed_combo.setToolTip("재생 속도")
         self._speed_combo.setAccessibleName("재생 속도")
         for rate in PLAYBACK_RATES:
             self._speed_combo.addItem(f"{rate:g}×", rate)
@@ -693,9 +691,6 @@ class MainWindow(QMainWindow):
         self._external_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self._external_api_key_edit.setClearButtonEnabled(True)
         self._external_api_key_edit.setPlaceholderText("외부 서비스 인증키 (저장하지 않음)")
-        self._external_api_key_edit.setToolTip(
-            "키는 설정·결과·로그에 저장하지 않습니다. OPENAI_API_KEY 환경 변수도 사용할 수 있습니다."
-        )
         self._purpose_edit = QPlainTextEdit()
         self._purpose_edit.setPlaceholderText(
             "예: 출입문 앞에 30초 이상 머무는 사람"
@@ -750,10 +745,6 @@ class MainWindow(QMainWindow):
         # Rows drawn in columns under a header, like a table (see motion_table).
         self._motion_list.setItemDelegate(MotionItemDelegate(self._motion_list))
         self._motion_header = MotionHeader(self._motion_list)
-        self._motion_list.setToolTip(
-            "변화 크기는 이번 탐색 안에서 비교한 값이며 행동 판정이 아닙니다. "
-            "체크박스로 최대 3개까지 고를 수 있습니다."
-        )
         self._motion_selection_label = WrapLabel("선택 0/3")
         self._motion_selection_label.setObjectName("subsectionHelp")
         theme.mark_compact(self._motion_scan_button)
@@ -770,9 +761,6 @@ class MainWindow(QMainWindow):
         # Shown once there is a plan (no empty box before that).
         self._plan_view.setVisible(False)
         self._make_plan_button = QPushButton("분석 계획 만들기")
-        self._make_plan_button.setToolTip(
-            "체크한 움직임 구간과 입력한 목적·구간으로 계획을 만듭니다. 추가 질문이 있으면 먼저 표시합니다."
-        )
         # What to look at first is part of the plan, as on the demo page; the case type
         # chosen in step ① marks its recommendations. Three columns fit the wide card.
         self._focus_section = FocusSection(columns=3)
@@ -873,23 +861,20 @@ class MainWindow(QMainWindow):
         # One always-visible place for the main action (plan, then approve, then run), at
         # the right end as in a work program's button row.
         approve_row = QHBoxLayout()
-        approve_row.addStretch(1)
+        self._progress_label = WrapLabel("대기 중")
+        self._progress_label.setAccessibleName("실행 상태")
+        approve_row.addWidget(self._progress_label, 1)
         approve_row.addWidget(self._make_plan_button)
         approve_row.addWidget(self._approve_button)
         approve_row.addWidget(self._run_button)
+        self._cancel_button = QPushButton("취소")
+        theme.set_variant(self._cancel_button, "chip")
+        approve_row.addWidget(self._cancel_button)
         run_layout.addLayout(approve_row)
         # Only external mode needs the separate transfer approval.
         run_layout.addWidget(self._transfer_button)
         self._progress_bar = QProgressBar()
-        self._progress_label = WrapLabel("대기 중")
-        self._progress_label.setAccessibleName("실행 상태")
-        self._cancel_button = QPushButton("취소")
-        theme.set_variant(self._cancel_button, "chip")
         run_layout.addWidget(self._progress_bar)
-        status_row = QHBoxLayout()
-        status_row.addWidget(self._progress_label, 1)
-        status_row.addWidget(self._cancel_button, 0, Qt.AlignmentFlag.AlignTop)
-        run_layout.addLayout(status_row)
 
         # Approval and run stay visible below the scrolling plan content.
         self._plan_scroll = QScrollArea()
@@ -922,7 +907,6 @@ class MainWindow(QMainWindow):
         )
         self._saved_results_combo.setMinimumContentsLength(3)
         self._open_result_button = QPushButton("열기")
-        self._open_result_button.setToolTip("선택한 저장 결과와 검토 기록을 불러옵니다")
         saved_row.addWidget(QLabel("이전 결과"))
         saved_row.addWidget(self._saved_results_combo, 1)
         saved_row.addWidget(self._open_result_button)
@@ -938,13 +922,10 @@ class MainWindow(QMainWindow):
         self._camera_tabs.setElideMode(Qt.TextElideMode.ElideMiddle)
         self._camera_tabs.setAccessibleName("검토할 카메라")
         self._case_overview = CaseCandidateOverview()
-        self._camera_row = QWidget()
-        camera_row = QHBoxLayout(self._camera_row)
-        camera_row.setContentsMargins(0, 0, 0, 0)
-        # Tabs sized to their names and kept at the left (macOS would centre them).
-        camera_row.addWidget(self._camera_tabs)
-        camera_row.addStretch(1)
-        camera_row.addWidget(self._case_overview.toggle_button)
+        self._camera_row = FlowRow(spacing=8)
+        # Tabs and the comparison action share the candidate box. The action wraps
+        # below the tabs when the left pane is too narrow for both widgets.
+        self._camera_row.flow.addWidget(self._camera_tabs)
         # Each video's candidates are reviewed in its own tab; the all-camera list is
         # not offered (kept only for the result summary's counts).
         self._case_overview.toggle_button.setVisible(False)
@@ -958,7 +939,7 @@ class MainWindow(QMainWindow):
             "서로 다른 영상의 실제 AI 분석 후보를 골라 외형 유사성을 비교합니다"
         )
         theme.mark_compact(self._person_compare_button)
-        result_group.add_header_widget(self._person_compare_button)
+        self._camera_row.flow.addWidget(self._person_compare_button)
         result_group.add_header_widget(self._review_panel.completion_bar)
         self._result_list = self._review_panel.candidate_list
         self._review_empty_label = QLabel("아직 분석 결과가 없습니다.")
@@ -1599,6 +1580,7 @@ class MainWindow(QMainWindow):
             tabs.blockSignals(False)
         several = len(self._case_videos) > 1
         self._camera_row.setVisible(several)
+        self._camera_row.updateGeometry()
         if not several and self._case_overview.toggle_button.isChecked():
             self._case_overview.toggle_button.setChecked(False)
 
@@ -1785,21 +1767,10 @@ class MainWindow(QMainWindow):
         self._range_end.setValue(0)
         self._range_start.blockSignals(False)
         self._range_end.blockSignals(False)
-        average_rate = "알 수 없음" if metadata.average_frame_rate is None else f"{metadata.average_frame_rate:.3f}"
-        if metadata.variable_frame_rate_detected is True:
-            vfr = "VFR 징후 감지"
-        elif metadata.variable_frame_rate_detected is None:
-            vfr = "VFR 여부 미확정"
-        else:
-            vfr = "VFR 징후 미감지(고정 FPS 단정 안 함)"
-        # Size and length for the reader; the technical probe details stay in the tooltip.
+        # Keep the size and length visible beside the video list.
         self._metadata_label.setText(
             f"{metadata.display_width}×{metadata.display_height} · "
             f"{format_milliseconds(seconds_to_milliseconds(metadata.duration_seconds))}"
-        )
-        self._metadata_label.setToolTip(
-            f"길이 {metadata.duration_seconds:.3f}초 · 평균 FPS {average_rate} · "
-            f"회전 {metadata.rotation_degrees}° · {vfr}"
         )
         self._motion_scan_button.setEnabled(True)
         self._make_plan_button.setEnabled(True)
@@ -2756,11 +2727,6 @@ class MainWindow(QMainWindow):
         self._single_range_box.setVisible(not multi)
         self._multi_range_label.setVisible(multi)
         self._plan_group.set_aside(f"분석할 영상 {len(self._analysis_targets)}개" if multi else "")
-        self._make_plan_button.setToolTip(
-            "고른 영상마다 움직임 구간을 찾아 계획을 만듭니다. 승인 전에는 분석하지 않습니다."
-            if multi
-            else "체크한 움직임 구간과 입력한 목적·구간으로 계획을 만듭니다. 추가 질문이 있으면 먼저 표시합니다."
-        )
 
     def _batch_limits(self, mode: AnalysisMode) -> AnalysisLimits:
         return (
@@ -3023,6 +2989,7 @@ class MainWindow(QMainWindow):
         )
         self._person_compare_button.setVisible(several)
         self._person_compare_button.setEnabled(ready)
+        self._camera_row.updateGeometry()
         if len(candidate_videos) < 2:
             tooltip = "서로 다른 영상 두 개 이상에서 실제 AI 분석 후보가 필요합니다"
         elif not model_ready:
@@ -3075,7 +3042,6 @@ class MainWindow(QMainWindow):
 
         dialog = PersonComparisonDialog(
             candidates,
-            f"{self._choice_label(model_id)} · {model_id}",
             make_worker,
             self,
         )
@@ -3211,6 +3177,7 @@ class MainWindow(QMainWindow):
         self._progress_label.setText(
             f"{self._last_progress_message} · 경과 {minutes:02d}:{seconds:02d}"
         )
+        self._progress_label.setVisible(True)
 
     def _cancel_analysis(self) -> None:
         for worker in (self._batch_prepare_worker, self._batch_run_worker):
@@ -3260,14 +3227,8 @@ class MainWindow(QMainWindow):
         self._progress_bar.setRange(0, 100)
         if job.status is JobStatus.COMPLETED:
             self._progress_bar.setValue(100)
-            origin_text = {
-                ResultOrigin.SAMPLE: "시연용 결과 (실제 AI 분석 아님)",
-                ResultOrigin.TEST_DOUBLE: "테스트 응답 (실제 모델 아님)",
-                ResultOrigin.REAL_MODEL: "AI 분석",
-            }[job.origin]
-            elapsed = f" · {job.elapsed_seconds:.1f}초" if job.elapsed_seconds is not None else ""
-            outcome = f"후보 {len(job.segments)}개" if job.segments else "후보 없음"
-            self._progress_label.setText(f"완료 · {outcome} · {origin_text}{elapsed}")
+            elapsed = f" ({job.elapsed_seconds:.1f}초)" if job.elapsed_seconds is not None else ""
+            self._progress_label.setText(f"완료{elapsed}")
             self._set_result_banner(job.origin, job.model_id)
             self._display_segments(job)
             self._refresh_saved_results(select_job_id=job.job_id)
@@ -3297,6 +3258,7 @@ class MainWindow(QMainWindow):
             )
             self._refresh_review_empty_state()
             self._show_error(job.error or "알 수 없는 분석 오류가 발생했습니다.")
+        self._progress_label.setVisible(True)
 
     def _on_worker_finished(self) -> None:
         self._elapsed_timer.stop()
@@ -3323,9 +3285,6 @@ class MainWindow(QMainWindow):
         self._prev_step_button.setEnabled(previous_exists)
         self._prev_step_button.setVisible(previous_exists)
         self._prev_step_button.setText("이전")
-        self._prev_step_button.setToolTip(
-            f"{self.STEP_TITLES[index - 1]} 단계로" if previous_exists else ""
-        )
         self._next_step_button.setEnabled(next_exists)
         self._next_step_button.setVisible(next_exists)
         self._next_step_button.setText(
@@ -3480,7 +3439,6 @@ class MainWindow(QMainWindow):
             self._make_plan_button.setVisible(not ready and not running)
             self._approve_button.setVisible(ready or running)
             self._approve_button.setText("승인하고 실행")
-            self._approve_button.setToolTip("위 영상별 계획을 승인하고 차례로 분석합니다.")
             self._run_button.setVisible(False)
             self._transfer_button.setVisible(False)
             next_button = (
@@ -3515,11 +3473,6 @@ class MainWindow(QMainWindow):
         # Approving starts the run, except for external AI (its transfer approval comes next).
         external = self._current_mode() is AnalysisMode.EXTERNAL
         self._approve_button.setText("분석 계획 승인" if external else "승인하고 실행")
-        self._approve_button.setToolTip(
-            "계획을 승인합니다. 외부 전송은 따로 승인합니다."
-            if external
-            else "위 계획을 승인하고 바로 분석을 시작합니다."
-        )
         self._run_button.setVisible(approved)
         # External mode: the separate transfer approval appears at its turn, after approval.
         self._transfer_button.setVisible(
@@ -3642,7 +3595,6 @@ class MainWindow(QMainWindow):
         self._mode_banner.setText(text)
         self._mode_banner.setStyleSheet(f"color:{text_color};")
         self._mode_dot.setPixmap(theme.dot_pixmap(dot_color, 8))
-        self._mode_banner.setToolTip(detail)
         self._mode_banner.setAccessibleDescription(detail)
         self._status_row.setVisible(bool(text))
 

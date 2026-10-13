@@ -28,7 +28,6 @@ from PySide6.QtGui import (
     QFont,
     QFontInfo,
     QFontMetrics,
-    QHelpEvent,
     QIcon,
     QMouseEvent,
     QPainter,
@@ -42,7 +41,6 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
-    QToolTip,
     QWidget,
 )
 
@@ -211,16 +209,6 @@ class ClueItemDelegate(QStyledItemDelegate):
             return model.setData(index, new_state, Qt.ItemDataRole.CheckStateRole)
         # Press and double click on the box are consumed so they do not start editing.
         return consumed
-
-    def helpEvent(self, event: QHelpEvent, view, option: QStyleOptionViewItem, index) -> bool:  # noqa: N802
-        clue = index.data(Qt.ItemDataRole.UserRole)
-        if isinstance(clue, AnalysisClue) and event.type() == QEvent.Type.ToolTip:
-            cells = self._layout(option, index, clue)[2]
-            for cell, tip in ((cells.edit, "이 단서 수정"), (cells.remove, "이 단서 삭제")):
-                if cell.contains(event.pos()):
-                    QToolTip.showText(event.globalPos(), tip, view)
-                    return True
-        return super().helpEvent(event, view, option, index)
 
     def _layout(self, option: QStyleOptionViewItem, index, clue: AnalysisClue):
         opt = QStyleOptionViewItem(option)

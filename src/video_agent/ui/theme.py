@@ -423,6 +423,14 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
         font-weight: 700; }}
     QPushButton[variant="chip"]:disabled, QPushButton[segment]:disabled,
     QPushButton#viewButton:disabled {{ background: {GRAY_5}; border-color: {GRAY_20}; }}
+    QPushButton#analysisOption {{ background: {SURFACE}; border: 1px solid {GRAY_30};
+        border-radius: {s(8)}px; padding: {s(6)}px {s(10)}px; color: {TEXT};
+        min-height: {s(42)}px; font-weight: 400; text-align: center; }}
+    QPushButton#analysisOption:hover {{ background: {GRAY_5}; border-color: {PRIMARY_FILL}; }}
+    QPushButton#analysisOption:checked {{ background: {PRIMARY_SOFT};
+        border: 2px solid {PRIMARY_FILL}; color: {PRIMARY}; font-weight: 700; }}
+    QPushButton#analysisOption:disabled {{ background: {GRAY_5};
+        border-color: {GRAY_20}; color: {TEXT_FAINT}; }}
     QPushButton[variant="primary"] {{ background: {PRIMARY_FILL}; color: {GRAY_0};
                                       border-color: {PRIMARY_FILL}; font-weight: 700; }}
     QPushButton[variant="primary"]:hover {{ background: {PRIMARY_HOVER}; border-color: {PRIMARY_HOVER}; }}

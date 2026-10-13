@@ -361,6 +361,7 @@ class SummaryBuilderTests(unittest.TestCase):
         self.assertIn('<div class="sq">□ 검토 목적:', page)
         self.assertIn('<section class="appendix"><h2>붙임. 분석 조건</h2>', page)
         self.assertNotIn('class="banner"', page)  # a real result: no line above the title
+        self.assertNotIn("초안", page)
         self.assertIn("영상만으로 범죄 성립이나 사람의 의도를 판단하지 않음", page)
 
 
@@ -513,6 +514,9 @@ class SummaryDialogTests(unittest.TestCase):
         self.assertIn("<td>관련 있음</td>", self.dialog._section_bodies["observations"].text())
         self.assertIn("저장하지 않은 기록 1건", self.dialog.warning_label.text())
         self.assertTrue(self.dialog.banner_label.isHidden())  # real result: no banner
+        self.assertEqual(self.dialog.windowTitle(), "결과 보고")
+        self.assertEqual(self.dialog.width(), 860)
+        self.assertEqual(self.dialog.regenerate_button.text(), "보고 내용 다시 만들기")
         self.assertEqual(self.dialog.title_label.text(), "CCTV 영상 검토 결과 보고")
         self.assertEqual(self.dialog.author_edit.placeholderText(), "수사관 성명")
         law_height = self.dialog.editors["open_items"].height()
@@ -565,6 +569,11 @@ class SummaryDialogTests(unittest.TestCase):
         try:
             self.assertEqual(dialog.scope, "case")
             self.assertTrue(dialog.scope_buttons["case"].isChecked())
+            dialog.show()
+            QApplication.processEvents()
+            case_button = dialog.scope_buttons["case"]
+            camera_button = dialog.scope_buttons["camera"]
+            self.assertEqual(case_button.geometry().right() + 1, camera_button.geometry().left())
             self.assertIn("복도 CCTV", dialog.editors["appendix"].toPlainText())
 
             dialog.editors["opinions"].setPlainText("고친 문구")

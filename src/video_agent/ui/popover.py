@@ -52,7 +52,6 @@ class InfoPopover(QWidget):
         close = QPushButton()
         close.setObjectName("popoverClose")
         close.setAccessibleName("닫기")
-        close.setToolTip("닫기 (Esc)")
         theme.set_icon(close, "x")
         close.clicked.connect(self.close)
         header.addWidget(heading, 1)
