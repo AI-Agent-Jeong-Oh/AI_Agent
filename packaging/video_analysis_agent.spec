@@ -14,6 +14,10 @@ analysis = Analysis(
             str(project_root / "src" / "video_agent" / "knowledge" / "data" / "common_rules.json"),
             "video_agent/knowledge/data",
         ),
+        (
+            str(project_root / "src" / "video_agent" / "knowledge" / "data" / "case_rules.json"),
+            "video_agent/knowledge/data",
+        ),
         (str(project_root / "src" / "video_agent" / "ui" / "assets"), "video_agent/ui/assets"),
     ],
     hiddenimports=[],

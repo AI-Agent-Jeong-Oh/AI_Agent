@@ -193,7 +193,7 @@ QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
 open dist/VideoAnalysisAgent.app
 ```
 
-결과는 `dist/VideoAnalysisAgent.app`입니다. 모델 가중치, 영상, 키와 Homebrew FFmpeg는 번들에 포함하지 않습니다. 현재 빌드는 arm64이며 PyInstaller의 ad-hoc 서명만 있습니다. 개발자 인증서 서명·공증·배포 호환성은 미검증입니다.
+결과는 `dist/VideoAnalysisAgent.app`입니다. 결과 보고의 공통 규정과 사건 유형별 참고 법령 JSON을 번들에 포함합니다. 모델 가중치, 영상, 키와 Homebrew FFmpeg는 번들에 포함하지 않습니다. 현재 빌드는 arm64이며 PyInstaller의 ad-hoc 서명만 있습니다. 개발자 인증서 서명·공증·배포 호환성은 미검증입니다.
 
 `.app`을 실행하는 Mac에도 FFmpeg/ffprobe와 Ollama가 별도로 설치되어 실행 중이어야 하며, 사용할 VLM도 Ollama 사용자 저장소에 있어야 합니다.
 
