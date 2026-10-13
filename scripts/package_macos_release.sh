@@ -22,7 +22,11 @@ trap 'rm -rf "$staging_dir"' EXIT
 
 staged_app="$staging_dir/숭재수사대 다연캅.app"
 ditto "$source_app" "$staged_app"
-ditto -c -k --keepParent "$staged_app" "$staging_dir/release.zip"
+ditto -c -k --norsrc --keepParent "$staged_app" "$staging_dir/release.zip"
+if /usr/bin/unzip -Z -1 "$staging_dir/release.zip" | /usr/bin/grep -E '(^|/)\._[^/]*$|^__MACOSX/' >/dev/null; then
+  print -u2 "ZIP에 AppleDouble 파일이 포함되어 있습니다. 배포를 중단합니다."
+  exit 1
+fi
 mv "$staging_dir/release.zip" "$output_zip"
 
 print "Release ZIP: $output_zip"
