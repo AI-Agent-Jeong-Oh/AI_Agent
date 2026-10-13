@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from PySide6.QtCore import QEvent, QObject, QPointF, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QObject, QPointF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction,
     QCloseEvent,
@@ -244,6 +244,8 @@ class _StepIndicator(QWidget):
 
 
 class MainWindow(QMainWindow):
+    closed = Signal(bool)
+
     UI_ZOOM_MIN = 75
     UI_ZOOM_MAX = 150
     UI_ZOOM_STEP = 10
@@ -269,13 +271,15 @@ class MainWindow(QMainWindow):
     OPENAI_CHAT_COMPLETIONS_ENDPOINT = "https://api.openai.com/v1/chat/completions"
     OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
 
-    def __init__(self) -> None:
+    def __init__(self, operator_name: str | None = None) -> None:
         super().__init__()
         self.setWindowTitle(self.APP_TITLE)
         self.resize(1220, 850)
 
         self._base_font = QFont(theme.load_fonts())
         self._ui_zoom_percent = 100
+        self._operator_name = (operator_name or "").strip()
+        self._logout_pending = False
 
         self._video_path: Path | None = None
         self._video_id: str | None = None
@@ -474,6 +478,19 @@ class MainWindow(QMainWindow):
         row.addWidget(divider)
         row.addWidget(title)
         row.addStretch()
+        self._operator_label = QLabel(
+            f"사용자  {self._operator_name}" if self._operator_name else ""
+        )
+        self._operator_label.setObjectName("headerUser")
+        self._operator_label.setAccessibleName("로그인한 사용자")
+        self._operator_label.setVisible(bool(self._operator_name))
+        row.addWidget(self._operator_label)
+        if self._operator_name:
+            user_divider = QFrame()
+            user_divider.setObjectName("headerDivider")
+            user_divider.setFrameShape(QFrame.Shape.VLine)
+            user_divider.setFixedWidth(1)
+            row.addWidget(user_divider)
         # The open case and whether it is saved, like the case number area of the demo.
         case_caption = QLabel("사건")
         case_caption.setObjectName("headerHint")
@@ -580,16 +597,27 @@ class MainWindow(QMainWindow):
         placeholder.setObjectName("videoPlaceholder")
         placeholder.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         placeholder_layout = QVBoxLayout(placeholder)
+        placeholder_layout.setContentsMargins(24, 20, 24, 20)
+        placeholder_layout.setSpacing(8)
         placeholder_layout.addStretch(1)
-        placeholder_icon = QLabel()
-        placeholder_icon.setPixmap(theme.icon("video-off", theme.GRAY_40).pixmap(40, 40))
-        placeholder_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._mascot_label = QLabel()
+        self._mascot_label.setObjectName("welcomeMascots")
+        self._mascot_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._mascot_label.setAccessibleName("포돌이와 포순이 환영 일러스트")
+        self._mascot_pixmap = QPixmap(
+            str(theme.ASSETS_DIR / "podori_posuni_welcome.png")
+        )
         self._video_placeholder_text = QLabel()
         self._video_placeholder_text.setObjectName("videoPlaceholderText")
         self._video_placeholder_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._video_placeholder_text.setWordWrap(True)
-        placeholder_layout.addWidget(placeholder_icon)
+        self._video_placeholder_hint = QLabel("중요한 장면을 차분하게 확인해 보세요")
+        self._video_placeholder_hint.setObjectName("videoPlaceholderHint")
+        self._video_placeholder_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._video_placeholder_hint.setWordWrap(True)
+        placeholder_layout.addWidget(self._mascot_label)
         placeholder_layout.addWidget(self._video_placeholder_text)
+        placeholder_layout.addWidget(self._video_placeholder_hint)
         placeholder_layout.addStretch(1)
         self._video_stack = QStackedWidget()
         self._video_stack.setMinimumHeight(200)
@@ -1113,6 +1141,10 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         summary_action = file_menu.addAction("결과 요약…")
         summary_action.triggered.connect(self._review_panel.summary_button.click)
+        file_menu.addSeparator()
+        self._logout_action = file_menu.addAction("로그아웃")
+        self._logout_action.setVisible(bool(self._operator_name))
+        self._logout_action.triggered.connect(self._request_logout)
         view_menu = self.menuBar().addMenu("보기")
         for action in (self._zoom_in_action, self._zoom_out_action, self._zoom_reset_action):
             view_menu.addAction(action)
@@ -1151,6 +1183,12 @@ class MainWindow(QMainWindow):
             self._emblem_label.setPixmap(
                 self._emblem_pixmap.scaledToHeight(
                     scaled(34), Qt.TransformationMode.SmoothTransformation
+                )
+            )
+        if not self._mascot_pixmap.isNull():
+            self._mascot_label.setPixmap(
+                self._mascot_pixmap.scaledToHeight(
+                    scaled(156), Qt.TransformationMode.SmoothTransformation
                 )
             )
         for step_layout in self._step_layouts:
@@ -3893,7 +3931,9 @@ class MainWindow(QMainWindow):
                     case_rules=self._case_rules,
                 )
 
-        dialog = ResultSummaryDialog(build, self, case_build=case_build)
+        dialog = ResultSummaryDialog(
+            build, self, case_build=case_build, author=self._operator_name
+        )
         self._summary_dialog = dialog
         dialog.show()
         return dialog
@@ -4005,6 +4045,11 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(message, 8000)
         notify(self, "확인이 필요합니다", message, error=True)
 
+    def _request_logout(self) -> None:
+        self._logout_pending = True
+        if not self.close():
+            self._logout_pending = False
+
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802 - Qt override name
         if not self._confirm_discard_unsaved_reviews():
             event.ignore()
@@ -4038,3 +4083,4 @@ class MainWindow(QMainWindow):
         self._player.stop()
         self._external_api_key_edit.clear()
         event.accept()
+        self.closed.emit(self._logout_pending)

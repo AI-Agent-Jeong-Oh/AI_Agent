@@ -49,6 +49,7 @@
 | `identity/comparison.py`, `ui/person_comparison_dialog.py` | 영상별 사용자 선택 후보의 근거 프레임을 쌍별로 비교하고 한계가 포함된 검토 후보 생성 | 승재 |
 | `models/` | 설정 검증, 로컬/외부 HTTP 어댑터, 런타임 조사 | 승재 |
 | `storage/` | 사용자 설정·결과·앱 소유 캐시 | 승재 |
+| `storage/auth.py`, `ui/startup.py` | 시작 로딩 화면과 다중 로컬 사용자 회원가입·로그인·로그아웃. 비밀번호 원문과 외부 계정 없음 | 승재 |
 | `ui/case_panel.py` | 사건 관리 정보와 분석 단서의 최소 입력·선택 UI | 승재 연결 / 팀원 UI 개선 |
 | `knowledge/contracts.py` | 팀원 PDF 검색 구현이 따를 형식 | 공통 계약/팀원 구현 |
 | `ui/main_window.py` | 현재 최소 연결 UI. 디자인·접근성 개선 대상 | 팀원 중심 |
@@ -128,11 +129,14 @@ OpenAI 외부 모드는 기본적으로 `https://api.openai.com/v1/chat/completi
 macOS 기본 위치는 다음과 같습니다.
 
 - 설정·결과: `~/Library/Application Support/VideoAnalysisAgent/`
+- 로컬 로그인: `~/Library/Application Support/VideoAnalysisAgent/local_account.json`
 - 사건 정보: `~/Library/Application Support/VideoAnalysisAgent/cases/`
 - 영상 간 인물 비교 보고서: `~/Library/Application Support/VideoAnalysisAgent/person_comparisons/`
 - 추출 프레임 캐시: `~/Library/Caches/VideoAnalysisAgent/`
 
 설정에는 API key 환경 변수 이름만 저장하고 key 값은 저장·로그하지 않습니다. 결과에는 원본 경로가 없으며 영상 ID, 목적·범위, 모델 설정, 요청/실제 입력 시각·해상도, 공급자 요청 수·시간 지표와 출처를 저장합니다. 캐시 정리는 root marker와 job marker가 모두 있는 앱 생성 디렉터리만 대상으로 합니다.
+
+앱 시작 시 진행률을 알 수 없는 짧은 로딩 화면 뒤 로컬 로그인을 거칩니다. 최초 실행에서 사용자 이름과 비밀번호를 등록하고, 이후 로그인 화면에서 다른 로컬 사용자도 회원가입할 수 있습니다. 파일 메뉴의 로그아웃은 현재 창의 취소 가능한 작업 정리를 거친 뒤 로그인 화면으로 돌아갑니다. 비밀번호는 사용자별 무작위 솔트와 PBKDF2-SHA256 해시로만 `local_account.json`에 저장합니다. 기존 단일 계정 문서는 읽기 호환하며 계정 추가 시 다중 계정 문서로 원자적으로 다시 씁니다. 이 파일은 `0600` 권한으로 기록되고 모델이나 외부 서버로 전달되지 않습니다. 이는 앱 접근을 구분하는 장치이며 원본 영상, 사건 파일, 결과 파일의 저장 암호화를 대신하지 않습니다.
 
 ## PDF 연결 경계
 

@@ -357,6 +357,30 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QWidget {{ font-family: "{family}", "{FALLBACK_FONT_FAMILY}"; font-size: {s(BODY_PX)}px;
                color: {TEXT}; }}
     QMainWindow, QDialog {{ background: {PAGE}; }}
+    QDialog#startupDialog {{ background: {NAVY}; }}
+    QFrame#startupPanel {{
+        background: qradialgradient(cx:0.5, cy:0.48, radius:0.9,
+            fx:0.5, fy:0.42, stop:0 {SECONDARY_60}, stop:0.58 {NAVY}, stop:1 {SECONDARY_90});
+        border: 1px solid {SECONDARY_50}; border-radius: {s(12)}px;
+    }}
+    QLabel#startupOrganization {{ color: {GRAY_0}; font-size: {s(19)}px; font-weight: 700; }}
+    QLabel#startupTitle {{ color: {SECONDARY_10}; font-size: {s(CONTENT_PX)}px; }}
+    QLabel#startupMascots {{ background: transparent; }}
+    QLabel#startupStatus {{ color: {GRAY_0}; font-size: {s(LABEL_PX)}px; }}
+    QProgressBar#startupProgress {{ background: {SECONDARY_70}; border: none;
+        border-radius: {s(4)}px; min-height: {s(8)}px; max-height: {s(8)}px; }}
+    QProgressBar#startupProgress::chunk {{ background: {SECONDARY_10}; border-radius: {s(4)}px; }}
+    QDialog#loginDialog {{ background: {PAGE}; }}
+    QFrame#loginCard {{ background: {SURFACE}; border: 1px solid {BORDER};
+        border-radius: {s(10)}px; }}
+    QLabel#loginOrganization {{ color: {TEXT}; font-size: {s(18)}px; font-weight: 700; }}
+    QLabel#loginAppName {{ color: {TEXT_SUB}; font-size: {s(LABEL_PX)}px; }}
+    QLabel#loginTitle {{ color: {TEXT}; font-size: {s(22)}px; font-weight: 700; }}
+    QLabel#loginIntro {{ color: {TEXT_SUB}; }}
+    QLabel#loginError {{ color: {DANGER}; background: #fdefec; border: 1px solid #fcdfd9;
+        border-radius: {s(5)}px; padding: {s(8)}px; }}
+    QLabel#loginScope {{ color: {TEXT_SUB}; background: {GRAY_5}; border-radius: {s(5)}px;
+        padding: {s(10)}px; font-size: {s(LABEL_PX)}px; }}
     QDialog#messageDialog {{ background: {SURFACE}; }}
     /* Report draft: centred title between double rules and a ruled header table. */
     QLabel#reportTitle {{ font-size: {s(20)}px; font-weight: 700; color: {TEXT};
@@ -382,6 +406,7 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QLabel#title {{ font-size: {s(CONTENT_PX)}px; color: {TEXT_SUB}; }}
     QLabel#headerHint {{ font-size: {s(LABEL_PX)}px; color: {TEXT_SUB}; }}
     QLabel#headerCase {{ font-size: {s(LABEL_PX)}px; font-weight: 700; color: {TEXT}; }}
+    QLabel#headerUser {{ font-size: {s(LABEL_PX)}px; font-weight: 700; color: {PRIMARY}; }}
     QLabel#statusAttention {{ color: {WARNING_TEXT}; padding-left: {s(16)}px; }}
     QFrame#headerDivider {{ background: {BORDER}; border: none;
                             min-height: {s(16)}px; max-height: {s(16)}px; }}
@@ -497,8 +522,16 @@ def build_stylesheet(scaled: Callable[[int], int]) -> str:
     QPushButton#playerIcon:pressed {{ background: {GRAY_20}; }}
     QPushButton#playerIcon:disabled {{ background: transparent; }}
     QFrame#cardDivider {{ background: {LINE}; border: none; min-height: 1px; max-height: 1px; }}
-    QWidget#videoPlaceholder {{ background: {VIDEO_BACKGROUND}; }}
-    QLabel#videoPlaceholderText {{ color: {GRAY_20}; }}
+    QWidget#videoPlaceholder {{
+        background: qradialgradient(cx:0.5, cy:0.42, radius:0.75,
+            fx:0.5, fy:0.38, stop:0 #26384b, stop:0.56 #1f2a35, stop:1 {VIDEO_BACKGROUND});
+        border-radius: {s(4)}px;
+    }}
+    QLabel#welcomeMascots {{ background: transparent; }}
+    QLabel#videoPlaceholderText {{ color: {GRAY_0}; font-size: {s(CONTENT_PX)}px;
+        font-weight: 700; background: transparent; }}
+    QLabel#videoPlaceholderHint {{ color: {GRAY_30}; font-size: {s(LABEL_PX)}px;
+        background: transparent; }}
     QPushButton#disclosure, QPushButton#disclosure:checked, QPushButton#disclosure:hover {{
         border: none; background: transparent; color: {PRIMARY}; font-weight: 400;
         text-align: left; padding: {compact_pad}px 0; min-height: {compact_min}px;

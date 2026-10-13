@@ -122,6 +122,17 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertFalse(self.window._run_button.isEnabled())
         self.assertIsNone(self.window._session.analysis_approval)
 
+    def test_logged_in_operator_can_logout_from_file_menu(self) -> None:
+        window = MainWindow(operator_name="김수사관")
+        closed_for_logout: list[bool] = []
+        window.closed.connect(closed_for_logout.append)
+
+        with patch.object(window, "_confirm_discard_unsaved_reviews", return_value=True):
+            self.assertTrue(window._logout_action.isVisible())
+            window._logout_action.trigger()
+
+        self.assertEqual(closed_for_logout, [True])
+
     def test_case_type_suggests_purpose_and_focus_flows_into_the_plan(self) -> None:
         window = self.window
         panel = window._case_panel

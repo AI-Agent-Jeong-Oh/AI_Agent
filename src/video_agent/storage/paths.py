@@ -38,6 +38,10 @@ class AppPaths:
         return self.data_dir / "settings.json"
 
     @property
+    def credentials_file(self) -> Path:
+        return self.data_dir / "local_account.json"
+
+    @property
     def results_dir(self) -> Path:
         return self.data_dir / "results"
 

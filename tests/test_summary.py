@@ -523,6 +523,13 @@ class SummaryDialogTests(unittest.TestCase):
         self.dialog.editors["open_items"].setPlainText("\n".join(["줄"] * 12))
         self.assertGreater(self.dialog.editors["open_items"].height(), law_height)
 
+    def test_logged_in_operator_is_the_default_report_author(self) -> None:
+        dialog = ResultSummaryDialog(lambda: reviewed_summary(), author="김수사관")
+        try:
+            self.assertEqual(dialog.author_edit.text(), "김수사관")
+        finally:
+            dialog.close()
+
     def test_export_writes_edited_text(self) -> None:
         self.dialog.editors["opinions"].setPlainText("수사관이 고친 의견")
         self.dialog.author_edit.setText("홍길동")

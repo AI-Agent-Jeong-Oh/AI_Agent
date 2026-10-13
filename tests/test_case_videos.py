@@ -345,6 +345,13 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertEqual(window._case_state_label.text(), "저장 안 됨")
         self.assertEqual(window._video_stack.currentIndex(), 0)
         self.assertEqual(window._video_placeholder_text.text(), "CCTV 영상을 추가하세요")
+        self.assertFalse(window._mascot_pixmap.isNull())
+        self.assertEqual(
+            window._mascot_label.accessibleName(), "포돌이와 포순이 환영 일러스트"
+        )
+        self.assertEqual(
+            window._video_placeholder_hint.text(), "중요한 장면을 차분하게 확인해 보세요"
+        )
         self.assertTrue(window._attention_label.isHidden())
 
         self.add(self.cam_a, self.cam_b)

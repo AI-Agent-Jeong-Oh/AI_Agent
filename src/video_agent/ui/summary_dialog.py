@@ -51,6 +51,7 @@ class ResultSummaryDialog(QDialog):
         parent: QWidget | None = None,
         *,
         case_build: Callable[[], ResultSummary] | None = None,
+        author: str = "",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("결과 보고")
@@ -62,6 +63,7 @@ class ResultSummaryDialog(QDialog):
         self._scope = SCOPE_CASE if case_build is not None else SCOPE_CAMERA
         self._build = self._builders[self._scope]
         self._summary = self._build()
+        self._default_author = author.strip()
         self.editors: dict[str, QPlainTextEdit] = {}
         self._build_ui()
         self._fill(self._summary)
@@ -118,6 +120,7 @@ class ResultSummaryDialog(QDialog):
         self.author_edit.setObjectName("reportAuthor")
         self.author_edit.setPlaceholderText("수사관 성명")
         self.author_edit.setAccessibleName("작성자")
+        self.author_edit.setText(self._default_author)
         layout.addWidget(self.meta_box)
 
         sections = QWidget()
