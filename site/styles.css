@@ -15,11 +15,12 @@
 
 * { box-sizing: border-box; }
 body { margin: 0; }
+main { display: grid; grid-template-rows: minmax(0, 1fr) auto; min-height: 100svh; }
 
 .hero {
   position: relative;
   isolation: isolate;
-  min-height: clamp(560px, 49.6vw, 800px);
+  min-height: 0;
   overflow: hidden;
   color: #fff;
   background: #172231;
@@ -35,18 +36,6 @@ body { margin: 0; }
 
 .hero-background { display: block; width: 100%; height: 100%; }
 
-.held-app-icon {
-  position: absolute;
-  left: 49.1%;
-  top: 37.4%;
-  width: 12%;
-  aspect-ratio: 1;
-  object-fit: cover;
-  border-radius: 12%;
-  transform: rotate(-10deg);
-  pointer-events: none;
-}
-
 .hero::after {
   content: "";
   position: absolute;
@@ -59,12 +48,12 @@ body { margin: 0; }
 .hero-content {
   width: min(38.5vw, 590px);
   margin-left: clamp(36px, 6vw, 100px);
-  padding-top: clamp(30px, 3.8vw, 58px);
-  padding-bottom: 30px;
+  padding-top: clamp(22px, 3vh, 52px);
+  padding-bottom: 18px;
 }
 
 .app-name {
-  margin: 0 0 clamp(20px, 2vw, 32px);
+  margin: 0 0 clamp(12px, 2vh, 25px);
   font-size: clamp(13px, 1.05vw, 16px);
   font-weight: 700;
   letter-spacing: .04em;
@@ -73,9 +62,9 @@ body { margin: 0; }
 
 .eyebrow {
   display: inline-block;
-  margin: 0 0 20px;
+  margin: 0 0 clamp(10px, 1.5vh, 18px);
   font-family: "Gaegu Eyebrow", "Apple SD Gothic Neo", sans-serif;
-  font-size: clamp(33px, 3.15vw, 48px);
+  font-size: clamp(28px, min(3.15vw, 4.5vh), 48px);
   line-height: 1.2;
   font-weight: 400;
   letter-spacing: -.03em;
@@ -88,7 +77,7 @@ body { margin: 0; }
 
 h1 {
   margin: 0;
-  font-size: clamp(48px, 5.2vw, 80px);
+  font-size: clamp(43px, min(5.2vw, 7.3vh), 80px);
   font-weight: 900;
   line-height: 1.12;
   letter-spacing: -.065em;
@@ -100,8 +89,8 @@ h1 em { color: #37a9fa; font-style: normal; }
 
 .hero-description {
   max-width: 540px;
-  margin: clamp(20px, 2vw, 30px) 0 0;
-  font-size: clamp(18px, 1.65vw, 25px);
+  margin: clamp(14px, 2vh, 24px) 0 0;
+  font-size: clamp(17px, min(1.65vw, 2.3vh), 25px);
   line-height: 1.48;
   font-weight: 400;
   letter-spacing: -.035em;
@@ -114,15 +103,15 @@ h1 em { color: #37a9fa; font-style: normal; }
   align-items: center;
   justify-content: center;
   gap: 15px;
-  min-height: 90px;
-  margin-top: clamp(23px, 2vw, 31px);
-  padding: 16px 37px;
+  min-height: clamp(60px, 8vh, 82px);
+  margin-top: clamp(16px, 2.3vh, 26px);
+  padding: 10px 29px;
   border: 3px solid #36aaff;
   border-radius: 999px;
   background: #0075f8;
   box-shadow: 0 10px 25px rgba(0, 0, 0, .2), inset 0 1px 0 rgba(255, 255, 255, .25);
   color: #fff;
-  font-size: clamp(21px, 2.15vw, 32px);
+  font-size: clamp(20px, min(2.15vw, 3.2vh), 30px);
   font-weight: 800;
   white-space: nowrap;
   text-decoration: none;
@@ -135,8 +124,8 @@ h1 em { color: #37a9fa; font-style: normal; }
 .download-link .apple-icon { width: 1.2em; height: 1.2em; }
 
 .download-status {
-  min-height: 1.5em;
-  margin: 10px 0 0 12px;
+  min-height: 1.4em;
+  margin: 7px 0 0 12px;
   color: #e4edf8;
   font-size: 14px;
   line-height: 1.5;
@@ -146,12 +135,12 @@ h1 em { color: #37a9fa; font-style: normal; }
   position: relative;
   z-index: 1;
   margin-top: -1px;
-  padding: 24px clamp(32px, 4vw, 68px) 26px;
+  padding: clamp(14px, 2vh, 24px) clamp(32px, 4vw, 68px);
   border-radius: 38px 38px 0 0;
   background: #fff;
   box-shadow: 0 -12px 36px rgba(8, 15, 26, .08);
 }
-.features-heading { display: flex; align-items: center; gap: 25px; margin: 0 8px 18px; }
+.features-heading { display: flex; align-items: center; gap: 25px; margin: 0 8px 12px; }
 .features-heading h2 { margin: 0; font-size: clamp(25px, 2.3vw, 35px); font-weight: 850; white-space: nowrap; }
 .features-heading p { margin: 0; padding-left: 25px; border-left: 1px solid #aab7d0; color: #66769a; font-size: clamp(15px, 1.35vw, 21px); }
 .feature-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(18px, 2.5vw, 40px); }
@@ -159,14 +148,14 @@ h1 em { color: #37a9fa; font-style: normal; }
   display: flex;
   align-items: center;
   gap: clamp(14px, 1.5vw, 23px);
-  min-height: 166px;
-  padding: 20px 23px;
+  min-height: clamp(116px, 15vh, 150px);
+  padding: 14px 18px;
   border: 1px solid #f0f3f9;
   border-radius: 30px;
   background: #fdfdff;
   box-shadow: 0 5px 22px rgba(31, 55, 99, .045);
 }
-.feature-icon { display: grid; flex: 0 0 clamp(78px, 7.8vw, 118px); place-items: center; aspect-ratio: 1; border-radius: 50%; }
+.feature-icon { display: grid; flex: 0 0 clamp(68px, 7vw, 100px); place-items: center; aspect-ratio: 1; border-radius: 50%; }
 .feature-icon svg { width: 54%; height: 54%; }
 .feature-icon-video { background: #dbf0ff; color: #219af4; }
 .feature-icon-search { background: #ecebff; color: #7861ff; }
@@ -175,17 +164,34 @@ h1 em { color: #37a9fa; font-style: normal; }
 .feature-card p { margin: 0; color: #637293; font-size: clamp(15px, 1.35vw, 20px); line-height: 1.4; letter-spacing: -.035em; word-break: keep-all; text-align: left; }
 
 @media (max-width: 1100px) {
-  .hero { min-height: 665px; }
   .hero-visual { width: max(100%, 1180px); left: auto; right: 0; }
   .hero-content { width: 500px; max-width: 48vw; }
-  h1 { font-size: clamp(48px, 5.7vw, 65px); }
-  .hero-description { font-size: 19px; }
-  .download-link { min-height: 72px; font-size: 23px; padding: 12px 26px; }
+  .hero-description span { white-space: normal; }
   .feature-card { align-items: flex-start; flex-direction: column; }
-  .feature-icon { flex-basis: auto; width: 75px; }
+  .feature-icon { flex-basis: auto; width: 68px; }
+}
+
+@media (min-width: 701px) and (max-width: 900px) {
+  .hero::after { background: linear-gradient(90deg, rgba(12, 19, 31, .72), rgba(12, 19, 31, .36) 48%, transparent 72%); }
+  .hero-content { width: 47vw; max-width: none; margin-left: 6vw; padding-top: 22px; }
+  .app-name { margin-bottom: 12px; }
+  .eyebrow { margin-bottom: 12px; font-size: 28px; }
+  h1 { font-size: clamp(39px, 5.3vw, 48px); }
+  .hero-description { margin-top: 14px; font-size: 16px; }
+  .download-link { min-height: 58px; margin-top: 17px; gap: 9px; padding: 8px 20px; font-size: 20px; }
+  .features { padding: 14px 28px; }
+  .features-heading { gap: 13px; margin: 0 4px 9px; }
+  .features-heading h2 { font-size: 23px; }
+  .features-heading p { padding-left: 13px; font-size: 13px; }
+  .feature-grid { gap: 12px; }
+  .feature-card { min-height: 146px; gap: 7px; padding: 11px 13px; border-radius: 20px; }
+  .feature-icon { width: 52px; }
+  .feature-card h3 { font-size: 16px; white-space: normal; }
+  .feature-card p { font-size: 13px; }
 }
 
 @media (max-width: 700px) {
+  main { display: block; }
   .hero { display: flex; flex-direction: column; min-height: 0; }
   .hero-content { order: 1; width: auto; max-width: none; margin: 0; padding: 30px 25px 12px; }
   .app-name { margin-bottom: 24px; font-size: 13px; }
