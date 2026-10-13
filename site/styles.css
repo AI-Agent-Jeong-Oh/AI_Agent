@@ -1,0 +1,47 @@
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  color: #1d2733;
+  background: #f6f8fa;
+}
+
+* { box-sizing: border-box; }
+
+body { margin: 0; }
+
+.page {
+  width: min(100% - 40px, 680px);
+  margin: 0 auto;
+  padding: clamp(48px, 9vw, 96px) 0;
+}
+
+.page-header { margin-bottom: 40px; }
+.eyebrow { font-size: 14px; font-weight: 700; }
+h1 { margin: 8px 0 12px; font-size: clamp(30px, 5vw, 42px); line-height: 1.25; }
+h2 { margin: 0 0 12px; font-size: 22px; }
+p { line-height: 1.6; }
+
+.download {
+  padding: 28px;
+  background: #fff;
+  border: 1px solid #d8dee5;
+  border-radius: 12px;
+}
+
+.download-link {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 12px 20px;
+  border-radius: 8px;
+  background: #1b4f82;
+  color: #fff;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.download-link:hover,
+.download-link:focus-visible { background: #123b62; }
+.download-link:focus-visible { outline: 3px solid #6fa7de; outline-offset: 3px; }
+.download-link[aria-disabled="true"] { background: #74808d; cursor: not-allowed; }
+.download-status { margin: 16px 0 0; color: #4e5a66; font-size: 14px; }
+.requirement { margin-top: 24px; color: #4e5a66; font-size: 14px; }
