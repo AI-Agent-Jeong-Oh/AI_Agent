@@ -63,6 +63,7 @@ CCTV 영상은 길지만 실제로 확인해야 할 장면은 짧을 수 있습�
 
 ```text
 로컬 로그인
+→ 최초 1회 로컬 AI 설정: 기존 Vision 모델 선택 또는 사용자 승인 후 다운로드
 → ① 사건 정보·CCTV 영상 등록
 → 분석 목적·사전 단서·우선 확인 상황 설정
 → 선택적으로 FFmpeg 움직임 후보 탐색
@@ -127,6 +128,8 @@ CCTV 영상은 길지만 실제로 확인해야 할 장면은 짧을 수 있습�
 ### 1. 로컬 계정과 사건 관리
 
 - 포돌이·포순이 시작 화면과 로컬 회원가입·로그인·로그아웃
+- 로그인 뒤 최초 1회 Ollama·Vision 모델 확인, 기존 모델 선택과 새 모델 다운로드
+- `설정 → 로컬 AI 설정`에서 모델과 loopback Ollama 주소를 다시 선택
 - 여러 로컬 사용자 지원
 - 비밀번호는 무작위 salt가 포함된 PBKDF2-SHA256 hash로만 저장
 - 사건명·유형·발생 시각 확실성·관리 메모와 여러 CCTV 영상 연결
@@ -207,7 +210,7 @@ CCTV 영상은 길지만 실제로 확인해야 할 장면은 짧을 수 있습�
 | 방식 | 동작 | 표시·승인 정책 |
 |---|---|---|
 | 시연용 | 프레임을 해석하지 않고 승인 범위 비율로 샘플 후보 생성 | `VIDEO_AGENT_ENABLE_SAMPLE=1`에서만 노출, 실제 AI 분석이 아님을 명시 |
-| 로컬 AI | 이 컴퓨터의 Ollama vision 모델로 승인된 프레임 분석 | loopback만 허용, 실패 시 외부/시연용 fallback 없음 |
+| 로컬 AI | 이 컴퓨터의 Ollama Vision 모델을 초기 설정에서 선택해 승인된 프레임 분석 | 설치 모델을 다양하게 선택, loopback만 허용, 실패 시 외부/시연용 fallback 없음 |
 | 외부 AI | HTTPS 외부 Vision API에 승인된 JPEG와 목적 문구 전송 | 분석 승인과 외부 전송 승인을 분리, API key 미저장 |
 
 ## 안전·개인정보 설계
@@ -304,6 +307,10 @@ VIDEO_AGENT_ENABLE_SAMPLE=1 \
 
 ### 3. 로컬 Ollama 분석
 
+앱에 로그인하면 최초 1회 로컬 AI 설정이 열립니다. 이미 실행 중인 Ollama의 모든 설치 모델을 확인하되, `/api/show`가 이미지 입력을 명시한 Vision 모델만 선택 목록에 표시합니다. Ollama가 설치되어 있으면 원하는 모델 이름을 입력해 다운로드할 수도 있고, 설정 없이 계속한 뒤 `설정 → 로컬 AI 설정`에서 다시 열 수 있습니다.
+
+직접 준비하려면 다음 명령을 사용할 수 있습니다.
+
 ```bash
 brew install ollama
 brew services start ollama
@@ -311,7 +318,7 @@ ollama pull qwen3-vl:4b-instruct
 PYTHONPATH=src ./.venv/bin/python -m video_agent
 ```
 
-더 큰 비교 모델이 필요한 경우에만 `qwen3-vl:8b-instruct`를 별도로 설치하고 UI 또는 `VIDEO_AGENT_LOCAL_MODEL`로 선택합니다. 모델 가중치는 저장소나 앱 번들에 포함하지 않습니다.
+더 큰 비교 모델이 필요한 경우에만 `qwen3-vl:8b-instruct`를 별도로 설치하고 초기 설정 또는 `설정 → 로컬 AI 설정`에서 선택합니다. 다른 Ollama Vision 모델도 서버가 이미지 입력 능력을 확인하면 목록에 나타납니다. 모델 가중치는 저장소나 앱 번들에 포함하지 않습니다.
 
 ### 4. 테스트
 
@@ -328,7 +335,7 @@ QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
 
 | 구분 | 기록된 상태 |
 |---|---|
-| 자동 테스트 | 2026-10-11 기준 261개 통과 기록 |
+| 자동 테스트 | 2026-10-14 기준 계약·분석기·저장·오프스크린 UI 370개 통과 |
 | 영상 도구 | FFmpeg 8.1.2, 한글·공백 경로 합성 H.264 영상 처리 기록 |
 | 로컬 VLM | `qwen3-vl:4b-instruct`, `qwen3-vl:8b-instruct` 실제 이미지 입력 연결 기록 |
 | 제공 영상 | 알려진 단일 영상의 후보 생성 확인이며 blind 정확도 평가가 아님 |
@@ -343,6 +350,7 @@ QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
 - 국가법령정보센터 원문과 참고 규정의 최신 대조
 - 지원 대상 macOS의 개발자 인증서 서명·공증·배포 호환성
 - Finder에서 연 앱의 전체 기능·접근성·오디오·장시간 안정성 수동 확인
+- 새 초기 설정 화면에서 실제 Ollama 설치·대용량 모델 다운로드·취소를 수행하는 배포 환경 확인
 
 모델 연결 성공이나 특정 개발 영상의 후보 생성은 일반적인 행동 탐지 정확도를 의미하지 않습니다.
 
@@ -363,6 +371,6 @@ QT_QPA_PLATFORM=offscreen PYTHONPATH=src \
 open dist/VideoAnalysisAgent.app
 ```
 
-결과는 `dist/VideoAnalysisAgent.app`입니다. 현재 배포물은 Apple Silicon용 개발 빌드이며 개발자 인증서 서명·공증과 다른 Mac에서의 실행은 별도 검증이 필요합니다. 받는 Mac에도 FFmpeg/ffprobe, Ollama와 사용할 vision 모델이 별도로 설치되어 있어야 합니다.
+결과는 `dist/VideoAnalysisAgent.app`입니다. 현재 배포물은 Apple Silicon용 개발 빌드이며 개발자 인증서 서명·공증과 다른 Mac에서의 실행은 별도 검증이 필요합니다. 초기 설정이 설치 페이지와 모델 다운로드를 안내하지만, 받는 Mac에도 FFmpeg/ffprobe와 Ollama가 별도로 필요합니다.
 
 Release ZIP과 다운로드 페이지 구성은 [`docs/download-page.md`](docs/download-page.md)를 따릅니다. 영상, 데이터셋 archive, label, 모델 weight, credential, `.env`, 개인 결과와 cache는 저장소에 커밋하지 않습니다.

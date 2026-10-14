@@ -45,6 +45,9 @@ class JsonStorageTests(unittest.TestCase):
         store = SettingsStore(self.paths.settings_file)
         settings = AppSettings(
             mode=AnalysisMode.EXTERNAL,
+            local_model_id="qwen3-vl:4b-instruct",
+            local_endpoint="http://127.0.0.1:11434/api/chat",
+            local_setup_completed=True,
             external_provider_id="provider",
             external_model_id="vision-model",
             external_endpoint="https://provider.invalid/v1/chat/completions",

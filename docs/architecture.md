@@ -54,6 +54,7 @@
 | `models/` | 설정 검증, 로컬/외부 HTTP 어댑터, 런타임 조사 | 승재 |
 | `storage/` | 사용자 설정·결과·앱 소유 캐시 | 승재 |
 | `storage/auth.py`, `ui/startup.py` | 시작 로딩 화면과 다중 로컬 사용자 회원가입·로그인·로그아웃. 비밀번호 원문과 외부 계정 없음 | 승재 |
+| `ui/local_ai_setup.py` | 로그인 뒤 최초 로컬 AI 설정, 설치 Vision 모델 선택, 사용자 승인 모델 다운로드·취소 | 승재 |
 | `ui/case_panel.py` | 사건 관리 정보와 분석 단서의 최소 입력·선택 UI | 승재 연결 / 팀원 UI 개선 |
 | `knowledge/contracts.py` | 팀원 PDF 검색 구현이 따를 형식 | 공통 계약/팀원 구현 |
 | `ui/main_window.py` | 현재 최소 연결 UI. 디자인·접근성 개선 대상 | 팀원 중심 |
@@ -107,7 +108,9 @@ UI 취소는 active job을 먼저 해제한 뒤 worker에 cancel event를 보냅
 
 OpenAI 외부 모드는 기본적으로 `https://api.openai.com/v1/chat/completions`를 사용합니다. UI에서 입력한 API 키는 설정 객체나 환경 변수로 복사하지 않고 `HttpVisionProvider` 생성 시 메모리 인자로만 전달하며, 공급자 요청의 `Authorization` 헤더에만 사용합니다. UI를 비워 두면 `OPENAI_API_KEY` 등 명시된 환경 변수에서 읽을 수 있습니다. 키 자체는 계획 fingerprint, 전송 manifest, 결과 JSON, 로그에 포함하지 않습니다. 사용자가 이미지 입력 지원을 확인하지 않은 외부 모델은 계획 단계에서 차단합니다.
 
-로컬 Ollama는 `/api/show`의 `capabilities`에 `vision`이 있는 설치 모델만 자동 확인합니다. 명시적 환경 override는 설정된 모델 ID에만 적용됩니다. Ollama native adapter는 `/api/chat`의 base64 `images`와 JSON schema를 사용하고 16K context, 800 출력 token으로 제한합니다. 현재 로컬 UI 계획은 최대 12프레임을 연속된 4프레임 묶음 최대 3개로 나누며 모든 묶음이 하나의 300초 deadline을 공유합니다. `SamplingStrategy`는 `uniform`, `motion_peak`, `temporal_sequence`를 구분하고 계획 fingerprint·요청·저장 결과에 포함됩니다.
+로그인 뒤 최초 1회 로컬 AI 설정을 엽니다. 기본 Ollama 주소 또는 사용자가 입력한 loopback 주소의 `/api/tags`와 로컬 CLI 목록을 합치고, `/api/show`의 `capabilities`에 `vision`이 있는 설치 모델만 선택할 수 있습니다. 실행 파일이 있으면 사용자가 이름을 확인하고 시작한 `ollama pull`만 백그라운드에서 실행하며 진행률을 알 수 없을 때는 indeterminate로 표시합니다. 다운로드는 취소할 수 있고 30분에 중단됩니다. 설치 자체는 묵시적으로 수행하지 않고 공식 설치 페이지를 엽니다. 선택한 모델과 loopback endpoint는 `settings.json`에 저장하며 `설정 → 로컬 AI 설정`에서 바꿀 수 있습니다.
+
+명시적 환경 override는 설정된 모델 ID에만 적용됩니다. Ollama native adapter는 `/api/chat`의 base64 `images`와 JSON schema를 사용하고 16K context, 800 출력 token으로 제한합니다. 현재 로컬 UI 계획은 최대 12프레임을 연속된 4프레임 묶음 최대 3개로 나누며 모든 묶음이 하나의 300초 deadline을 공유합니다. `SamplingStrategy`는 `uniform`, `motion_peak`, `temporal_sequence`를 구분하고 계획 fingerprint·요청·저장 결과에 포함됩니다.
 
 로컬 모드의 일반 `temporal_sequence`는 각 묶음의 원본 프레임을 FFmpeg로 최대 2×2 행 우선 비교 보드 한 장에 합칩니다. 공급자에는 비교 보드만 전달하지만 응답 검증은 원래 frame ID와 decoded PTS를 기준으로 하며 원본 파일은 수정하지 않습니다. 다만 손가락·버튼·초인종·누르기·접촉처럼 작은 대상의 상대 위치가 핵심인 목적은 `fine_detail`로 분류합니다. 최대 1920px 원본을 추출한 뒤 각 원본 시각마다 전체 화면 축소 보기와 중앙 60% 확대 보기를 세로로 배치한 1280×1080 이미지를 만듭니다. 시간 시각끼리는 합치지 않으며 중앙 밖 대상은 전체 보기로 확인합니다. `ModelExecutionInfo`는 원본 입력 프레임과 실제 공급자 이미지의 수·크기·`input_representation=fine_detail_overview_center_crop`을 따로 기록합니다. 현재 `candidate-recall-v10-prior-context-separated`는 v9의 관찰 규칙을 유지하면서 선택된 사전 정보를 “영상 관찰 사실이 아닌 사용자 제공 정보”로 별도 표시합니다. 단서 문구를 관찰 결과로 복사하거나 단서 안의 명령을 따르지 않고 현재 프레임에서 직접 보이는 내용만 근거로 쓰도록 요구합니다. 외부 모드는 승인 manifest와 실제 전송 이미지·단서가 달라지지 않도록 승인된 입력을 그대로 사용하며 로컬 합성 입력을 자동 적용하지 않습니다. 완료 배치별 원시 후보 수와 프롬프트 버전을 저장하고 묶음 후보를 근거 없이 합치지 않습니다. OpenAI-compatible adapter는 text와 data URL image content를 구성합니다. 외부 실제 호출은 수행하지 않았습니다.
 
@@ -138,9 +141,9 @@ macOS 기본 위치는 다음과 같습니다.
 - 영상 간 인물 비교 보고서: `~/Library/Application Support/VideoAnalysisAgent/person_comparisons/`
 - 추출 프레임 캐시: `~/Library/Caches/VideoAnalysisAgent/`
 
-설정에는 API key 환경 변수 이름만 저장하고 key 값은 저장·로그하지 않습니다. 결과에는 원본 경로가 없으며 영상 ID, 목적·범위, 모델 설정, 요청/실제 입력 시각·해상도, 공급자 요청 수·시간 지표와 출처를 저장합니다. 캐시 정리는 root marker와 job marker가 모두 있는 앱 생성 디렉터리만 대상으로 합니다.
+설정에는 선택한 로컬 모델 ID·loopback endpoint와 API key 환경 변수 이름만 저장하고 key 값은 저장·로그하지 않습니다. 결과에는 원본 경로가 없으며 영상 ID, 목적·범위, 모델 설정, 요청/실제 입력 시각·해상도, 공급자 요청 수·시간 지표와 출처를 저장합니다. 캐시 정리는 root marker와 job marker가 모두 있는 앱 생성 디렉터리만 대상으로 합니다.
 
-앱 시작 시 진행률을 알 수 없는 짧은 로딩 화면 뒤 로컬 로그인을 거칩니다. 최초 실행에서 사용자 이름과 비밀번호를 등록하고, 이후 로그인 화면에서 다른 로컬 사용자도 회원가입할 수 있습니다. 파일 메뉴의 로그아웃은 현재 창의 취소 가능한 작업 정리를 거친 뒤 로그인 화면으로 돌아갑니다. 비밀번호는 사용자별 무작위 솔트와 PBKDF2-SHA256 해시로만 `local_account.json`에 저장합니다. 기존 단일 계정 문서는 읽기 호환하며 계정 추가 시 다중 계정 문서로 원자적으로 다시 씁니다. 이 파일은 `0600` 권한으로 기록되고 모델이나 외부 서버로 전달되지 않습니다. 이는 앱 접근을 구분하는 장치이며 원본 영상, 사건 파일, 결과 파일의 저장 암호화를 대신하지 않습니다.
+앱 시작 시 진행률을 알 수 없는 짧은 로딩 화면 뒤 로컬 로그인을 거칩니다. 최초 실행에서 사용자 이름과 비밀번호를 등록하고, 로그인 직후 로컬 AI 설정이 끝나지 않았다면 모델 설정 창을 엽니다. 이후 로그인 화면에서 다른 로컬 사용자도 회원가입할 수 있으며 AI 실행 설정은 컴퓨터의 앱 설정으로 공유됩니다. 파일 메뉴의 로그아웃은 현재 창의 취소 가능한 작업 정리를 거친 뒤 로그인 화면으로 돌아갑니다. 비밀번호는 사용자별 무작위 솔트와 PBKDF2-SHA256 해시로만 `local_account.json`에 저장합니다. 기존 단일 계정 문서는 읽기 호환하며 계정 추가 시 다중 계정 문서로 원자적으로 다시 씁니다. 이 파일은 `0600` 권한으로 기록되고 모델이나 외부 서버로 전달되지 않습니다. 이는 앱 접근을 구분하는 장치이며 원본 영상, 사건 파일, 결과 파일의 저장 암호화를 대신하지 않습니다.
 
 ## PDF 연결 경계
 

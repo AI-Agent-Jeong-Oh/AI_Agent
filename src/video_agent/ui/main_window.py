@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QButtonGroup,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -93,7 +94,11 @@ from video_agent.identity.comparison import (
     PersonComparisonReport,
 )
 from video_agent.identity.worker import PersonComparisonWorker
-from video_agent.models.config import RuntimeInventory, config_from_environment
+from video_agent.models.config import (
+    DEFAULT_OLLAMA_CHAT_ENDPOINT,
+    RuntimeInventory,
+    config_from_environment,
+)
 from video_agent.models.provider import HttpVisionProvider
 from video_agent.storage.json_store import (
     AppSettings,
@@ -115,6 +120,7 @@ from video_agent.ui.segment_detail import clock, segment_rows
 from video_agent.ui.motion_table import MotionHeader, MotionItemDelegate
 from video_agent.ui.person_comparison_dialog import PersonComparisonDialog
 from video_agent.ui.judgement_marks import JUDGEMENT_MARKS
+from video_agent.ui.local_ai_setup import LocalAiSetupDialog
 from video_agent.ui.time_field import TimeSpinBox, format_time
 from video_agent.ui.timeline import TimelineLegend, TimelineMark, TimelineSlider
 from video_agent.ui.popover import info_mark
@@ -338,7 +344,6 @@ class MainWindow(QMainWindow):
         self._elapsed_timer.setInterval(1000)
         self._elapsed_timer.timeout.connect(self._refresh_elapsed_status)
         self._session = AgentSession()
-        self._runtime_inventory = RuntimeInventory.detect()
 
         self._paths = AppPaths.default()
         self._settings_store = SettingsStore(self._paths.settings_file)
@@ -372,6 +377,7 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError) as exc:
             self._settings = AppSettings()
             self._settings_error = str(exc)
+        self._runtime_inventory = RuntimeInventory.detect(self._configured_local_endpoint())
 
         self._player = QMediaPlayer(self)
         self._audio_output = QAudioOutput(self)
@@ -1145,6 +1151,9 @@ class MainWindow(QMainWindow):
         self._logout_action = file_menu.addAction("로그아웃")
         self._logout_action.setVisible(bool(self._operator_name))
         self._logout_action.triggered.connect(self._request_logout)
+        settings_menu = self.menuBar().addMenu("설정")
+        self._local_ai_setup_action = settings_menu.addAction("로컬 AI 설정…")
+        self._local_ai_setup_action.triggered.connect(self._open_local_ai_setup)
         view_menu = self.menuBar().addMenu("보기")
         for action in (self._zoom_in_action, self._zoom_out_action, self._zoom_reset_action):
             view_menu.addAction(action)
@@ -1215,11 +1224,43 @@ class MainWindow(QMainWindow):
         self._zoom_in_action.setEnabled(self._ui_zoom_percent < self.UI_ZOOM_MAX)
         self.setStyleSheet(theme.build_stylesheet(scaled))
 
+    def _configured_local_endpoint(self) -> str:
+        return (
+            os.environ.get("VIDEO_AGENT_LOCAL_ENDPOINT")
+            or self._settings.local_endpoint
+            or DEFAULT_OLLAMA_CHAT_ENDPOINT
+        )
+
+    def _open_local_ai_setup(self) -> None:
+        if self._background_work_running():
+            self._show_error("진행 중인 작업을 마친 뒤 로컬 AI 설정을 변경해 주세요.")
+            return
+        dialog = LocalAiSetupDialog(self._settings_store)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self._settings = self._settings_store.load()
+        except (OSError, ValueError) as exc:
+            self._show_error(f"로컬 AI 설정을 다시 읽지 못했습니다: {exc}")
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            self._runtime_inventory = RuntimeInventory.detect(self._configured_local_endpoint())
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._analysis_choice.blockSignals(True)
+        self._refresh_analysis_choices()
+        self._analysis_choice.select(self._settings.mode, self._preferred_local_model())
+        self._analysis_choice.blockSignals(False)
+        self._last_mode = self._current_mode()
+        self._analysis_choice_changed()
+        self.statusBar().showMessage("로컬 AI 설정을 적용했습니다.", 5000)
+
     def _restore_settings(self) -> None:
         mode = self._settings.mode
-        if self._local_vision_models():
+        if self._local_vision_models() and not self._settings.local_setup_completed:
             # Every start is "정확한 분석" (the largest model on this computer); a choice
-            # made while the app is open lasts until it closes.
+            # is made explicitly by the first-run setup in normal use.
             mode = AnalysisMode.LOCAL
         self._external_model_edit.blockSignals(True)
         self._external_model_edit.setText(
@@ -2362,7 +2403,7 @@ class MainWindow(QMainWindow):
             return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            self._runtime_inventory = RuntimeInventory.detect()
+            self._runtime_inventory = RuntimeInventory.detect(self._configured_local_endpoint())
         finally:
             QApplication.restoreOverrideCursor()
         self._analysis_choice.blockSignals(True)
@@ -2380,6 +2421,8 @@ class MainWindow(QMainWindow):
             return configured
         saved = (self._settings.local_model_id or "").strip()
         confirmed = self._local_vision_models()
+        if self._settings.local_setup_completed and saved in confirmed:
+            return saved
         # The largest model ("정확한 분석"), preferring instruct models: thinking tags
         # have returned no final answer for structured results.
         instruct_models = tuple(item for item in confirmed if "instruct" in item.lower())
@@ -2401,7 +2444,7 @@ class MainWindow(QMainWindow):
         mode = self._current_mode()
         if mode is AnalysisMode.LOCAL:
             provider_id = os.environ.get("VIDEO_AGENT_LOCAL_PROVIDER", "ollama-local")
-            endpoint = os.environ.get("VIDEO_AGENT_LOCAL_ENDPOINT", "http://127.0.0.1:11434/api/chat")
+            endpoint = self._configured_local_endpoint()
         elif mode is AnalysisMode.EXTERNAL:
             provider_id = (
                 os.environ.get("VIDEO_AGENT_EXTERNAL_PROVIDER")
@@ -4000,6 +4043,8 @@ class MainWindow(QMainWindow):
                     if mode is AnalysisMode.LOCAL
                     else self._settings.local_model_id
                 ),
+                local_endpoint=self._configured_local_endpoint(),
+                local_setup_completed=self._settings.local_setup_completed,
                 external_provider_id=(
                     os.environ.get("VIDEO_AGENT_EXTERNAL_PROVIDER")
                     or self._settings.external_provider_id

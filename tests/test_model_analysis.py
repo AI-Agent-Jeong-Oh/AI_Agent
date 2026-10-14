@@ -33,8 +33,10 @@ from video_agent.models.config import (
     ModelConfigurationError,
     ProviderConfig,
     RuntimeInventory,
+    _detect_ollama_models,
     find_ollama,
     _detect_ollama_vision_models,
+    normalize_ollama_chat_endpoint,
 )
 from video_agent.models.provider import (
     FakeVisionProvider,
@@ -626,6 +628,30 @@ class ProviderAdapterTests(unittest.TestCase):
 
 
 class RuntimeInventoryTests(unittest.TestCase):
+    def test_local_endpoint_accepts_a_base_url_and_rejects_external_hosts(self) -> None:
+        self.assertEqual(
+            normalize_ollama_chat_endpoint("http://localhost:11434"),
+            "http://localhost:11434/api/chat",
+        )
+        with self.assertRaises(ModelConfigurationError):
+            normalize_ollama_chat_endpoint("https://provider.example/api/chat")
+
+    def test_models_can_be_listed_from_a_loopback_server_without_a_cli(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self, _limit: int) -> bytes:
+                return b'{"models":[{"name":"vision-a:latest"},{"model":"vision-b:4b"}]}'
+
+        with patch("video_agent.models.config.urllib.request.urlopen", return_value=Response()):
+            models = _detect_ollama_models("http://127.0.0.1:11434/api/chat")
+
+        self.assertEqual(models, ("vision-a:latest", "vision-b:4b"))
+
     def test_ollama_is_found_in_homebrew_when_path_is_short(self) -> None:
         # Apps opened from Finder do not get Homebrew in PATH.
         with tempfile.TemporaryDirectory() as folder:

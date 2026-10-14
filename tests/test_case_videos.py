@@ -372,7 +372,8 @@ class CaseVideoListTests(unittest.TestCase):
         self.assertEqual(window._new_case_action.shortcut(), QKeySequence(QKeySequence.StandardKey.New))
         self.assertEqual(window._add_video_action.shortcut(), QKeySequence(QKeySequence.StandardKey.Open))
         titles = [action.text() for action in window.menuBar().actions()]
-        self.assertEqual(titles, ["파일", "보기"])
+        self.assertEqual(titles, ["파일", "설정", "보기"])
+        self.assertEqual(window._local_ai_setup_action.text(), "로컬 AI 설정…")
 
     def test_skip_buttons_move_ten_seconds_within_the_video(self) -> None:
         window = self.window

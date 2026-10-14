@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import urllib.error
 import urllib.request
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from video_agent.contracts import AnalysisMode
 
@@ -20,6 +20,8 @@ class ModelConfigurationError(ValueError):
 # Apps opened from Finder get a short PATH without Homebrew, so look in its folders too
 # (the same fallback FFmpeg uses in video/probe.py).
 _OLLAMA_FALLBACKS = (Path("/opt/homebrew/bin/ollama"), Path("/usr/local/bin/ollama"))
+DEFAULT_OLLAMA_CHAT_ENDPOINT = "http://127.0.0.1:11434/api/chat"
+_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
 
 def find_ollama() -> str | None:
@@ -38,10 +40,18 @@ class RuntimeInventory:
     vision_ollama_models: tuple[str, ...] = ()
 
     @classmethod
-    def detect(cls) -> "RuntimeInventory":
+    def detect(cls, endpoint_override: str | None = None) -> "RuntimeInventory":
         executable = find_ollama()
         model_id = os.environ.get("VIDEO_AGENT_LOCAL_MODEL") or None
-        endpoint = os.environ.get("VIDEO_AGENT_LOCAL_ENDPOINT") or None
+        configured_endpoint = (
+            endpoint_override
+            or os.environ.get("VIDEO_AGENT_LOCAL_ENDPOINT")
+            or DEFAULT_OLLAMA_CHAT_ENDPOINT
+        )
+        try:
+            endpoint = normalize_ollama_chat_endpoint(configured_endpoint)
+        except ModelConfigurationError:
+            endpoint = configured_endpoint
         installed_models: tuple[str, ...] = ()
         if executable:
             try:
@@ -57,9 +67,11 @@ class RuntimeInventory:
                 installed_models = tuple(row[0] for row in rows)
             except (OSError, subprocess.SubprocessError):
                 installed_models = ()
+        api_models = _detect_ollama_models(endpoint)
+        installed_models = tuple(dict.fromkeys((*installed_models, *api_models)))
         vision_models = _detect_ollama_vision_models(
             installed_models,
-            endpoint or "http://127.0.0.1:11434/api/chat",
+            endpoint,
         )
         return cls(executable, installed_models, model_id, endpoint, vision_models)
 
@@ -78,12 +90,35 @@ class RuntimeInventory:
     @property
     def ready_for_local_connection(self) -> bool:
         return bool(
-            self.ollama_executable
-            and self.local_model_id
+            self.local_model_id
             and self.local_endpoint
             and self.local_model_id in self.installed_ollama_models
             and self.confirms_vision(self.local_model_id)
         )
+
+
+def normalize_ollama_chat_endpoint(value: str) -> str:
+    """Return a loopback Ollama chat URL, accepting either a server base URL or /api/chat."""
+    raw = value.strip().rstrip("/")
+    parsed = urlsplit(raw)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.hostname not in _LOOPBACK_HOSTS
+        or not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ModelConfigurationError(
+            "로컬 AI 주소는 이 컴퓨터의 localhost 또는 127.0.0.1 주소여야 합니다."
+        )
+    path = parsed.path.rstrip("/")
+    if path in {"", "/api"}:
+        path = "/api/chat"
+    if path != "/api/chat":
+        raise ModelConfigurationError("Ollama 주소는 서버 주소 또는 /api/chat 경로여야 합니다.")
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +171,7 @@ def config_from_environment(
             mode=mode,
             provider_id=provider_override or os.environ.get("VIDEO_AGENT_LOCAL_PROVIDER", "ollama-local"),
             endpoint=endpoint_override
-            or os.environ.get("VIDEO_AGENT_LOCAL_ENDPOINT", "http://127.0.0.1:11434/api/chat"),
+            or os.environ.get("VIDEO_AGENT_LOCAL_ENDPOINT", DEFAULT_OLLAMA_CHAT_ENDPOINT),
             model_id=model_override or os.environ.get("VIDEO_AGENT_LOCAL_MODEL", ""),
             protocol=os.environ.get("VIDEO_AGENT_LOCAL_PROTOCOL", "ollama_native"),
             vision_capability_confirmed=(
@@ -182,15 +217,12 @@ def _detect_ollama_vision_models(
 ) -> tuple[str, ...]:
     """Ask the local Ollama API for declared capabilities; never infer from a name."""
     parsed = urlsplit(chat_endpoint)
-    if parsed.scheme not in {"http", "https"} or parsed.hostname not in {
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }:
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in _LOOPBACK_HOSTS:
         return ()
     show_url = f"{parsed.scheme}://{parsed.netloc}/api/show"
     confirmed: list[str] = []
-    for model_id in installed_models:
+    # Capability checks are bounded even when a shared local server exposes many models.
+    for model_id in installed_models[:32]:
         request = urllib.request.Request(
             show_url,
             data=json.dumps({"model": model_id}).encode("utf-8"),
@@ -206,3 +238,31 @@ def _detect_ollama_vision_models(
         if isinstance(capabilities, list) and "vision" in capabilities:
             confirmed.append(model_id)
     return tuple(confirmed)
+
+
+def _detect_ollama_models(chat_endpoint: str) -> tuple[str, ...]:
+    """List models from a loopback Ollama server, including servers without a local CLI."""
+    parsed = urlsplit(chat_endpoint)
+    if parsed.scheme not in {"http", "https"} or parsed.hostname not in _LOOPBACK_HOSTS:
+        return ()
+    request = urllib.request.Request(
+        f"{parsed.scheme}://{parsed.netloc}/api/tags",
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=2) as response:
+            payload = json.loads(response.read(1_000_001).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, urllib.error.URLError):
+        return ()
+    rows = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        return ()
+    names: list[str] = []
+    for row in rows[:100]:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name") or row.get("model")
+        if isinstance(name, str) and name.strip():
+            names.append(name.strip())
+    return tuple(dict.fromkeys(names))

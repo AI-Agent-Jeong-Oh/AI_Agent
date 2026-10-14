@@ -28,6 +28,12 @@ Python 기준 정의는 `src/video_agent/contracts.py`, Agent 계획은 `agent/p
 
 모든 시간은 원본 시작 기준 초입니다. Qt UI 밀리초는 UI 경계에서만 변환합니다.
 
+## 시작 설정 경계
+
+`python -m video_agent`는 로컬 로그인 성공 뒤 `AppSettings.local_setup_completed`를 확인합니다. 아직 설정하지 않은 컴퓨터에서는 메인 창보다 먼저 로컬 AI 설정을 열며, 사용자는 확인된 Vision 모델을 선택하거나 명시적으로 설정 없이 계속할 수 있습니다. 선택한 `local_model_id`와 loopback `local_endpoint`는 일반 설정이며 credential이 아닙니다. 모델 다운로드는 사용자가 버튼으로 시작한 `ollama pull`만 허용하고 취소와 30분 한도를 적용합니다. 다운로드된 모델도 Ollama capability에서 `vision`이 확인되기 전에는 분석 모델로 승인하지 않습니다.
+
+이 설정은 분석 승인을 대신하지 않습니다. 모델이나 endpoint를 바꾸면 이후 `AnalysisPlan` fingerprint가 달라지므로 기존 계획과 승인을 다시 사용할 수 없습니다. 외부 host는 로컬 endpoint로 저장하거나 조사하지 않습니다.
+
 ## 사건 정보와 사전 단서
 
 ```json

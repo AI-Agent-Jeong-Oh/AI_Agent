@@ -19,6 +19,8 @@ _SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 class AppSettings:
     mode: AnalysisMode = AnalysisMode.SAMPLE
     local_model_id: str | None = None
+    local_endpoint: str | None = None
+    local_setup_completed: bool = False
     external_provider_id: str | None = None
     external_model_id: str | None = None
     external_endpoint: str | None = None
@@ -27,6 +29,10 @@ class AppSettings:
     def __post_init__(self) -> None:
         if not isinstance(self.mode, AnalysisMode):
             object.__setattr__(self, "mode", AnalysisMode(self.mode))
+        if self.local_endpoint is not None and not isinstance(self.local_endpoint, str):
+            raise ValueError("local_endpoint must be a string or null")
+        if not isinstance(self.local_setup_completed, bool):
+            raise ValueError("local_setup_completed must be a boolean")
         if "KEY" not in self.api_key_env_name.upper():
             raise ValueError("api_key_env_name must name an environment variable, not contain a key")
 
@@ -40,6 +46,8 @@ class AppSettings:
         allowed = {
             "mode",
             "local_model_id",
+            "local_endpoint",
+            "local_setup_completed",
             "external_provider_id",
             "external_model_id",
             "external_endpoint",

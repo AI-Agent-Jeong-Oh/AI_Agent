@@ -913,6 +913,30 @@ class UiWorkflowTests(unittest.TestCase):
         self.assertEqual(reopened._model_id(), "qwen3-vl:8b-instruct")
         reopened.close()
 
+    def test_completed_local_setup_preserves_the_chosen_model_and_endpoint(self) -> None:
+        self.runtime.stop()
+        data = Path(self.temporary.name) / "chosen-local"
+        endpoint = "http://127.0.0.1:22434/api/chat"
+        SettingsStore(data / "settings.json").save(
+            AppSettings(
+                mode=AnalysisMode.LOCAL,
+                local_model_id="qwen3-vl:4b-instruct",
+                local_endpoint=endpoint,
+                local_setup_completed=True,
+            )
+        )
+        with patch(
+            "video_agent.ui.main_window.RuntimeInventory.detect",
+            return_value=self.local_inventory(),
+        ) as detect, patch.dict(os.environ, {"VIDEO_AGENT_DATA_DIR": str(data)}):
+            reopened = MainWindow()
+        self.runtime.start()
+
+        self.assertEqual(reopened._model_id(), "qwen3-vl:4b-instruct")
+        self.assertEqual(reopened._current_intent().provider_endpoint, endpoint)
+        detect.assert_called_with(endpoint)
+        reopened.close()
+
     def test_switching_modes_preserves_each_explicit_model_setting(self) -> None:
         self.window._select_mode(AnalysisMode.LOCAL)
         self.window._set_model_id("local-vision-model")
