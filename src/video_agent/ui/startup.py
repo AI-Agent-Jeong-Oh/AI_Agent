@@ -30,7 +30,7 @@ class StartupScreen(QDialog):
         self._duration_ms = max(0, min(int(duration_ms), 10_000))
         self._started = False
         self.setObjectName("startupDialog")
-        self.setWindowTitle("CCTV 영상수사 지원 Agent 시작")
+        self.setWindowTitle("숭재 수사대 다연캅 시작")
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.setModal(True)
         self.setFixedSize(620, 430)
@@ -55,7 +55,7 @@ class StartupScreen(QDialog):
         organization = QLabel("대한민국 경찰청")
         organization.setObjectName("startupOrganization")
         organization.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title = QLabel("CCTV 영상수사 지원 Agent")
+        title = QLabel("숭재 수사대 다연캅")
         title.setObjectName("startupTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
@@ -137,7 +137,7 @@ class LocalLoginDialog(QDialog):
         brand_text = QVBoxLayout()
         organization = QLabel("대한민국 경찰청")
         organization.setObjectName("loginOrganization")
-        app_name = QLabel("CCTV 영상수사 지원 Agent")
+        app_name = QLabel("숭재 수사대 다연캅")
         app_name.setObjectName("loginAppName")
         brand_text.addWidget(organization)
         brand_text.addWidget(app_name)

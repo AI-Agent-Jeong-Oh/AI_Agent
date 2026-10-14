@@ -250,7 +250,7 @@ class MainWindow(QMainWindow):
     UI_ZOOM_MAX = 150
     UI_ZOOM_STEP = 10
     RESULT_CONTEXT_PREROLL_SECONDS = 1.0
-    APP_TITLE = "CCTV 영상수사 지원 Agent"
+    APP_TITLE = "숭재 수사대 다연캅"
     ORGANIZATION = "대한민국 경찰청"
     STEP_TITLES = ("사건 등록", "영상 분석", "결과 검토")
     # One short line per detection profile; the muted note says it is not an AI judgement.

@@ -20,7 +20,7 @@ mkdir -p "${output_zip:h}"
 staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/dayeoncop-release.XXXXXX")"
 trap 'rm -rf "$staging_dir"' EXIT
 
-staged_app="$staging_dir/숭재수사대 다연캅.app"
+staged_app="$staging_dir/숭재 수사대 다연캅.app"
 ditto "$source_app" "$staged_app"
 ditto -c -k --norsrc --keepParent "$staged_app" "$staging_dir/release.zip"
 if /usr/bin/unzip -Z -1 "$staging_dir/release.zip" | /usr/bin/grep -E '(^|/)\._[^/]*$|^__MACOSX/' >/dev/null; then
@@ -30,4 +30,4 @@ fi
 mv "$staging_dir/release.zip" "$output_zip"
 
 print "Release ZIP: $output_zip"
-print "앱 번들 내부 이름과 빌드 설정은 변경하지 않았습니다."
+print "앱 실행 파일과 내부 저장소 식별자는 변경하지 않았습니다."

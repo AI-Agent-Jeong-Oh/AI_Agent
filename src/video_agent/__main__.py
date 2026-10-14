@@ -49,7 +49,7 @@ class _ApplicationFlow:
 def main() -> int:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
-    app.setApplicationName("영상 중요 구간 분석 Agent")
+    app.setApplicationName("숭재 수사대 다연캅")
     app.setOrganizationName("AI-Agent-Jeong-Oh")
     flow = _ApplicationFlow(app)
     flow.start()
