@@ -10,13 +10,13 @@ macOS에서 현재 `dist/VideoAnalysisAgent.app`을 확인한 뒤 저장소 루�
 ./scripts/package_macos_release.sh
 ```
 
-결과는 `dist/숭재수사대-다연캅-macOS-arm64.zip`입니다. 압축을 풀면 `숭재수사대 다연캅.app`이 나오며, 앱 내부 아이콘과 실행 파일은 원래 번들의 것을 사용합니다. ZIP은 `.gitignore` 대상이며 Git에 커밋하지 않습니다. 빌드를 갱신했다면 새 `.app`을 만든 뒤 ZIP도 다시 만드세요.
+결과는 `dist/숭재수사대-다연캅-macOS-arm64.zip`입니다. 압축을 풀면 `숭재 수사대 다연캅.app`이 나오며, 앱 내부 아이콘과 실행 파일은 원래 번들의 것을 사용합니다. ZIP은 `.gitignore` 대상이며 Git에 커밋하지 않습니다. 빌드를 갱신했다면 새 `.app`을 만든 뒤 ZIP도 다시 만드세요.
 
 현재 번들은 Apple Silicon용 개발 빌드이며 개발자 인증서 서명과 공증, 다른 Mac에서의 실행은 검증되지 않았습니다. 로컬 분석에는 받는 Mac의 FFmpeg/ffprobe, Ollama, 영상 모델이 별도로 필요합니다.
 
 ## 2. GitHub Release 등록
 
-이 저장소의 **Releases → Draft a new release**에서 버전 태그를 정하고, 위 ZIP을 자산으로 첨부하여 정식 Release를 게시합니다. 초안 또는 prerelease는 페이지의 `latest` 조회 대상이 아닙니다. GitHub가 한글 자산명을 변환하므로 등록한 자산의 이름을 `dayeoncop-macOS-arm64.zip`으로 변경해 `site/config.js`의 `assetName`과 정확히 맞추세요. ZIP 안의 앱 이름은 `숭재수사대 다연캅.app`으로 유지됩니다. 이후 자산 이름을 바꿀 때는 `site/config.js`도 수정합니다.
+이 저장소의 **Releases → Draft a new release**에서 버전 태그를 정하고, 위 ZIP을 자산으로 첨부하여 정식 Release를 게시합니다. 초안 또는 prerelease는 페이지의 `latest` 조회 대상이 아닙니다. GitHub가 한글 자산명을 변환하므로 등록한 자산의 이름을 `dayeoncop-macOS-arm64.zip`으로 변경해 `site/config.js`의 `assetName`과 정확히 맞추세요. ZIP 안의 앱 이름은 `숭재 수사대 다연캅.app`으로 유지됩니다. 이후 자산 이름을 바꿀 때는 `site/config.js`도 수정합니다.
 
 Release가 없는 동안, 또는 자산 이름이 다르면 버튼은 비활성 상태와 안내 문구를 표시합니다. 페이지에는 ZIP 파일을 올리지 않습니다.
 

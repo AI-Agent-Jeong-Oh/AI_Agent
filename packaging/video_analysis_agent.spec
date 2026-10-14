@@ -66,7 +66,7 @@ app = BUNDLE(
     bundle_identifier="org.ai-agent-jeong-oh.video-analysis-agent.dev",
     version="0.1.0",
     info_plist={
-        "CFBundleDisplayName": "영상 중요 구간 분석 Agent",
+        "CFBundleDisplayName": "숭재 수사대 다연캅",
         "LSMinimumSystemVersion": "14.0",
         "NSHighResolutionCapable": True,
     },

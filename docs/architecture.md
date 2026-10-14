@@ -1,6 +1,6 @@
 # 아키텍처
 
-![CCTV 영상수사 지원 Agent 시스템 구조도](assets/system-architecture.png)
+![숭재 수사대 다연캅 시스템 구조도](assets/system-architecture.png)
 
 이 구조도는 사용자 화면, Media·Agent Core, 로컬 모델·데이터, 승인된 분석 호출과 사람 검토의 관계를 한 화면에 요약합니다. 원본 영상은 로컬에서 직접 읽으며 외부 Vision API는 별도 전송 승인을 받은 경우에만 사용합니다.
 

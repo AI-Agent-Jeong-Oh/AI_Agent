@@ -1,10 +1,10 @@
 <div align="center">
 
 <br>
-<img src="site/assets/app-icon.png" width="128" alt="CCTV 영상수사 지원 Agent 프로젝트 마스코트">
+<img src="site/assets/app-icon.png" width="128" alt="숭재 수사대 다연캅 프로젝트 마스코트">
 <br>
 
-# CCTV 영상수사 지원 Agent
+# 숭재 수사대 다연캅
 
 로컬 CCTV 영상에서 **사람이 확인할 중요 구간 후보를 좁히고**,<br>
 원본 재생·수사관 검토·결과 보고까지 한 흐름으로 연결하는 macOS 데스크톱 앱
@@ -118,7 +118,7 @@ CCTV 영상은 길지만 실제로 확인해야 할 장면은 짧을 수 있습�
 
 ## 시스템 구조도
 
-<img src="docs/assets/system-architecture.png" alt="CCTV 영상수사 지원 Agent 시스템 구조도" width="100%">
+<img src="docs/assets/system-architecture.png" alt="숭재 수사대 다연캅 시스템 구조도" width="100%">
 
 시스템은 `Desktop App → Media·Agent Core → Local Runtime·Data`로 이어집니다. 오른쪽에는 승인된 분석 계획이 프레임 추출, VLM 호출, 응답 검증, 사람 검토와 보고서로 이어지는 상세 과정을 표시했습니다.
 
