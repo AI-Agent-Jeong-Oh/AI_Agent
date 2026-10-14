@@ -38,16 +38,11 @@ class _ApplicationFlow:
             self._app.quit()
             return
         settings_store = SettingsStore(self._paths.settings_file)
-        try:
-            needs_setup = not settings_store.load().local_setup_completed
-        except (OSError, ValueError):
-            needs_setup = True
-        if needs_setup:
-            self._local_ai_setup = LocalAiSetupDialog(settings_store)
-            if self._local_ai_setup.exec() != QDialog.DialogCode.Accepted:
-                self._app.quit()
-                return
-            self._local_ai_setup = None
+        self._local_ai_setup = LocalAiSetupDialog(settings_store)
+        if self._local_ai_setup.exec() != QDialog.DialogCode.Accepted:
+            self._app.quit()
+            return
+        self._local_ai_setup = None
         self._window = MainWindow(operator_name=username)
         self._window.closed.connect(self._window_closed)
         self._window.show()

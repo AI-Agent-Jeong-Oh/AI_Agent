@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, patch
 from PySide6.QtWidgets import QApplication, QDialog, QLabel
 
 from video_agent.storage.auth import LocalAuthStore
-from video_agent.storage.json_store import AppSettings
 from video_agent.__main__ import _ApplicationFlow
 from video_agent.ui.startup import LocalLoginDialog, StartupScreen
 
@@ -85,7 +84,7 @@ class StartupUiTests(unittest.TestCase):
         self.assertTrue(self.store.authenticate("김수사관", "local-password-123"))
         self.assertTrue(self.store.authenticate("박분석관", "second-password"))
 
-    def test_successful_login_opens_first_local_ai_setup_before_main_window(self) -> None:
+    def test_every_successful_login_opens_local_ai_setup_before_main_window(self) -> None:
         fake_login = MagicMock()
         fake_login.exec.return_value = QDialog.DialogCode.Accepted
         fake_login.authenticated_username = "김수사관"
@@ -99,17 +98,18 @@ class StartupUiTests(unittest.TestCase):
         with (
             patch.dict(os.environ, environment, clear=False),
             patch("video_agent.__main__.LocalLoginDialog", return_value=fake_login),
-            patch("video_agent.__main__.SettingsStore.load", return_value=AppSettings()),
             patch("video_agent.__main__.LocalAiSetupDialog", return_value=fake_setup) as setup,
             patch("video_agent.__main__.MainWindow", return_value=fake_window) as main_window,
         ):
             flow = _ApplicationFlow(self.app)
             flow._show_login()
+            flow._show_login()
 
-        setup.assert_called_once()
-        fake_setup.exec.assert_called_once()
-        main_window.assert_called_once_with(operator_name="김수사관")
-        fake_window.show.assert_called_once()
+        self.assertEqual(setup.call_count, 2)
+        self.assertEqual(fake_setup.exec.call_count, 2)
+        self.assertEqual(main_window.call_count, 2)
+        main_window.assert_called_with(operator_name="김수사관")
+        self.assertEqual(fake_window.show.call_count, 2)
 
 
 if __name__ == "__main__":
